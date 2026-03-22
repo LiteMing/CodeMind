@@ -463,7 +463,7 @@ class MindMapApp {
     }
 
     this.setSelection([nodeButton.dataset.nodeButton], nodeButton.dataset.nodeButton)
-    this.openNodeEditor(nodeButton.dataset.nodeButton)
+    this.openNodeEditor(nodeButton.dataset.nodeButton, { selection: 'all' })
   }
 
   private readonly handlePointerDown = (event: PointerEvent): void => {
@@ -1886,13 +1886,22 @@ class MindMapApp {
         editor.value = pendingOptions.value
       }
 
-      if (pendingOptions?.selection === 'end') {
-        const cursor = editor.value.length
-        editor.setSelectionRange(cursor, cursor)
-        return
+      const applySelection = () => {
+        if (pendingOptions?.selection === 'end') {
+          const cursor = editor.value.length
+          editor.setSelectionRange(cursor, cursor)
+          return
+        }
+
+        editor.select()
       }
 
-      editor.select()
+      applySelection()
+      window.requestAnimationFrame(() => {
+        if (document.activeElement === editor) {
+          applySelection()
+        }
+      })
     })
   }
 
