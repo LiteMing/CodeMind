@@ -1154,6 +1154,11 @@ func clampConfidence(value float64) float64 {
 }
 
 func (s *Server) handleFrontend(w http.ResponseWriter, r *http.Request) {
+	if strings.HasPrefix(r.URL.Path, "/api/") {
+		writeError(w, http.StatusNotFound, fmt.Errorf("unknown api route: %s", r.URL.Path))
+		return
+	}
+
 	distDir := filepath.Join("frontend", "dist")
 	indexPath := filepath.Join(distDir, "index.html")
 
