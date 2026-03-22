@@ -5,6 +5,7 @@ Local-first mind map editor prototype.
 Current focus:
 
 - Default root node and keyboard-first editing
+- GitMind-like floating workspace shell
 - Light/dark theme toggle
 - Markdown export and Markdown/TXT import
 - Manual relation edges distinct from hierarchy
@@ -25,6 +26,8 @@ Current focus:
 - Default root node with `Tab` child creation and `Enter` sibling creation
 - Root sibling creation as floating nodes
 - Double-click or `F2` rename
+- First-run language picker with English and Simplified Chinese
+- In-page settings drawer for locale, theme, and local AI defaults
 - Priority badges: `P0` to `P3`
 - Branch collapse and expand
 - Node drag for non-root nodes

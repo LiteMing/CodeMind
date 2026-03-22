@@ -16,7 +16,7 @@ func main() {
 		port = "7979"
 	}
 
-	dataPath := filepath.Join("data", "default-map.json")
+	dataPath := filepath.Join("data", "maps")
 	fileStore := store.NewFileStore(dataPath)
 	appServer := server.New(fileStore)
 

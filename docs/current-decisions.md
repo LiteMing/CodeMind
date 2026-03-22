@@ -21,6 +21,7 @@
 - Root starts in a centered workspace position instead of the old top-left placement.
 - `Tidy Layout` balances root branches to both sides when a side is empty.
 - Floating nodes are never changed by hierarchy auto layout.
+- The editor shell now follows a GitMind-like direction: full-canvas workspace, floating toolbars, and a right-side floating inspector.
 - A future 2D/3D graph mode should default to read-only and be opened explicitly or triggered by extreme zoom-out.
 
 ## Interaction Rules
@@ -31,6 +32,14 @@
 - `Delete` removes the selected node plus its descendants.
 - `Space` collapses or expands the selected branch.
 - `F2` renames the selected node.
+- First launch is blocked by a language picker until the user confirms a locale.
+- Workspace settings stay in-page and local, not in external config files.
+
+## Local Preferences
+
+- UI locale is stored in browser-local preferences, separate from the mind-map document JSON.
+- AI defaults are currently local-only settings and default to LM Studio with `http://127.0.0.1:1234/v1`.
+- Mind-map theme remains a document-level setting so the same map keeps its appearance across reloads.
 
 ## Deferred Risks
 

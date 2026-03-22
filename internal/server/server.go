@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path"
@@ -22,6 +23,14 @@ type Server struct {
 type importRequest struct {
 	Content string `json:"content"`
 	Format  string `json:"format"`
+}
+
+type createMapRequest struct {
+	Title string `json:"title"`
+}
+
+type renameMapRequest struct {
+	Title string `json:"title"`
 }
 
 type markdownResponse struct {
@@ -51,17 +60,52 @@ func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 
 func (s *Server) registerAPI(mux *http.ServeMux) {
 	mux.HandleFunc("/api/health", s.handleHealth)
-	mux.HandleFunc("/api/maps/default", s.handleDefaultMap)
+	mux.HandleFunc("/api/maps", s.handleMaps)
+	mux.HandleFunc("/api/maps/", s.handleMapByID)
 	mux.HandleFunc("/api/export/markdown", s.handleExportMarkdown)
 	mux.HandleFunc("/api/import", s.handleImport)
 }
 
-func (s *Server) handleDefaultMap(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleMaps(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		doc, err := s.store.LoadOrCreate()
+		summaries, err := s.store.List()
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, summaries)
+	case http.MethodPost:
+		var req createMapRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		doc, err := s.store.Create(req.Title)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		writeJSON(w, http.StatusCreated, doc)
+	default:
+		w.Header().Set("Allow", "GET, POST")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Server) handleMapByID(w http.ResponseWriter, r *http.Request) {
+	mapID := strings.TrimPrefix(r.URL.Path, "/api/maps/")
+	mapID = strings.TrimSpace(mapID)
+	if mapID == "" {
+		writeError(w, http.StatusBadRequest, errors.New("map id is required"))
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		doc, err := s.store.Load(mapID)
+		if err != nil {
+			writeError(w, http.StatusNotFound, err)
 			return
 		}
 		writeJSON(w, http.StatusOK, doc)
@@ -71,16 +115,32 @@ func (s *Server) handleDefaultMap(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, err)
 			return
 		}
-		if doc.ID == "" {
-			doc.ID = "default"
-		}
+		doc.ID = mapID
 		if err := s.store.Save(doc); err != nil {
 			writeError(w, http.StatusBadRequest, err)
 			return
 		}
 		writeJSON(w, http.StatusOK, doc)
+	case http.MethodPatch:
+		var req renameMapRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		doc, err := s.store.Rename(mapID, req.Title)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, doc)
+	case http.MethodDelete:
+		if err := s.store.Delete(mapID); err != nil {
+			writeError(w, http.StatusNotFound, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 	default:
-		w.Header().Set("Allow", "GET, PUT")
+		w.Header().Set("Allow", "GET, PUT, PATCH, DELETE")
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
 }
@@ -189,7 +249,7 @@ func corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, PUT, POST, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, PUT, PATCH, POST, DELETE, OPTIONS")
 
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)

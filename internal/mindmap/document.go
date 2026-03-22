@@ -48,6 +48,8 @@ type Node struct {
 	Title     string    `json:"title"`
 	Priority  Priority  `json:"priority,omitempty"`
 	Collapsed bool      `json:"collapsed,omitempty"`
+	Width     float64   `json:"width,omitempty"`
+	Height    float64   `json:"height,omitempty"`
 	Position  Position  `json:"position"`
 	CreatedAt time.Time `json:"createdAt"`
 	UpdatedAt time.Time `json:"updatedAt"`
@@ -125,6 +127,9 @@ func (d *Document) Validate() error {
 		}
 		if strings.TrimSpace(node.Title) == "" {
 			return fmt.Errorf("node %s title is required", node.ID)
+		}
+		if node.Width < 0 || node.Height < 0 {
+			return fmt.Errorf("node %s size cannot be negative", node.ID)
 		}
 		if _, exists := nodeByID[node.ID]; exists {
 			return fmt.Errorf("duplicate node id: %s", node.ID)

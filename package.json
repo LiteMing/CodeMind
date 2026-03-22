@@ -1,0 +1,17 @@
+{
+  "name": "code-mind",
+  "private": true,
+  "scripts": {
+    "postinstall": "cd frontend && npm install",
+    "dev": "concurrently -k -n api,web \"npm run dev:api\" \"npm run dev:web\"",
+    "dev:api": "go run ./cmd/server",
+    "dev:web": "cd frontend && npm run dev",
+    "build": "npm run build:web && npm run build:go",
+    "build:web": "cd frontend && npm run build",
+    "build:go": "go build ./...",
+    "test": "go test ./... && npm run build:web"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1"
+  }
+}

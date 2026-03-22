@@ -18,6 +18,8 @@ export interface MindNode {
   title: string
   priority?: Priority
   collapsed?: boolean
+  width?: number
+  height?: number
   position: Position
   createdAt: string
   updatedAt: string
@@ -45,6 +47,13 @@ export interface MindMapDocument {
   nodes: MindNode[]
   relations: RelationEdge[]
   meta: MindMapMeta
+}
+
+export interface MindMapSummary {
+  id: string
+  title: string
+  lastEditedAt: string
+  lastOpenedAt: string
 }
 
 export interface AISettings {

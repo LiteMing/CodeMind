@@ -17,7 +17,7 @@ import (
 var assets embed.FS
 
 func main() {
-	fileStore := store.NewFileStore(filepath.Join("data", "default-map.json"))
+	fileStore := store.NewFileStore(filepath.Join("data", "maps"))
 	app := NewApp(fileStore)
 
 	err := wails.Run(&options.App{

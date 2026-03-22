@@ -25,6 +25,7 @@ import type {
   AppPreferences,
   Locale,
   MindMapDocument,
+  MindMapSummary,
   MindNode,
   Position,
   Priority,
@@ -32,10 +33,36 @@ import type {
   Theme,
 } from './types'
 
+type AppView = 'home' | 'map'
+
 interface DragState {
   nodeId: string
   offsetX: number
   offsetY: number
+  historyCaptured: boolean
+}
+
+interface PanState {
+  pointerId: number
+  startX: number
+  startY: number
+  startViewportX: number
+  startViewportY: number
+}
+
+interface ResizeState {
+  nodeId: string
+  startX: number
+  startY: number
+  startWidth: number
+  startHeight: number
+  historyCaptured: boolean
+}
+
+interface HistorySnapshot {
+  document: MindMapDocument
+  selectedNodeId: string
+  connectSourceNodeId: string | null
 }
 
 interface StatusDescriptor {
@@ -44,28 +71,40 @@ interface StatusDescriptor {
 }
 
 interface AppState {
+  view: AppView
+  maps: MindMapSummary[]
   document: MindMapDocument
+  currentMapId: string | null
   selectedNodeId: string
   editingNodeId: string | null
   connectSourceNodeId: string | null
   drag: DragState | null
+  resize: ResizeState | null
   status: StatusDescriptor
   preferences: AppPreferences
   settingsOpen: boolean
+  inspectorCollapsed: boolean
 }
 
 interface ShellRefs {
   eyebrow: HTMLParagraphElement
   title: HTMLHeadingElement
   status: HTMLParagraphElement
+  homeButton: HTMLButtonElement
+  renameMapButton: HTMLButtonElement
+  deleteMapButton: HTMLButtonElement
   settingsButton: HTMLButtonElement
+  panelButton: HTMLButtonElement
   themeButton: HTMLButtonElement
+  undoButton: HTMLButtonElement
+  redoButton: HTMLButtonElement
   saveButton: HTMLButtonElement
   layoutButton: HTMLButtonElement
   exportButton: HTMLButtonElement
   importButton: HTMLButtonElement
   topbarConnectButton: HTMLButtonElement
   importInput: HTMLInputElement
+  scroll: HTMLElement
   canvas: HTMLElement
   edgeLayer: SVGSVGElement
   nodeLayer: HTMLElement
@@ -75,8 +114,15 @@ interface ShellRefs {
   dock: HTMLElement
 }
 
-const WORKSPACE_WIDTH = 2200
-const WORKSPACE_HEIGHT = 1400
+const WORKSPACE_MIN_WIDTH = 2400
+const WORKSPACE_MIN_HEIGHT = 1600
+const WORKSPACE_PADDING = 360
+const MIN_ZOOM = 0.4
+const MAX_ZOOM = 2.4
+const ZOOM_SENSITIVITY = 0.0018
+const MIN_NODE_WIDTH = 170
+const MIN_NODE_HEIGHT = 52
+const HISTORY_LIMIT = 120
 const PRIORITY_VALUES: Priority[] = ['', 'P0', 'P1', 'P2', 'P3']
 
 export async function createApp(rootEl: HTMLElement): Promise<void> {
@@ -88,19 +134,32 @@ class MindMapApp {
   private readonly rootEl: HTMLElement
   private autosaveHandle: number | null = null
   private refs: ShellRefs | null = null
+  private pan: PanState | null = null
+  private didInitializeViewport = false
+  private viewport = { x: 0, y: 0, scale: 1 }
+  private historyPast: HistorySnapshot[] = []
+  private historyFuture: HistorySnapshot[] = []
+  private liveCanvasHandle: number | null = null
+  private liveNodeId: string | null = null
+  private liveNodeDimensionsDirty = false
   private state: AppState
 
   constructor(rootEl: HTMLElement) {
     this.rootEl = rootEl
     this.state = {
       document: createDefaultDocument(),
+      view: 'home',
+      maps: [],
+      currentMapId: null,
       selectedNodeId: 'root',
       editingNodeId: null,
       connectSourceNodeId: null,
       drag: null,
+      resize: null,
       status: { key: 'status.loading' },
       preferences: loadPreferences(),
       settingsOpen: false,
+      inspectorCollapsed: true,
     }
 
     this.applyLocale()
@@ -110,14 +169,9 @@ class MindMapApp {
 
   async mount(): Promise<void> {
     try {
-      const loadedDocument = await api.loadMap()
-      this.state.document = loadedDocument
-      this.state.selectedNodeId = findRoot(loadedDocument).id
-      this.setStatus('status.loaded')
-    } catch {
-      this.state.document = createDefaultDocument()
-      this.state.selectedNodeId = 'root'
-      this.setStatus('status.backendUnavailable')
+      await this.refreshMaps('status.mapListLoaded')
+    } catch (error) {
+      this.setStatus('status.mapListFailed', { reason: getErrorMessage(error) })
     }
 
     this.render()
@@ -130,8 +184,10 @@ class MindMapApp {
     this.rootEl.addEventListener('keydown', this.handleEditorKeyDown)
     this.rootEl.addEventListener('focusout', this.handleFocusOut, true)
     this.rootEl.addEventListener('change', this.handleChange)
+    this.rootEl.addEventListener('wheel', this.handleWheel, { passive: false })
     window.addEventListener('pointermove', this.handlePointerMove)
     window.addEventListener('pointerup', this.handlePointerUp)
+    window.addEventListener('pointercancel', this.handlePointerUp)
     window.addEventListener('keydown', this.handleGlobalKeyDown)
   }
 
@@ -196,7 +252,7 @@ class MindMapApp {
   }
 
   private readonly handlePointerDown = (event: PointerEvent): void => {
-    if (event.button !== 0 || this.overlayBlocksCanvas()) {
+    if (this.state.view !== 'map' || event.button !== 0 || this.overlayBlocksCanvas()) {
       return
     }
 
@@ -205,14 +261,36 @@ class MindMapApp {
       return
     }
 
+    const resizeHandle = target.closest<HTMLElement>('[data-node-resizer]')
+    const resizeNodeId = resizeHandle?.dataset.nodeResizer
+    if (resizeNodeId) {
+      const node = this.findNode(resizeNodeId)
+      if (!node || node.kind === 'root') {
+        return
+      }
+
+      this.state.resize = {
+        nodeId: resizeNodeId,
+        startX: event.clientX,
+        startY: event.clientY,
+        startWidth: node.width ?? MIN_NODE_WIDTH,
+        startHeight: node.height ?? MIN_NODE_HEIGHT,
+        historyCaptured: false,
+      }
+      event.preventDefault()
+      return
+    }
+
     const nodeButton = target.closest<HTMLElement>('[data-node-button]')
     const nodeId = nodeButton?.dataset.nodeButton
     if (!nodeId) {
+      this.tryStartCanvasPan(event, target)
       return
     }
 
     const node = this.findNode(nodeId)
     if (!node || node.kind === 'root' || this.state.editingNodeId === nodeId || this.state.connectSourceNodeId !== null) {
+      this.tryStartCanvasPan(event, target)
       return
     }
 
@@ -221,44 +299,131 @@ class MindMapApp {
       return
     }
 
-    const rect = canvas.getBoundingClientRect()
+    const pointerPosition = this.clientToCanvasPosition(event.clientX, event.clientY)
     this.state.drag = {
       nodeId,
-      offsetX: event.clientX - rect.left - node.position.x,
-      offsetY: event.clientY - rect.top - node.position.y,
+      offsetX: pointerPosition.x - node.position.x,
+      offsetY: pointerPosition.y - node.position.y,
+      historyCaptured: false,
     }
   }
 
   private readonly handlePointerMove = (event: PointerEvent): void => {
+    if (this.state.view !== 'map') {
+      return
+    }
+
+    if (this.state.resize) {
+      const deltaX = event.clientX - this.state.resize.startX
+      const deltaY = event.clientY - this.state.resize.startY
+      if (!this.state.resize.historyCaptured && (Math.abs(deltaX) > 1 || Math.abs(deltaY) > 1)) {
+        this.captureHistory()
+        this.state.resize.historyCaptured = true
+        this.renderHeader()
+      }
+
+      const nextWidth = clampMin(this.state.resize.startWidth + (event.clientX - this.state.resize.startX) / this.viewport.scale, MIN_NODE_WIDTH)
+      const nextHeight = clampMin(this.state.resize.startHeight + (event.clientY - this.state.resize.startY) / this.viewport.scale, MIN_NODE_HEIGHT)
+
+      this.updateNode(this.state.resize.nodeId, (node) => {
+        node.width = Math.round(nextWidth)
+        node.height = Math.round(nextHeight)
+      })
+      this.scheduleLiveNodeUpdate(this.state.resize.nodeId, true)
+      return
+    }
+
+    if (this.pan) {
+      this.handleCanvasPan(event)
+      return
+    }
+
     if (!this.state.drag) {
       return
     }
 
-    const canvas = this.refs?.canvas
-    if (!canvas) {
-      return
-    }
-
-    const rect = canvas.getBoundingClientRect()
+    const pointerPosition = this.clientToCanvasPosition(event.clientX, event.clientY)
     const nextPosition = {
-      x: clamp(event.clientX - rect.left - this.state.drag.offsetX, 120, WORKSPACE_WIDTH - 120),
-      y: clamp(event.clientY - rect.top - this.state.drag.offsetY, 96, WORKSPACE_HEIGHT - 96),
+      x: clampMin(pointerPosition.x - this.state.drag.offsetX, 120),
+      y: clampMin(pointerPosition.y - this.state.drag.offsetY, 96),
+    }
+    const currentNode = this.findNode(this.state.drag.nodeId)
+
+    if (
+      currentNode &&
+      !this.state.drag.historyCaptured &&
+      (Math.abs(nextPosition.x - currentNode.position.x) > 0.5 || Math.abs(nextPosition.y - currentNode.position.y) > 0.5)
+    ) {
+      this.captureHistory()
+      this.state.drag.historyCaptured = true
+      this.renderHeader()
     }
 
     this.updateNode(this.state.drag.nodeId, (node) => {
       node.position = nextPosition
     })
-    this.updateDraggedNodeView(this.state.drag.nodeId)
+    this.scheduleLiveNodeUpdate(this.state.drag.nodeId)
   }
 
   private readonly handlePointerUp = (): void => {
+    if (this.state.view !== 'map') {
+      return
+    }
+
+    if (this.pan) {
+      this.setCanvasPanning(false)
+      this.pan = null
+    }
+
+    if (this.state.resize) {
+      this.flushLiveNodeUpdate()
+      const resized = this.state.resize.historyCaptured
+      this.state.resize = null
+      if (resized) {
+        touchDocument(this.state.document)
+        this.renderHeader()
+        this.scheduleAutosave('status.layoutSaveScheduled')
+      }
+    }
+
     if (!this.state.drag) {
       return
     }
 
+    this.flushLiveNodeUpdate()
+    const moved = this.state.drag.historyCaptured
     this.state.drag = null
-    touchDocument(this.state.document)
-    this.scheduleAutosave('status.layoutSaveScheduled')
+    if (moved) {
+      touchDocument(this.state.document)
+      this.renderHeader()
+      this.scheduleAutosave('status.layoutSaveScheduled')
+    }
+  }
+
+  private readonly handleWheel = (event: WheelEvent): void => {
+    if (this.state.view !== 'map' || this.overlayBlocksCanvas()) {
+      return
+    }
+
+    const target = event.target
+    const scroll = this.refs?.scroll
+    if (!(target instanceof HTMLElement) || !target.closest('[data-workspace-scroll]') || !scroll) {
+      return
+    }
+
+    event.preventDefault()
+    const rect = scroll.getBoundingClientRect()
+    const pointerX = event.clientX - rect.left
+    const pointerY = event.clientY - rect.top
+    const worldX = (pointerX - this.viewport.x) / this.viewport.scale
+    const worldY = (pointerY - this.viewport.y) / this.viewport.scale
+    const zoomFactor = Math.exp(-event.deltaY * ZOOM_SENSITIVITY)
+    const nextScale = clamp(this.viewport.scale * zoomFactor, MIN_ZOOM, MAX_ZOOM)
+
+    this.viewport.x = pointerX - worldX * nextScale
+    this.viewport.y = pointerY - worldY * nextScale
+    this.viewport.scale = nextScale
+    this.updateCanvasViewportView()
   }
 
   private readonly handleGlobalKeyDown = (event: KeyboardEvent): void => {
@@ -268,13 +433,28 @@ class MindMapApp {
       return
     }
 
-    if (this.onboardingOpen() || this.state.settingsOpen || isTypingTarget(event.target)) {
+    if (this.state.view !== 'map' || this.onboardingOpen() || this.state.settingsOpen || isTypingTarget(event.target)) {
       return
     }
 
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
       event.preventDefault()
       void this.saveDocument('status.saved')
+      return
+    }
+
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z' && !event.shiftKey) {
+      event.preventDefault()
+      this.undo()
+      return
+    }
+
+    if (
+      (event.ctrlKey || event.metaKey) &&
+      ((event.key.toLowerCase() === 'y' && !event.shiftKey) || (event.key.toLowerCase() === 'z' && event.shiftKey))
+    ) {
+      event.preventDefault()
+      this.redo()
       return
     }
 
@@ -407,21 +587,79 @@ class MindMapApp {
   }
 
   private render(): void {
+    this.flushLiveNodeUpdate()
+    this.applyLocale()
+    this.applyTheme()
+
+    if (this.state.view === 'home') {
+      this.renderHome()
+      return
+    }
+
     const selectedNode = this.selectedNode()
     if (!selectedNode) {
       return
     }
 
     this.ensureShell()
-    this.applyLocale()
-    this.applyTheme()
     this.renderHeader()
     this.renderWorkspace()
     this.renderInspector()
     this.renderDock()
     this.renderSettings()
     this.renderOnboarding()
+    this.initializeViewportIfNeeded()
     this.focusEditorIfNeeded()
+  }
+
+  private renderHome(): void {
+    this.refs = null
+    this.rootEl.innerHTML = `
+      <div class="home-shell">
+        <header class="home-hero">
+          <div>
+            <p class="eyebrow">${this.t('app.eyebrow')}</p>
+            <h1>${this.t('home.title')}</h1>
+            <p class="home-copy">${this.t('home.subtitle')}</p>
+            <p class="home-status">${this.t(this.state.status.key, this.state.status.values)}</p>
+          </div>
+          <button type="button" class="action-button primary-action" data-command="create-map">${this.t('home.create')}</button>
+        </header>
+
+        <section class="file-grid">
+          ${
+            this.state.maps.length === 0
+              ? `<article class="file-card file-card-empty">
+                   <p class="section-label">${this.t('home.title')}</p>
+                   <h2>${this.t('home.empty')}</h2>
+                   <button type="button" class="action-button" data-command="create-map">${this.t('home.create')}</button>
+                 </article>`
+              : this.state.maps
+                  .map((summary) => {
+                    return `
+                      <article class="file-card">
+                        <div class="file-card-top">
+                          <div>
+                            <p class="section-label">${summary.id}</p>
+                            <h2>${escapeHtml(summary.title)}</h2>
+                            <p class="file-meta">${this.t('home.lastEdited', {
+                              value: formatRelativeTime(summary.lastEditedAt, this.state.preferences.locale),
+                            })}</p>
+                          </div>
+                        </div>
+                        <div class="file-card-actions">
+                          <button type="button" class="chip-button" data-command="open-map:${summary.id}">${this.t('home.open')}</button>
+                          <button type="button" class="chip-button" data-command="rename-map:${summary.id}">${this.t('home.rename')}</button>
+                          <button type="button" class="chip-button danger" data-command="delete-map:${summary.id}">${this.t('home.delete')}</button>
+                        </div>
+                      </article>
+                    `
+                  })
+                  .join('')
+          }
+        </section>
+      </div>
+    `
   }
 
   private ensureShell(): void {
@@ -438,9 +676,12 @@ class MindMapApp {
               <h1 data-app-title></h1>
             </div>
             <p class="status-pill" data-app-status></p>
+            <button type="button" class="ghost-button" data-command="go-home">${this.t('toolbar.home')}</button>
           </section>
 
           <section class="floating-bar floating-bar-center toolbar-cluster">
+            <button type="button" class="action-button" data-role="undo-button" data-command="undo"></button>
+            <button type="button" class="action-button" data-role="redo-button" data-command="redo"></button>
             <button type="button" class="action-button" data-role="save-button" data-command="save"></button>
             <button type="button" class="action-button" data-role="layout-button" data-command="auto-layout"></button>
             <button type="button" class="action-button" data-role="connect-button" data-command="connect-selected"></button>
@@ -448,6 +689,9 @@ class MindMapApp {
           </section>
 
           <section class="floating-bar floating-bar-right toolbar-cluster">
+            <button type="button" class="action-button" data-command="rename-map">${this.t('toolbar.renameMap')}</button>
+            <button type="button" class="action-button danger" data-command="delete-map">${this.t('toolbar.deleteMap')}</button>
+            <button type="button" class="action-button" data-role="panel-button" data-command="toggle-inspector"></button>
             <button type="button" class="action-button" data-role="theme-button" data-command="theme-toggle"></button>
             <button type="button" class="action-button" data-role="settings-button" data-command="toggle-settings"></button>
             <button type="button" class="action-button" data-role="import-button" data-command="import-file"></button>
@@ -455,9 +699,9 @@ class MindMapApp {
           </section>
 
           <section class="workspace-panel">
-            <div class="workspace-scroll">
+            <div class="workspace-scroll" data-workspace-scroll>
               <div class="workspace-canvas" data-workspace-canvas>
-                <svg class="edge-layer" viewBox="0 0 ${WORKSPACE_WIDTH} ${WORKSPACE_HEIGHT}" aria-hidden="true" data-edge-layer></svg>
+                <svg class="edge-layer" viewBox="0 0 ${WORKSPACE_MIN_WIDTH} ${WORKSPACE_MIN_HEIGHT}" aria-hidden="true" data-edge-layer></svg>
                 <div class="node-layer" data-node-layer></div>
               </div>
             </div>
@@ -475,14 +719,21 @@ class MindMapApp {
       eyebrow: requiredElement(this.rootEl, '[data-app-eyebrow]'),
       title: requiredElement(this.rootEl, '[data-app-title]'),
       status: requiredElement(this.rootEl, '[data-app-status]'),
+      homeButton: requiredElement(this.rootEl, '[data-command="go-home"]'),
+      renameMapButton: requiredElement(this.rootEl, '[data-command="rename-map"]'),
+      deleteMapButton: requiredElement(this.rootEl, '[data-command="delete-map"]'),
       settingsButton: requiredElement(this.rootEl, '[data-role="settings-button"]'),
+      panelButton: requiredElement(this.rootEl, '[data-role="panel-button"]'),
       themeButton: requiredElement(this.rootEl, '[data-role="theme-button"]'),
+      undoButton: requiredElement(this.rootEl, '[data-role="undo-button"]'),
+      redoButton: requiredElement(this.rootEl, '[data-role="redo-button"]'),
       saveButton: requiredElement(this.rootEl, '[data-role="save-button"]'),
       layoutButton: requiredElement(this.rootEl, '[data-role="layout-button"]'),
       exportButton: requiredElement(this.rootEl, '[data-role="export-button"]'),
       importButton: requiredElement(this.rootEl, '[data-role="import-button"]'),
       topbarConnectButton: requiredElement(this.rootEl, '[data-role="connect-button"]'),
       importInput: requiredElement(this.rootEl, '[data-role="import-input"]'),
+      scroll: requiredElement(this.rootEl, '[data-workspace-scroll]'),
       canvas: requiredElement(this.rootEl, '[data-workspace-canvas]'),
       edgeLayer: requiredElement(this.rootEl, '[data-edge-layer]'),
       nodeLayer: requiredElement(this.rootEl, '[data-node-layer]'),
@@ -502,18 +753,27 @@ class MindMapApp {
     this.refs.eyebrow.textContent = this.t('app.eyebrow')
     this.refs.title.textContent = this.state.document.title
     this.refs.status.textContent = this.t(this.state.status.key, this.state.status.values)
+    this.refs.homeButton.textContent = this.t('toolbar.home')
+    this.refs.renameMapButton.textContent = this.t('toolbar.renameMap')
+    this.refs.deleteMapButton.textContent = this.t('toolbar.deleteMap')
+    this.refs.undoButton.textContent = this.t('toolbar.undo')
+    this.refs.redoButton.textContent = this.t('toolbar.redo')
     this.refs.saveButton.textContent = this.t('toolbar.save')
     this.refs.layoutButton.textContent = this.t('toolbar.autoLayout')
     this.refs.exportButton.textContent = this.t('toolbar.exportMarkdown')
     this.refs.importButton.textContent = this.t('toolbar.import')
     this.refs.settingsButton.textContent = this.t('toolbar.settings')
+    this.refs.panelButton.textContent = this.t('toolbar.panel')
     this.refs.themeButton.textContent = this.t('toolbar.theme', {
       theme: themeLabel(locale, this.state.document.theme),
     })
     this.refs.topbarConnectButton.textContent = this.t('toolbar.connect')
+    this.refs.undoButton.disabled = !this.canUndo()
+    this.refs.redoButton.disabled = !this.canRedo()
     this.refs.topbarConnectButton.classList.toggle('is-active', this.state.connectSourceNodeId !== null)
     this.refs.settingsButton.classList.toggle('is-active', this.state.settingsOpen)
-    document.title = `${this.state.document.title} · Code Mind`
+    this.refs.panelButton.classList.toggle('is-active', !this.state.inspectorCollapsed)
+    document.title = `${this.state.document.title} - Code Mind`
   }
 
   private renderWorkspace(): void {
@@ -521,6 +781,11 @@ class MindMapApp {
       return
     }
 
+    const bounds = getWorkspaceBounds(this.state.document)
+    this.refs.canvas.style.width = `${bounds.width}px`
+    this.refs.canvas.style.height = `${bounds.height}px`
+    this.refs.edgeLayer.setAttribute('viewBox', `0 0 ${bounds.width} ${bounds.height}`)
+    this.updateCanvasViewportView()
     this.refs.edgeLayer.innerHTML = this.renderEdges()
     this.refs.nodeLayer.innerHTML = this.renderNodes()
   }
@@ -540,59 +805,59 @@ class MindMapApp {
         })
       : this.t('inspector.relationIdle')
 
-    this.refs.inspector.innerHTML = `
-      <section class="inspector-card">
-        <p class="section-label">${this.t('inspector.selected')}</p>
-        <h2>${escapeHtml(selectedNode.title)}</h2>
-        <div class="metric-row">
-          <span class="metric-chip">${this.t('inspector.type', { value: kindLabel(this.state.preferences.locale, selectedNode.kind) })}</span>
-          <span class="metric-chip">${this.t('inspector.children', { value: directChildren.length })}</span>
-          <span class="metric-chip">${this.t('inspector.relationsCount', { value: relatedRelations.length })}</span>
-          <span class="metric-chip">${this.t('inspector.hidden', { value: hiddenChildren })}</span>
-        </div>
-        <p class="inspector-copy">${this.t('inspector.position', {
-          x: Math.round(selectedNode.position.x),
-          y: Math.round(selectedNode.position.y),
-        })}</p>
-        <div class="priority-row">
-          ${PRIORITY_VALUES.map((priority) => this.renderPriorityButton(priority, selectedNode.priority ?? '')).join('')}
-        </div>
-        <div class="action-grid">
-          <button type="button" class="chip-button" data-command="new-child">${this.t('action.newChild')}</button>
-          <button type="button" class="chip-button" data-command="new-sibling">${this.t('action.newSibling')}</button>
-          <button type="button" class="chip-button" data-command="rename-selected">${this.t('action.rename')}</button>
-          <button type="button" class="chip-button" data-command="toggle-collapse" ${directChildren.length === 0 ? 'disabled' : ''}>
-            ${selectedNode.collapsed ? this.t('action.expand') : this.t('action.collapse')}
-          </button>
-          <button type="button" class="chip-button ${this.state.connectSourceNodeId ? 'is-active' : ''}" data-command="connect-selected">${this.t('action.linkRelation')}</button>
-          <button type="button" class="chip-button danger" data-command="delete-selected" ${selectedNode.id === 'root' ? 'disabled' : ''}>${this.t('action.delete')}</button>
-        </div>
-      </section>
+    this.refs.inspector.classList.toggle('is-collapsed', this.state.inspectorCollapsed)
+    this.refs.inspector.innerHTML = this.state.inspectorCollapsed
+      ? `
+        <section class="inspector-card inspector-card-compact">
+          <p class="section-label">${this.t('inspector.summary')}</p>
+          <h2>${escapeHtml(shorten(selectedNode.title, 24))}</h2>
+          <div class="metric-row">
+            <span class="metric-chip">${this.t('inspector.children', { value: directChildren.length })}</span>
+            <span class="metric-chip">${this.t('inspector.relationsCount', { value: relatedRelations.length })}</span>
+          </div>
+          <button type="button" class="action-button inspector-toggle-button" data-command="toggle-inspector">${this.t('inspector.open')}</button>
+        </section>
+      `
+      : `
+        <section class="inspector-card">
+          <div class="inspector-header">
+            <div>
+              <p class="section-label">${this.t('inspector.selected')}</p>
+              <h2>${escapeHtml(selectedNode.title)}</h2>
+            </div>
+            <button type="button" class="ghost-button" data-command="toggle-inspector">${this.t('inspector.close')}</button>
+          </div>
+          <div class="metric-row">
+            <span class="metric-chip">${this.t('inspector.type', { value: kindLabel(this.state.preferences.locale, selectedNode.kind) })}</span>
+            <span class="metric-chip">${this.t('inspector.children', { value: directChildren.length })}</span>
+            <span class="metric-chip">${this.t('inspector.relationsCount', { value: relatedRelations.length })}</span>
+            <span class="metric-chip">${this.t('inspector.hidden', { value: hiddenChildren })}</span>
+          </div>
+          <p class="inspector-copy">${this.t('inspector.position', {
+            x: Math.round(selectedNode.position.x),
+            y: Math.round(selectedNode.position.y),
+          })}</p>
+          <div class="priority-row">
+            ${PRIORITY_VALUES.map((priority) => this.renderPriorityButton(priority, selectedNode.priority ?? '')).join('')}
+          </div>
+          <div class="action-grid">
+            <button type="button" class="chip-button" data-command="new-child">${this.t('action.newChild')}</button>
+            <button type="button" class="chip-button" data-command="new-sibling">${this.t('action.newSibling')}</button>
+            <button type="button" class="chip-button" data-command="rename-selected">${this.t('action.rename')}</button>
+            <button type="button" class="chip-button" data-command="toggle-collapse" ${directChildren.length === 0 ? 'disabled' : ''}>
+              ${selectedNode.collapsed ? this.t('action.expand') : this.t('action.collapse')}
+            </button>
+            <button type="button" class="chip-button ${this.state.connectSourceNodeId ? 'is-active' : ''}" data-command="connect-selected">${this.t('action.linkRelation')}</button>
+            <button type="button" class="chip-button danger" data-command="delete-selected" ${selectedNode.id === 'root' ? 'disabled' : ''}>${this.t('action.delete')}</button>
+          </div>
+        </section>
 
-      <section class="inspector-card">
-        <p class="section-label">${this.t('inspector.relations')}</p>
-        <p class="inspector-copy">${escapeHtml(relationModeText)}</p>
-        ${this.renderRelationList(selectedNode.id)}
-      </section>
-
-      <section class="inspector-card">
-        <p class="section-label">${this.t('inspector.interaction')}</p>
-        <ul class="shortcut-list">
-          <li><kbd>Tab</kbd><span>${this.t('interaction.addChild')}</span></li>
-          <li><kbd>Enter</kbd><span>${this.t('interaction.addSibling')}</span></li>
-          <li><kbd>Delete</kbd><span>${this.t('interaction.deleteSubtree')}</span></li>
-          <li><kbd>Space</kbd><span>${this.t('interaction.collapseBranch')}</span></li>
-          <li><kbd>F2</kbd><span>${this.t('interaction.renameNode')}</span></li>
-          <li><kbd>Ctrl/Cmd + L</kbd><span>${this.t('interaction.tidyLayout')}</span></li>
-          <li><kbd>Ctrl/Cmd + S</kbd><span>${this.t('interaction.saveLocal')}</span></li>
-        </ul>
-      </section>
-
-      <section class="inspector-card">
-        <p class="section-label">${this.t('inspector.deferred')}</p>
-        <p class="inspector-copy">${this.t('inspector.deferredCopy')}</p>
-      </section>
-    `
+        <section class="inspector-card">
+          <p class="section-label">${this.t('inspector.relations')}</p>
+          <p class="inspector-copy">${escapeHtml(relationModeText)}</p>
+          ${this.renderRelationList(selectedNode.id)}
+        </section>
+      `
   }
 
   private renderDock(): void {
@@ -603,6 +868,7 @@ class MindMapApp {
     this.refs.dock.innerHTML = `
       <span class="dock-chip">${this.t('dock.nodes', { value: this.state.document.nodes.length })}</span>
       <span class="dock-chip">${this.t('dock.relations', { value: this.state.document.relations.length })}</span>
+      <span class="dock-chip">${Math.round(this.viewport.scale * 100)}%</span>
       <span class="dock-chip">${this.t('dock.theme', { value: themeLabel(this.state.preferences.locale, this.state.document.theme) })}</span>
     `
   }
@@ -779,13 +1045,19 @@ class MindMapApp {
           ? `<span class="node-branch-badge">${node.collapsed ? `+${hiddenDescendantCount(this.state.document, node.id)}` : childCount}</span>`
           : ''
 
+        const nodeDimensions = buildNodeDimensionStyle(node)
+
         const content = this.state.editingNodeId === node.id
-          ? `<input class="node-editor" data-node-editor="${node.id}" value="${escapeAttribute(node.title)}" maxlength="120" />`
-          : `<button type="button" class="node-shell" data-node-button="${node.id}">
+          ? `<input class="node-editor" style="${nodeDimensions}" data-node-editor="${node.id}" value="${escapeAttribute(node.title)}" maxlength="120" />`
+          : `<button type="button" class="node-shell" style="${nodeDimensions}" data-node-button="${node.id}">
                ${priorityBadge}
                <span class="node-title">${escapeHtml(shorten(node.title, node.kind === 'root' ? 60 : 72))}</span>
                ${branchBadge}
              </button>`
+
+        const resizeHandle = node.kind !== 'root'
+          ? `<button type="button" class="node-resizer" data-node-resizer="${node.id}" aria-label="Resize node"></button>`
+          : ''
 
         return `
           <article
@@ -794,6 +1066,7 @@ class MindMapApp {
             style="left: ${node.position.x}px; top: ${node.position.y}px;"
           >
             ${content}
+            ${resizeHandle}
           </article>
         `
       })
@@ -882,6 +1155,7 @@ class MindMapApp {
       return
     }
 
+    this.captureHistory()
     parent.collapsed = false
     parent.updatedAt = new Date().toISOString()
     const newNode = createNode({
@@ -905,6 +1179,7 @@ class MindMapApp {
       return
     }
 
+    this.captureHistory()
     let newNode: MindNode
     if (node.kind === 'root') {
       newNode = createNode({
@@ -966,6 +1241,7 @@ class MindMapApp {
       updatedAt: new Date().toISOString(),
     }
 
+    this.captureHistory()
     this.state.document.relations.push(relation)
     this.state.connectSourceNodeId = null
     this.state.selectedNodeId = targetId
@@ -984,6 +1260,7 @@ class MindMapApp {
     }
 
     const fallbackNodeId = selectedNode.parentId || findRoot(this.state.document).id
+    this.captureHistory()
     const result = deleteNodeTree(this.state.document, selectedNode.id)
     if (result.removedNodes === 0) {
       return
@@ -1007,8 +1284,14 @@ class MindMapApp {
       return
     }
 
+    const nextPriority = priority || undefined
+    if ((node.priority ?? undefined) === nextPriority) {
+      return
+    }
+
+    this.captureHistory()
     this.updateNode(node.id, (draft) => {
-      draft.priority = priority || undefined
+      draft.priority = nextPriority
     })
     touchDocument(this.state.document)
     this.setStatus(priority ? 'status.priorityApplied' : 'status.priorityCleared', priority ? { priority } : undefined)
@@ -1042,6 +1325,20 @@ class MindMapApp {
     }
 
     const title = rawTitle.trim() || this.t('node.untitled')
+    const existingNode = this.findNode(nodeId)
+    if (!existingNode) {
+      this.state.editingNodeId = null
+      this.render()
+      return
+    }
+
+    if (existingNode.title === title) {
+      this.state.editingNodeId = null
+      this.render()
+      return
+    }
+
+    this.captureHistory()
     this.updateNode(nodeId, (node) => {
       node.title = title
     })
@@ -1054,6 +1351,13 @@ class MindMapApp {
   }
 
   private commitRelationLabel(relationId: string, rawLabel: string): void {
+    const relation = this.state.document.relations.find((item) => item.id === relationId)
+    const nextLabel = rawLabel.trim()
+    if (!relation || (relation.label ?? '') === nextLabel) {
+      return
+    }
+
+    this.captureHistory()
     updateRelationLabel(this.state.document, relationId, rawLabel)
     touchDocument(this.state.document)
     this.setStatus('status.relationLabelUpdated')
@@ -1067,6 +1371,13 @@ class MindMapApp {
       return
     }
 
+    if (childrenOf(this.state.document, selectedNode.id).length === 0) {
+      this.setStatus('status.noBranchToCollapse')
+      this.render()
+      return
+    }
+
+    this.captureHistory()
     const changed = toggleCollapse(this.state.document, selectedNode.id)
     if (!changed) {
       this.setStatus('status.noBranchToCollapse')
@@ -1081,7 +1392,15 @@ class MindMapApp {
   }
 
   private autoLayout(): void {
+    const snapshot = this.createHistorySnapshot()
     const movedNodes = autoLayoutHierarchy(this.state.document)
+    if (movedNodes === 0) {
+      this.setStatus('status.layoutUpdated', { count: 0 })
+      this.render()
+      return
+    }
+
+    this.pushHistorySnapshot(snapshot)
     touchDocument(this.state.document)
     this.setStatus('status.layoutUpdated', { count: movedNodes })
     this.render()
@@ -1091,70 +1410,103 @@ class MindMapApp {
   private async runCommand(rawCommand: string): Promise<void> {
     const [command, argument = ''] = rawCommand.split(':')
 
-    switch (command) {
-      case 'toggle-settings':
-        this.toggleSettings()
-        return
-      case 'close-settings':
-        this.closeSettings()
-        return
-      case 'complete-onboarding':
-        this.completeOnboarding()
-        return
-      case 'theme-toggle':
-        this.toggleTheme()
-        return
-      case 'save':
-        await this.saveDocument('status.saved')
-        return
-      case 'auto-layout':
-        this.autoLayout()
-        return
-      case 'export-markdown':
-        await this.exportMarkdown()
-        return
-      case 'import-file':
-        this.refs?.importInput.click()
-        return
-      case 'connect-selected':
-        this.startRelationMode()
-        return
-      case 'new-child':
-        this.createChildNode(this.selectedNode()?.id ?? 'root')
-        return
-      case 'new-sibling':
-        this.createSiblingNode(this.selectedNode()?.id ?? 'root')
-        return
-      case 'rename-selected':
-        this.startEditingSelected()
-        return
-      case 'toggle-collapse':
-        this.toggleSelectedCollapse()
-        return
-      case 'delete-selected':
-        this.deleteSelectedNode()
-        return
-      case 'focus-node':
-        if (argument) {
-          this.selectNode(argument)
-        }
-        return
-      case 'delete-relation':
-        if (argument) {
-          this.removeRelation(argument)
-        }
-        return
-      default:
-        break
+    try {
+      switch (command) {
+        case 'create-map':
+          await this.createMap()
+          return
+        case 'open-map':
+          if (argument) {
+            await this.openMap(argument)
+          }
+          return
+        case 'go-home':
+          await this.goHome()
+          return
+        case 'rename-map':
+          await this.renameMap(argument || this.state.currentMapId || this.state.document.id)
+          return
+        case 'delete-map':
+          await this.deleteMap(argument || this.state.currentMapId || this.state.document.id)
+          return
+        case 'toggle-inspector':
+          this.toggleInspector()
+          return
+        case 'toggle-settings':
+          this.toggleSettings()
+          return
+        case 'close-settings':
+          this.closeSettings()
+          return
+        case 'complete-onboarding':
+          this.completeOnboarding()
+          return
+        case 'theme-toggle':
+          this.toggleTheme()
+          return
+        case 'undo':
+          this.undo()
+          return
+        case 'redo':
+          this.redo()
+          return
+        case 'save':
+          await this.saveDocument('status.saved')
+          return
+        case 'auto-layout':
+          this.autoLayout()
+          return
+        case 'export-markdown':
+          await this.exportMarkdown()
+          return
+        case 'import-file':
+          this.refs?.importInput.click()
+          return
+        case 'connect-selected':
+          this.startRelationMode()
+          return
+        case 'new-child':
+          this.createChildNode(this.selectedNode()?.id ?? 'root')
+          return
+        case 'new-sibling':
+          this.createSiblingNode(this.selectedNode()?.id ?? 'root')
+          return
+        case 'rename-selected':
+          this.startEditingSelected()
+          return
+        case 'toggle-collapse':
+          this.toggleSelectedCollapse()
+          return
+        case 'delete-selected':
+          this.deleteSelectedNode()
+          return
+        case 'focus-node':
+          if (argument) {
+            this.selectNode(argument)
+          }
+          return
+        case 'delete-relation':
+          if (argument) {
+            this.removeRelation(argument)
+          }
+          return
+        default:
+          break
+      }
+    } catch (error) {
+      this.setStatus('status.mapListFailed', { reason: getErrorMessage(error) })
+      this.render()
     }
   }
 
   private removeRelation(relationId: string): void {
+    const snapshot = this.createHistorySnapshot()
     const removed = deleteRelation(this.state.document, relationId)
     if (!removed) {
       return
     }
 
+    this.pushHistorySnapshot(snapshot)
     touchDocument(this.state.document)
     this.setStatus('status.relationRemoved')
     this.render()
@@ -1170,6 +1522,7 @@ class MindMapApp {
       return
     }
 
+    this.captureHistory()
     this.state.document.theme = theme
     touchDocument(this.state.document)
     this.applyTheme()
@@ -1200,6 +1553,8 @@ class MindMapApp {
     try {
       const savedDocument = await api.saveMap(this.state.document)
       this.state.document = savedDocument
+      this.state.currentMapId = savedDocument.id
+      await this.refreshMaps()
       this.setStatus(statusKey, values)
     } catch (error) {
       this.setStatus('status.saveFailed', { reason: getErrorMessage(error) })
@@ -1228,10 +1583,16 @@ class MindMapApp {
     try {
       const content = await file.text()
       const importedDocument = await api.importDocument(content, format)
+      if (this.state.currentMapId) {
+        importedDocument.id = this.state.currentMapId
+      }
+      this.captureHistory()
       this.state.document = importedDocument
       this.state.selectedNodeId = findRoot(importedDocument).id
       this.state.editingNodeId = null
       this.state.connectSourceNodeId = null
+      this.viewport.scale = 1
+      this.didInitializeViewport = false
       this.setStatus('status.imported', { filename: file.name })
       this.applyTheme()
       this.render()
@@ -1240,6 +1601,130 @@ class MindMapApp {
       this.setStatus('status.importFailed', { reason: getErrorMessage(error) })
       this.render()
     }
+  }
+
+  private async refreshMaps(statusKey?: TranslationKey): Promise<void> {
+    const maps = await api.listMaps()
+    this.state.maps = maps
+    if (statusKey) {
+      this.setStatus(statusKey)
+    }
+  }
+
+  private async createMap(): Promise<void> {
+    const title = window.prompt(this.t('dialog.newMapTitle'), this.t('node.untitled')) ?? ''
+    const doc = await api.createMap(title)
+    await this.refreshMaps()
+    this.state.document = doc
+    this.state.currentMapId = doc.id
+    this.state.view = 'map'
+    this.state.selectedNodeId = findRoot(doc).id
+    this.state.editingNodeId = null
+    this.state.connectSourceNodeId = null
+    this.state.resize = null
+    this.viewport.scale = 1
+    this.didInitializeViewport = false
+    this.refs = null
+    this.resetHistory()
+    this.setStatus('status.mapCreated')
+    this.render()
+  }
+
+  private async openMap(mapId: string): Promise<void> {
+    const doc = await api.loadMap(mapId)
+    this.state.document = doc
+    this.state.currentMapId = mapId
+    this.state.view = 'map'
+    this.state.selectedNodeId = findRoot(doc).id
+    this.state.editingNodeId = null
+    this.state.connectSourceNodeId = null
+    this.state.resize = null
+    this.viewport.scale = 1
+    this.didInitializeViewport = false
+    this.refs = null
+    this.resetHistory()
+    this.setStatus('status.loaded')
+    this.render()
+  }
+
+  private async goHome(): Promise<void> {
+    await this.refreshMaps('status.mapListLoaded')
+    this.state.view = 'home'
+    this.state.currentMapId = null
+    this.refs = null
+    this.resetHistory()
+    this.render()
+  }
+
+  private async renameMap(mapId: string): Promise<void> {
+    const currentTitle = this.state.currentMapId === mapId ? this.state.document.title : this.findMapSummary(mapId)?.title ?? ''
+    const nextTitle = window.prompt(this.t('dialog.renameMap'), currentTitle)
+    if (nextTitle === null) {
+      return
+    }
+
+    const doc = await api.renameMap(mapId, nextTitle)
+    await this.refreshMaps()
+    if (this.state.currentMapId === mapId) {
+      this.state.document = doc
+      this.resetHistory()
+    }
+    this.setStatus('status.mapRenamed')
+    this.render()
+  }
+
+  private async deleteMap(mapId: string): Promise<void> {
+    if (!window.confirm(this.t('dialog.deleteMap'))) {
+      return
+    }
+
+    await api.deleteMap(mapId)
+    await this.refreshMaps()
+
+    if (this.state.currentMapId === mapId || this.state.view === 'home') {
+      this.state.view = 'home'
+      this.state.currentMapId = null
+      this.refs = null
+      this.resetHistory()
+    }
+
+    this.setStatus('status.mapDeleted')
+    this.render()
+  }
+
+  private tryStartCanvasPan(event: PointerEvent, target: HTMLElement): void {
+    const scroll = this.refs?.scroll
+    if (!scroll) {
+      return
+    }
+
+    const withinScroll = target.closest<HTMLElement>('[data-workspace-scroll]')
+    if (!withinScroll) {
+      return
+    }
+
+    this.pan = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      startViewportX: this.viewport.x,
+      startViewportY: this.viewport.y,
+    }
+    event.preventDefault()
+    this.setCanvasPanning(true)
+  }
+
+  private handleCanvasPan(event: PointerEvent): void {
+    if (!this.pan || event.pointerId !== this.pan.pointerId) {
+      return
+    }
+
+    const deltaX = event.clientX - this.pan.startX
+    const deltaY = event.clientY - this.pan.startY
+    event.preventDefault()
+    this.viewport.x = this.pan.startViewportX + deltaX
+    this.viewport.y = this.pan.startViewportY + deltaY
+    this.updateCanvasViewportView()
   }
 
   private commitSettingField(field: string, value: string): void {
@@ -1293,6 +1778,12 @@ class MindMapApp {
     this.render()
   }
 
+  private toggleInspector(): void {
+    this.state.inspectorCollapsed = !this.state.inspectorCollapsed
+    this.setStatus(this.state.inspectorCollapsed ? 'status.panelClosed' : 'status.panelOpened')
+    this.render()
+  }
+
   private closeSettings(): void {
     if (!this.state.settingsOpen) {
       return
@@ -1323,20 +1814,168 @@ class MindMapApp {
     this.applyLocale()
   }
 
+  private initializeViewportIfNeeded(): void {
+    if (this.didInitializeViewport || !this.refs) {
+      return
+    }
+
+    const root = findRoot(this.state.document)
+    const { scroll } = this.refs
+    queueMicrotask(() => {
+      this.viewport.scale = 1
+      this.viewport.x = scroll.clientWidth / 2 - root.position.x * this.viewport.scale
+      this.viewport.y = scroll.clientHeight / 2 - root.position.y * this.viewport.scale
+      this.updateCanvasViewportView()
+    })
+    this.didInitializeViewport = true
+  }
+
   private findNode(nodeId: string): MindNode | undefined {
     return findNode(this.state.document, nodeId)
   }
 
-  private updateDraggedNodeView(nodeId: string): void {
+  private findMapSummary(mapId: string): MindMapSummary | undefined {
+    return this.state.maps.find((item) => item.id === mapId)
+  }
+
+  private canUndo(): boolean {
+    return this.historyPast.length > 0
+  }
+
+  private canRedo(): boolean {
+    return this.historyFuture.length > 0
+  }
+
+  private createHistorySnapshot(): HistorySnapshot {
+    return {
+      document: cloneDocument(this.state.document),
+      selectedNodeId: this.state.selectedNodeId,
+      connectSourceNodeId: this.state.connectSourceNodeId,
+    }
+  }
+
+  private pushHistorySnapshot(snapshot: HistorySnapshot): void {
+    this.historyPast.push(snapshot)
+    if (this.historyPast.length > HISTORY_LIMIT) {
+      this.historyPast.shift()
+    }
+    this.historyFuture = []
+  }
+
+  private captureHistory(): void {
+    this.pushHistorySnapshot(this.createHistorySnapshot())
+  }
+
+  private resetHistory(): void {
+    this.historyPast = []
+    this.historyFuture = []
+  }
+
+  private applyHistorySnapshot(snapshot: HistorySnapshot): void {
+    this.state.document = cloneDocument(snapshot.document)
+    this.state.selectedNodeId = findNode(this.state.document, snapshot.selectedNodeId)?.id ?? findRoot(this.state.document).id
+    this.state.connectSourceNodeId = snapshot.connectSourceNodeId && findNode(this.state.document, snapshot.connectSourceNodeId)
+      ? snapshot.connectSourceNodeId
+      : null
+    this.state.editingNodeId = null
+    this.state.drag = null
+    this.state.resize = null
+    this.applyTheme()
+  }
+
+  private undo(): void {
+    if (!this.canUndo()) {
+      return
+    }
+
+    const snapshot = this.historyPast.pop()
+    if (!snapshot) {
+      return
+    }
+
+    this.historyFuture.push(this.createHistorySnapshot())
+    this.applyHistorySnapshot(snapshot)
+    this.setStatus('status.undoApplied')
+    this.render()
+    this.scheduleAutosave('status.saved')
+  }
+
+  private redo(): void {
+    if (!this.canRedo()) {
+      return
+    }
+
+    const snapshot = this.historyFuture.pop()
+    if (!snapshot) {
+      return
+    }
+
+    this.historyPast.push(this.createHistorySnapshot())
+    this.applyHistorySnapshot(snapshot)
+    this.setStatus('status.redoApplied')
+    this.render()
+    this.scheduleAutosave('status.saved')
+  }
+
+  private scheduleLiveNodeUpdate(nodeId: string, includeDimensions = false): void {
+    this.liveNodeId = nodeId
+    this.liveNodeDimensionsDirty = this.liveNodeDimensionsDirty || includeDimensions
+
+    if (this.liveCanvasHandle !== null) {
+      return
+    }
+
+    this.liveCanvasHandle = window.requestAnimationFrame(() => {
+      this.liveCanvasHandle = null
+      const nextNodeId = this.liveNodeId
+      const nextDimensionsDirty = this.liveNodeDimensionsDirty
+      this.liveNodeId = null
+      this.liveNodeDimensionsDirty = false
+      if (nextNodeId) {
+        this.applyLiveNodeUpdate(nextNodeId, nextDimensionsDirty)
+      }
+    })
+  }
+
+  private flushLiveNodeUpdate(): void {
+    if (this.liveCanvasHandle === null) {
+      return
+    }
+
+    window.cancelAnimationFrame(this.liveCanvasHandle)
+    this.liveCanvasHandle = null
+    const nextNodeId = this.liveNodeId
+    const nextDimensionsDirty = this.liveNodeDimensionsDirty
+    this.liveNodeId = null
+    this.liveNodeDimensionsDirty = false
+
+    if (nextNodeId) {
+      this.applyLiveNodeUpdate(nextNodeId, nextDimensionsDirty)
+    }
+  }
+
+  private applyLiveNodeUpdate(nodeId: string, includeDimensions: boolean): void {
     if (!this.refs) {
       return
     }
+
+    const bounds = getWorkspaceBounds(this.state.document)
+    this.refs.canvas.style.width = `${bounds.width}px`
+    this.refs.canvas.style.height = `${bounds.height}px`
+    this.refs.edgeLayer.setAttribute('viewBox', `0 0 ${bounds.width} ${bounds.height}`)
 
     const node = this.findNode(nodeId)
     const element = this.rootEl.querySelector<HTMLElement>(`[data-node-id="${nodeId}"]`)
     if (node && element) {
       element.style.left = `${node.position.x}px`
       element.style.top = `${node.position.y}px`
+      if (includeDimensions) {
+        const sizingTarget = element.querySelector<HTMLElement>('.node-shell, .node-editor')
+        if (sizingTarget) {
+          sizingTarget.style.width = node.width ? `${Math.max(node.width, MIN_NODE_WIDTH)}px` : ''
+          sizingTarget.style.height = node.height ? `${Math.max(node.height, MIN_NODE_HEIGHT)}px` : ''
+        }
+      }
     }
 
     this.refs.edgeLayer.innerHTML = this.renderEdges()
@@ -1354,6 +1993,31 @@ class MindMapApp {
 
   private setStatus(key: TranslationKey, values?: Record<string, string | number>): void {
     this.state.status = { key, values }
+  }
+
+  private setCanvasPanning(active: boolean): void {
+    this.refs?.scroll.classList.toggle('is-panning', active)
+  }
+
+  private clientToCanvasPosition(clientX: number, clientY: number): Position {
+    const scroll = this.refs?.scroll
+    if (!scroll) {
+      return { x: clientX, y: clientY }
+    }
+
+    const rect = scroll.getBoundingClientRect()
+    return {
+      x: (clientX - rect.left - this.viewport.x) / this.viewport.scale,
+      y: (clientY - rect.top - this.viewport.y) / this.viewport.scale,
+    }
+  }
+
+  private updateCanvasViewportView(): void {
+    if (!this.refs) {
+      return
+    }
+
+    this.refs.canvas.style.transform = `translate(${Math.round(this.viewport.x)}px, ${Math.round(this.viewport.y)}px) scale(${this.viewport.scale})`
   }
 
   private t(key: TranslationKey, values?: Record<string, string | number>): string {
@@ -1418,8 +2082,87 @@ function shorten(value: string, maxLength: number): string {
   return `${value.slice(0, Math.max(0, maxLength - 3))}...`
 }
 
+function buildNodeDimensionStyle(node: MindNode): string {
+  const styles: string[] = []
+  if (node.width) {
+    styles.push(`width: ${Math.max(node.width, MIN_NODE_WIDTH)}px;`)
+  }
+  if (node.height) {
+    styles.push(`height: ${Math.max(node.height, MIN_NODE_HEIGHT)}px;`)
+  }
+  return styles.join(' ')
+}
+
+function formatRelativeTime(value: string, locale: Locale): string {
+  const targetTime = Date.parse(value)
+  if (Number.isNaN(targetTime)) {
+    return value
+  }
+
+  const diffMinutes = Math.round((targetTime - Date.now()) / (60 * 1000))
+  const formatter = new Intl.RelativeTimeFormat(locale, { numeric: 'auto' })
+  const absMinutes = Math.abs(diffMinutes)
+
+  if (absMinutes < 60) {
+    return formatter.format(diffMinutes, 'minute')
+  }
+
+  const diffHours = Math.round(diffMinutes / 60)
+  if (Math.abs(diffHours) < 24) {
+    return formatter.format(diffHours, 'hour')
+  }
+
+  const diffDays = Math.round(diffHours / 24)
+  if (Math.abs(diffDays) < 30) {
+    return formatter.format(diffDays, 'day')
+  }
+
+  const diffMonths = Math.round(diffDays / 30)
+  if (Math.abs(diffMonths) < 12) {
+    return formatter.format(diffMonths, 'month')
+  }
+
+  const diffYears = Math.round(diffDays / 365)
+  return formatter.format(diffYears, 'year')
+}
+
+function clampMin(value: number, min: number): number {
+  return Math.max(value, min)
+}
+
 function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max)
+}
+
+function getWorkspaceBounds(document: MindMapDocument): { width: number; height: number } {
+  let maxX = WORKSPACE_MIN_WIDTH - WORKSPACE_PADDING
+  let maxY = WORKSPACE_MIN_HEIGHT - WORKSPACE_PADDING
+
+  for (const node of document.nodes) {
+    const nodeWidth = node.width ?? estimateNodeWidth(node)
+    const nodeHeight = node.height ?? estimateNodeHeight(node)
+    maxX = Math.max(maxX, node.position.x + nodeWidth / 2)
+    maxY = Math.max(maxY, node.position.y + nodeHeight / 2)
+  }
+
+  return {
+    width: Math.max(WORKSPACE_MIN_WIDTH, Math.ceil(maxX + WORKSPACE_PADDING)),
+    height: Math.max(WORKSPACE_MIN_HEIGHT, Math.ceil(maxY + WORKSPACE_PADDING)),
+  }
+}
+
+function estimateNodeWidth(node: MindNode): number {
+  if (node.kind === 'root') {
+    return 220
+  }
+  return 196
+}
+
+function estimateNodeHeight(node: MindNode): number {
+  if (node.kind === 'root') {
+    return 64
+  }
+  return MIN_NODE_HEIGHT
 }
 
 function downloadTextFile(filename: string, content: string): void {
@@ -1451,6 +2194,10 @@ function getErrorMessage(error: unknown): string {
     return error.message
   }
   return 'Unknown error'
+}
+
+function cloneDocument(document: MindMapDocument): MindMapDocument {
+  return JSON.parse(JSON.stringify(document)) as MindMapDocument
 }
 
 function requiredElement<T extends Element>(root: ParentNode, selector: string): T {
