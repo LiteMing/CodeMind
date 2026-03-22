@@ -13,6 +13,8 @@ const JSON_HEADERS = {
 }
 
 const API_BASE = resolveApiBase()
+const DEV_BACKEND_HINT =
+  '当前 AI 测试会先访问本地 Go API，再由 Go API 转发到 LM Studio。开发模式请在项目根目录运行 `npm run dev`，或至少同时运行 `go run ./cmd/server` 和 `cd frontend && npm run dev`。'
 
 export const api = {
   async listMaps(): Promise<MindMapSummary[]> {
@@ -208,7 +210,7 @@ async function readError(response: Response): Promise<string> {
   }
 
   if (payload.trim().startsWith('<')) {
-    return `${response.status} ${response.statusText}: API 返回了 HTML 页面。请确认 Go 服务已启动在 http://localhost:7979，并重启 Vite 开发服务器。`
+    return `${response.status} ${response.statusText}: API 返回了 HTML 页面，通常表示你当前只启动了前端，或者 \`http://localhost:7979\` 的 Go API 没有正常运行。${DEV_BACKEND_HINT}`
   }
 
   return payload.trim() || `${response.status} ${response.statusText}`
@@ -220,7 +222,7 @@ async function readJSON<T>(response: Response, endpoint: string): Promise<T> {
 
   if (!contentType.includes('application/json')) {
     const suffix = payload.trim().startsWith('<') ? ' 当前收到的是 HTML 页面。' : ''
-    throw new Error(`${endpoint} 返回了非 JSON 内容。请确认 Go 服务已启动在 http://localhost:7979，并重启 Vite 开发服务器。${suffix}`)
+    throw new Error(`${endpoint} 返回了非 JSON 内容。${DEV_BACKEND_HINT}${suffix}`)
   }
 
   try {

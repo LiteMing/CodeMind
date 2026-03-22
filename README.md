@@ -67,6 +67,8 @@ npm install
 npm run dev
 ```
 
+`npm run dev` 会同时启动 Vite 和本地 Go API。AI 测试不会直接访问 LM Studio，而是先访问本地 `/api/*`，再由 Go 后端转发到你配置的 LM Studio 地址。
+
 Backend only:
 
 ```powershell
