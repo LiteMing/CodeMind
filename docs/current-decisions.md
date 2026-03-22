@@ -22,7 +22,7 @@
 - `Tidy Layout` balances root branches to both sides when a side is empty.
 - Floating nodes are never changed by hierarchy auto layout.
 - The editor shell now follows a GitMind-like direction: full-canvas workspace, floating toolbars, and a right-side floating inspector.
-- A future 2D/3D graph mode should default to read-only and be opened explicitly or triggered by extreme zoom-out.
+- The 3D graph mode is now implemented as an explicitly opened read-only overlay with search, manual drag rotation, and jump-back into the editor.
 
 ## Interaction Rules
 
@@ -30,8 +30,9 @@
 - `Enter` creates a sibling node.
 - Root sibling creation becomes a floating node.
 - `Delete` removes the selected node plus its descendants.
-- `Space` collapses or expands the selected branch.
+- `Space` opens inline editing and places the cursor at the end of the current node title.
 - `F2` renames the selected node.
+- Arrow keys move selection to the nearest visible node in that screen direction.
 - First launch is blocked by a language picker until the user confirms a locale.
 - Workspace settings stay in-page and local, not in external config files.
 
@@ -39,13 +40,15 @@
 
 - UI locale is stored in browser-local preferences, separate from the mind-map document JSON.
 - AI defaults are currently local-only settings and default to LM Studio with `http://127.0.0.1:1234/v1`.
+- AI generation and AI relation suggestions currently use a local OpenAI-compatible endpoint from the Go backend.
+- The AI workspace now includes a lightweight connection test that checks `/models` before running generation or relation analysis.
 - Mind-map theme remains a document-level setting so the same map keeps its appearance across reloads.
 
 ## Deferred Risks
 
 - Relation import currently matches nodes by title, so duplicate titles are ambiguous.
 - Non-standard TXT or Markdown exports may still need AI-assisted normalization later.
-- Collaboration and AI relation suggestions remain deferred in `docs/open-issues.md`.
+- Collaboration remains deferred in `docs/open-issues.md`.
 
 ## Desktop Shell
 

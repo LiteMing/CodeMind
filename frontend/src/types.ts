@@ -1,6 +1,7 @@
 export type Theme = 'light' | 'dark'
 export type Locale = 'zh-CN' | 'en'
 export type AIProvider = 'lmstudio' | 'openai-compatible'
+export type AITemplateId = 'concept-graph' | 'project-planning' | 'character-network'
 
 export type NodeKind = 'root' | 'topic' | 'floating'
 
@@ -60,6 +61,34 @@ export interface AISettings {
   provider: AIProvider
   baseUrl: string
   model: string
+}
+
+export interface AIRelationSuggestion {
+  sourceId: string
+  targetId: string
+  label: string
+  reason: string
+  confidence: number
+}
+
+export interface AIRelationResponse {
+  relations: AIRelationSuggestion[]
+  summary: string
+  model: string
+}
+
+export interface AIGenerateResponse {
+  document: MindMapDocument
+  summary: string
+  prompt: string
+  template: AITemplateId
+  model: string
+}
+
+export interface AITestResponse {
+  ok: boolean
+  model: string
+  message: string
 }
 
 export interface AppPreferences {

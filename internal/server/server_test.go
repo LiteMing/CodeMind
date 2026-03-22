@@ -165,10 +165,153 @@ func TestSaveAndExportMarkdown(t *testing.T) {
 	}
 }
 
+func TestAIRelationsEndpoint(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/models":
+			_, _ = w.Write([]byte(`{"data":[{"id":"qwen-local"}]}`))
+		case "/v1/chat/completions":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"model":"qwen-local","choices":[{"message":{"role":"assistant","content":"{\"summary\":\"找到了跨分支的依赖关系\",\"relations\":[{\"sourceId\":\"scope\",\"targetId\":\"timeline\",\"label\":\"影响排期\",\"reason\":\"范围变化会直接影响时间安排\",\"confidence\":0.92}]}"}}]}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer upstream.Close()
+
+	server := newTestServer(t)
+	server.httpClient = upstream.Client()
+	handler := server.Handler()
+
+	doc := mindmap.NewDefaultDocument()
+	doc.Nodes = append(doc.Nodes,
+		mindmap.Node{ID: "scope", ParentID: "root", Kind: mindmap.NodeKindTopic, Title: "Scope", Position: mindmap.Position{X: 1080, Y: 280}},
+		mindmap.Node{ID: "timeline", ParentID: "root", Kind: mindmap.NodeKindTopic, Title: "Timeline", Position: mindmap.Position{X: 1080, Y: 400}},
+	)
+
+	body := bytes.NewBufferString(`{"settings":{"baseUrl":"` + upstream.URL + `","model":""},"document":`)
+	documentPayload, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatalf("failed to marshal document: %v", err)
+	}
+	body.Write(documentPayload)
+	body.WriteString(`,"instructions":"Focus on practical dependency links."}`)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/ai/relations", body)
+	req.Header.Set("Content-Type", "application/json")
+	res := httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d with body %s", res.Code, res.Body.String())
+	}
+
+	var payload aiRelationsResponse
+	if err := json.Unmarshal(res.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("failed to decode AI relation response: %v", err)
+	}
+	if len(payload.Relations) != 1 {
+		t.Fatalf("expected 1 suggested relation, got %+v", payload.Relations)
+	}
+	if payload.Relations[0].Label != "影响排期" {
+		t.Fatalf("unexpected relation label: %+v", payload.Relations[0])
+	}
+	if payload.Model != "qwen-local" {
+		t.Fatalf("expected model qwen-local, got %q", payload.Model)
+	}
+}
+
+func TestAITestEndpoint(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/models":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"data":[{"id":"qwen-local"},{"id":"phi-local"}]}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer upstream.Close()
+
+	server := newTestServer(t)
+	server.httpClient = upstream.Client()
+	handler := server.Handler()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/ai/test", strings.NewReader(`{"settings":{"baseUrl":"`+upstream.URL+`","model":"qwen-local"}}`))
+	req.Header.Set("Content-Type", "application/json")
+	res := httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d with body %s", res.Code, res.Body.String())
+	}
+
+	var payload aiTestResponse
+	if err := json.Unmarshal(res.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("failed to decode AI test response: %v", err)
+	}
+	if !payload.OK {
+		t.Fatalf("expected ok response, got %+v", payload)
+	}
+	if payload.Model != "qwen-local" {
+		t.Fatalf("expected model qwen-local, got %q", payload.Model)
+	}
+	if !strings.Contains(payload.Message, "Connected") {
+		t.Fatalf("expected connection message, got %q", payload.Message)
+	}
+}
+
+func TestAIGenerateEndpoint(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/models":
+			_, _ = w.Write([]byte(`{"data":[{"id":"qwen-local"}]}`))
+		case "/v1/chat/completions":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"model":"qwen-local","choices":[{"message":{"role":"assistant","content":"{\"title\":\"Graph Databases\",\"summary\":\"覆盖概念、建模、查询与场景。\",\"nodes\":[{\"id\":\"root-topic\",\"title\":\"Graph Databases\",\"parentId\":\"\",\"kind\":\"root\",\"priority\":\"\"},{\"id\":\"concepts\",\"title\":\"Core Concepts\",\"parentId\":\"root-topic\",\"kind\":\"topic\",\"priority\":\"P1\"},{\"id\":\"query\",\"title\":\"Query Languages\",\"parentId\":\"root-topic\",\"kind\":\"topic\",\"priority\":\"\"},{\"id\":\"use-cases\",\"title\":\"Use Cases\",\"parentId\":\"root-topic\",\"kind\":\"topic\",\"priority\":\"\"},{\"id\":\"rdf\",\"title\":\"RDF vs Property Graph\",\"parentId\":\"concepts\",\"kind\":\"topic\",\"priority\":\"\"},{\"id\":\"cypher\",\"title\":\"Cypher\",\"parentId\":\"query\",\"kind\":\"topic\",\"priority\":\"\"},{\"id\":\"recommendation\",\"title\":\"Recommendation\",\"parentId\":\"use-cases\",\"kind\":\"topic\",\"priority\":\"\"}],\"relations\":[{\"sourceId\":\"cypher\",\"targetId\":\"rdf\",\"label\":\"对比\"},{\"sourceId\":\"recommendation\",\"targetId\":\"concepts\",\"label\":\"依赖建模\"}]}"}}]}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer upstream.Close()
+
+	server := newTestServer(t)
+	server.httpClient = upstream.Client()
+	handler := server.Handler()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/ai/generate", strings.NewReader(`{"settings":{"baseUrl":"`+upstream.URL+`","model":""},"topic":"Graph Databases","template":"concept-graph","instructions":"Focus on practical overview."}`))
+	req.Header.Set("Content-Type", "application/json")
+	res := httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d with body %s", res.Code, res.Body.String())
+	}
+
+	var payload aiGenerateResponse
+	if err := json.Unmarshal(res.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("failed to decode AI generate response: %v", err)
+	}
+	if payload.Document.Title != "Graph Databases" {
+		t.Fatalf("unexpected document title: %q", payload.Document.Title)
+	}
+	if len(payload.Document.Nodes) < 4 {
+		t.Fatalf("expected generated document to contain multiple nodes, got %d", len(payload.Document.Nodes))
+	}
+	if len(payload.Document.Relations) == 0 {
+		t.Fatalf("expected generated document to contain cross relations")
+	}
+}
+
 func newTestHandler(t *testing.T) http.Handler {
+	t.Helper()
+	return newTestServer(t).Handler()
+}
+
+func newTestServer(t *testing.T) *Server {
 	t.Helper()
 
 	storePath := t.TempDir()
 	fileStore := store.NewFileStore(storePath)
-	return New(fileStore).Handler()
+	return New(fileStore)
 }

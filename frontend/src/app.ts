@@ -23,6 +23,7 @@ import { type TranslationKey, kindLabel, themeLabel, translate } from './i18n'
 import { DEFAULT_LM_STUDIO_URL, loadPreferences, savePreferences } from './preferences'
 import type {
   AppPreferences,
+  AITemplateId,
   Locale,
   MindMapDocument,
   MindMapSummary,
@@ -89,6 +90,43 @@ interface StatusDescriptor {
   values?: Record<string, string | number>
 }
 
+interface EditorLaunchOptions {
+  value?: string | null
+  selection?: 'all' | 'end'
+}
+
+interface GraphDragState {
+  pointerId: number
+  startX: number
+  startY: number
+  startRotation: number
+  startTilt: number
+}
+
+interface AIWorkspaceState {
+  open: boolean
+  busy: boolean
+  testing: boolean
+  template: AITemplateId
+  topic: string
+  generationInstructions: string
+  relationInstructions: string
+  lastSummary: string
+  lastModel: string
+  connectionMessage: string
+  connectionModel: string
+  connectionOK: boolean | null
+}
+
+interface GraphOverlayState {
+  open: boolean
+  search: string
+  selectedNodeId: string | null
+  autoRotate: boolean
+  rotation: number
+  tilt: number
+}
+
 interface AppState {
   view: AppView
   maps: MindMapSummary[]
@@ -106,6 +144,8 @@ interface AppState {
   preferences: AppPreferences
   settingsOpen: boolean
   inspectorCollapsed: boolean
+  ai: AIWorkspaceState
+  graph: GraphOverlayState
 }
 
 interface ShellRefs {
@@ -125,6 +165,8 @@ interface ShellRefs {
   exportButton: HTMLButtonElement
   importButton: HTMLButtonElement
   topbarConnectButton: HTMLButtonElement
+  aiButton: HTMLButtonElement
+  graphButton: HTMLButtonElement
   importInput: HTMLInputElement
   scroll: HTMLElement
   canvas: HTMLElement
@@ -135,6 +177,32 @@ interface ShellRefs {
   onboardingLayer: HTMLElement
   dock: HTMLElement
   overlayLayer: HTMLElement
+  aiLayer: HTMLElement
+  graphLayer: HTMLElement
+}
+
+interface GraphHitNode {
+  id: string
+  x: number
+  y: number
+  radius: number
+}
+
+interface CopiedSubtreeNode {
+  id: string
+  parentId?: string
+  kind: MindNode['kind']
+  title: string
+  priority?: Priority
+  collapsed?: boolean
+  width?: number
+  height?: number
+  offset: Position
+}
+
+interface CopiedSubtree {
+  rootId: string
+  nodes: CopiedSubtreeNode[]
 }
 
 const WORKSPACE_MIN_WIDTH = 2400
@@ -147,6 +215,11 @@ const MIN_NODE_WIDTH = 170
 const MIN_NODE_HEIGHT = 52
 const HISTORY_LIMIT = 120
 const PRIORITY_VALUES: Priority[] = ['', 'P0', 'P1', 'P2', 'P3']
+const AI_TEMPLATES: Array<{ id: AITemplateId }> = [
+  { id: 'concept-graph' },
+  { id: 'project-planning' },
+  { id: 'character-network' },
+]
 
 export async function createApp(rootEl: HTMLElement): Promise<void> {
   const app = new MindMapApp(rootEl)
@@ -158,6 +231,7 @@ class MindMapApp {
   private autosaveHandle: number | null = null
   private refs: ShellRefs | null = null
   private pan: PanState | null = null
+  private graphDrag: GraphDragState | null = null
   private didInitializeViewport = false
   private viewport = { x: 0, y: 0, scale: 1 }
   private historyPast: HistorySnapshot[] = []
@@ -165,7 +239,11 @@ class MindMapApp {
   private liveCanvasHandle: number | null = null
   private liveNodeIds = new Set<string>()
   private liveNodeDimensionIds = new Set<string>()
+  private graphAnimationHandle: number | null = null
+  private graphHitNodes: GraphHitNode[] = []
+  private copiedSubtree: CopiedSubtree | null = null
   private suppressContextMenuOnce = false
+  private pendingEditorOptions: EditorLaunchOptions | null = null
   private state: AppState
 
   constructor(rootEl: HTMLElement) {
@@ -187,6 +265,28 @@ class MindMapApp {
       preferences: loadPreferences(),
       settingsOpen: false,
       inspectorCollapsed: true,
+      ai: {
+        open: false,
+        busy: false,
+        testing: false,
+        template: 'concept-graph',
+        topic: '',
+        generationInstructions: '',
+        relationInstructions: '',
+        lastSummary: '',
+        lastModel: '',
+        connectionMessage: '',
+        connectionModel: '',
+        connectionOK: null,
+      },
+      graph: {
+        open: false,
+        search: '',
+        selectedNodeId: null,
+        autoRotate: false,
+        rotation: 0.72,
+        tilt: 0.18,
+      },
     }
 
     this.applyLocale()
@@ -211,6 +311,7 @@ class MindMapApp {
     this.rootEl.addEventListener('pointerdown', this.handlePointerDown)
     this.rootEl.addEventListener('keydown', this.handleEditorKeyDown)
     this.rootEl.addEventListener('focusout', this.handleFocusOut, true)
+    this.rootEl.addEventListener('input', this.handleInput)
     this.rootEl.addEventListener('change', this.handleChange)
     this.rootEl.addEventListener('wheel', this.handleWheel, { passive: false })
     window.addEventListener('pointermove', this.handlePointerMove)
@@ -236,6 +337,18 @@ class MindMapApp {
       return
     }
 
+    const aiScrim = target.closest<HTMLElement>('[data-ai-scrim]')
+    if (aiScrim && target === aiScrim) {
+      this.closeAIWorkspace()
+      return
+    }
+
+    const graphScrim = target.closest<HTMLElement>('[data-graph-scrim]')
+    if (graphScrim && target === graphScrim) {
+      this.closeGraphOverlay()
+      return
+    }
+
     const localeOption = target.closest<HTMLElement>('[data-locale-option]')?.dataset.localeOption as Locale | undefined
     if (localeOption) {
       this.setLocale(localeOption, false)
@@ -252,6 +365,19 @@ class MindMapApp {
     const priority = target.closest<HTMLElement>('[data-priority]')?.dataset.priority as Priority | undefined
     if (priority !== undefined) {
       this.setPriority(priority)
+      return
+    }
+
+    if (target.closest('[data-graph-canvas]')) {
+      this.selectGraphNodeAtPoint(event.clientX, event.clientY)
+      return
+    }
+
+    const graphResultNodeId = target.closest<HTMLElement>('[data-graph-node-result]')?.dataset.graphNodeResult
+    if (graphResultNodeId) {
+      this.state.graph.selectedNodeId = graphResultNodeId
+      this.updateGraphSummaryPanel()
+      this.drawGraphScene()
       return
     }
 
@@ -314,11 +440,19 @@ class MindMapApp {
   }
 
   private readonly handleDoubleClick = (event: MouseEvent): void => {
+    const target = event.target
+    if (target instanceof HTMLElement && target.closest('[data-graph-canvas]')) {
+      const nodeId = this.selectGraphNodeAtPoint(event.clientX, event.clientY)
+      if (nodeId) {
+        this.focusNodeFromGraph(nodeId)
+      }
+      return
+    }
+
     if (this.overlayBlocksCanvas()) {
       return
     }
 
-    const target = event.target
     if (!(target instanceof HTMLElement)) {
       return
     }
@@ -328,17 +462,33 @@ class MindMapApp {
       return
     }
 
-    this.state.editingNodeId = nodeButton.dataset.nodeButton
     this.setSelection([nodeButton.dataset.nodeButton], nodeButton.dataset.nodeButton)
-    this.render()
+    this.openNodeEditor(nodeButton.dataset.nodeButton)
   }
 
   private readonly handlePointerDown = (event: PointerEvent): void => {
+    const target = event.target
+    if (target instanceof HTMLElement && this.state.graph.open) {
+      const graphCanvas = target.closest<HTMLCanvasElement>('[data-graph-canvas]')
+      if (graphCanvas && event.button === 0) {
+        this.graphDrag = {
+          pointerId: event.pointerId,
+          startX: event.clientX,
+          startY: event.clientY,
+          startRotation: this.state.graph.rotation,
+          startTilt: this.state.graph.tilt,
+        }
+        event.preventDefault()
+        graphCanvas.setPointerCapture(event.pointerId)
+        graphCanvas.classList.add('is-dragging')
+        return
+      }
+    }
+
     if (this.state.view !== 'map' || this.overlayBlocksCanvas()) {
       return
     }
 
-    const target = event.target
     if (!(target instanceof HTMLElement)) {
       return
     }
@@ -439,6 +589,16 @@ class MindMapApp {
   }
 
   private readonly handlePointerMove = (event: PointerEvent): void => {
+    if (this.graphDrag && event.pointerId === this.graphDrag.pointerId) {
+      const deltaX = event.clientX - this.graphDrag.startX
+      const deltaY = event.clientY - this.graphDrag.startY
+      this.state.graph.rotation = this.graphDrag.startRotation + deltaX * 0.0085
+      this.state.graph.tilt = clamp(this.graphDrag.startTilt + deltaY * 0.0055, -1.1, 1.1)
+      this.drawGraphScene()
+      event.preventDefault()
+      return
+    }
+
     if (this.state.view !== 'map') {
       return
     }
@@ -530,6 +690,18 @@ class MindMapApp {
   }
 
   private readonly handlePointerUp = (event: PointerEvent): void => {
+    if (this.graphDrag && event.pointerId === this.graphDrag.pointerId) {
+      const canvas = this.rootEl.querySelector<HTMLCanvasElement>('[data-graph-canvas]')
+      canvas?.classList.remove('is-dragging')
+      try {
+        canvas?.releasePointerCapture(event.pointerId)
+      } catch {
+        // Ignore pointer capture release errors when the canvas is already gone.
+      }
+      this.graphDrag = null
+      return
+    }
+
     if (this.state.view !== 'map') {
       return
     }
@@ -598,7 +770,9 @@ class MindMapApp {
     this.viewport.x = pointerX - worldX * nextScale
     this.viewport.y = pointerY - worldY * nextScale
     this.viewport.scale = nextScale
+    this.applyCanvasMetrics()
     this.updateCanvasViewportView()
+    this.renderDock()
   }
 
   private readonly handleGlobalKeyDown = (event: KeyboardEvent): void => {
@@ -639,6 +813,18 @@ class MindMapApp {
       return
     }
 
+    if ((event.ctrlKey || event.metaKey) && !event.shiftKey && event.key.toLowerCase() === 'c') {
+      event.preventDefault()
+      this.copySelectedSubtree()
+      return
+    }
+
+    if ((event.ctrlKey || event.metaKey) && !event.shiftKey && event.key.toLowerCase() === 'v') {
+      event.preventDefault()
+      this.pasteCopiedSubtree()
+      return
+    }
+
     if (event.key === 'Escape' && this.state.connectSourceNodeId) {
       event.preventDefault()
       this.state.connectSourceNodeId = null
@@ -676,9 +862,25 @@ class MindMapApp {
       return
     }
 
+    if (event.key.startsWith('Arrow')) {
+      event.preventDefault()
+      if (event.shiftKey) {
+        this.extendSelectionByArrow(event.key)
+      } else {
+        this.moveSelectionByArrow(event.key)
+      }
+      return
+    }
+
     if (event.key === ' ') {
       event.preventDefault()
-      this.toggleSelectedCollapse()
+      this.startEditingSelected({ selection: 'end' })
+      return
+    }
+
+    if (isDirectTypingKey(event)) {
+      event.preventDefault()
+      this.startEditingSelected({ value: event.key, selection: 'end' })
     }
   }
 
@@ -719,6 +921,14 @@ class MindMapApp {
     if (target instanceof HTMLInputElement && target.dataset.settingField && event.key === 'Enter') {
       event.preventDefault()
       target.blur()
+      return
+    }
+
+    if (target instanceof HTMLInputElement && target.dataset.graphSearch && event.key === 'Enter') {
+      event.preventDefault()
+      if (this.state.graph.selectedNodeId) {
+        this.focusNodeFromGraph(this.state.graph.selectedNodeId)
+      }
     }
   }
 
@@ -738,9 +948,47 @@ class MindMapApp {
     }
   }
 
+  private readonly handleInput = (event: Event): void => {
+    const target = event.target
+    if (!(target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement)) {
+      return
+    }
+
+    const aiField = target.dataset.aiField
+    if (aiField) {
+      switch (aiField) {
+        case 'topic':
+          this.state.ai.topic = target.value
+          break
+        case 'template':
+          this.state.ai.template = normalizeAITemplateId(target.value)
+          break
+        case 'generationInstructions':
+          this.state.ai.generationInstructions = target.value
+          break
+        case 'relationInstructions':
+          this.state.ai.relationInstructions = target.value
+          break
+        default:
+          break
+      }
+      return
+    }
+
+    if (target.dataset.graphSearch !== undefined) {
+      this.state.graph.search = target.value
+      const matchedNode = this.findGraphMatches(target.value)[0]
+      if (matchedNode) {
+        this.state.graph.selectedNodeId = matchedNode.id
+      }
+      this.updateGraphSummaryPanel()
+      this.drawGraphScene()
+    }
+  }
+
   private readonly handleChange = (event: Event): void => {
     const target = event.target
-    if (!(target instanceof HTMLInputElement || target instanceof HTMLSelectElement)) {
+    if (!(target instanceof HTMLInputElement || target instanceof HTMLSelectElement || target instanceof HTMLTextAreaElement)) {
       return
     }
 
@@ -758,6 +1006,11 @@ class MindMapApp {
     const field = target.dataset.settingField
     if (field) {
       this.commitSettingField(field, target.value)
+      return
+    }
+
+    if (target.dataset.aiField === 'template') {
+      this.state.ai.template = normalizeAITemplateId(target.value)
     }
   }
 
@@ -783,6 +1036,8 @@ class MindMapApp {
     this.renderDock()
     this.renderOverlay()
     this.renderSettings()
+    this.renderAIWorkspace()
+    this.renderGraphOverlay()
     this.renderOnboarding()
     this.initializeViewportIfNeeded()
     this.focusEditorIfNeeded()
@@ -834,6 +1089,25 @@ class MindMapApp {
                   .join('')
           }
         </section>
+
+        <section class="template-strip">
+          <div class="template-strip-copy">
+            <p class="section-label">${this.t('ai.templateExamples')}</p>
+            <h2>${this.t('ai.templateExamplesTitle')}</h2>
+            <p class="inspector-copy">${this.t('ai.templateExamplesCopy')}</p>
+          </div>
+          <div class="template-grid">
+            ${AI_TEMPLATES.map((template) => {
+              return `
+                <article class="template-card">
+                  <p class="section-label">${templateLabel(template.id, this.state.preferences.locale)}</p>
+                  <p class="inspector-copy">${escapeHtml(promptTemplateCopy(template.id, this.state.preferences.locale))}</p>
+                  <button type="button" class="chip-button" data-command="create-template-map:${template.id}">${this.t('ai.templateAction')}</button>
+                </article>
+              `
+            }).join('')}
+          </div>
+        </section>
       </div>
     `
   }
@@ -861,6 +1135,8 @@ class MindMapApp {
             <button type="button" class="action-button" data-role="save-button" data-command="save"></button>
             <button type="button" class="action-button" data-role="layout-button" data-command="auto-layout"></button>
             <button type="button" class="action-button" data-role="connect-button" data-command="connect-selected"></button>
+            <button type="button" class="action-button" data-role="ai-button" data-command="open-ai-workspace"></button>
+            <button type="button" class="action-button" data-role="graph-button" data-command="open-graph-overlay"></button>
             <button type="button" class="action-button" data-role="export-button" data-command="export-markdown"></button>
           </section>
 
@@ -886,6 +1162,8 @@ class MindMapApp {
           <aside class="inspector" data-inspector></aside>
           <section class="floating-bar floating-bar-bottom" data-dock></section>
           <div class="overlay-layer" data-overlay-layer></div>
+          <div data-ai-layer></div>
+          <div data-graph-layer></div>
           <div data-settings-layer></div>
           <div data-onboarding-layer></div>
         </div>
@@ -909,6 +1187,8 @@ class MindMapApp {
       exportButton: requiredElement(this.rootEl, '[data-role="export-button"]'),
       importButton: requiredElement(this.rootEl, '[data-role="import-button"]'),
       topbarConnectButton: requiredElement(this.rootEl, '[data-role="connect-button"]'),
+      aiButton: requiredElement(this.rootEl, '[data-role="ai-button"]'),
+      graphButton: requiredElement(this.rootEl, '[data-role="graph-button"]'),
       importInput: requiredElement(this.rootEl, '[data-role="import-input"]'),
       scroll: requiredElement(this.rootEl, '[data-workspace-scroll]'),
       canvas: requiredElement(this.rootEl, '[data-workspace-canvas]'),
@@ -919,6 +1199,8 @@ class MindMapApp {
       onboardingLayer: requiredElement(this.rootEl, '[data-onboarding-layer]'),
       dock: requiredElement(this.rootEl, '[data-dock]'),
       overlayLayer: requiredElement(this.rootEl, '[data-overlay-layer]'),
+      aiLayer: requiredElement(this.rootEl, '[data-ai-layer]'),
+      graphLayer: requiredElement(this.rootEl, '[data-graph-layer]'),
     }
   }
 
@@ -940,6 +1222,8 @@ class MindMapApp {
     this.refs.layoutButton.textContent = this.t('toolbar.autoLayout')
     this.refs.exportButton.textContent = this.t('toolbar.exportMarkdown')
     this.refs.importButton.textContent = this.t('toolbar.import')
+    this.refs.aiButton.textContent = this.t('toolbar.ai')
+    this.refs.graphButton.textContent = this.t('toolbar.graph3d')
     this.refs.settingsButton.textContent = this.t('toolbar.settings')
     this.refs.panelButton.textContent = this.t('toolbar.panel')
     this.refs.themeButton.textContent = this.t('toolbar.theme', {
@@ -949,6 +1233,9 @@ class MindMapApp {
     this.refs.undoButton.disabled = !this.canUndo()
     this.refs.redoButton.disabled = !this.canRedo()
     this.refs.topbarConnectButton.classList.toggle('is-active', this.state.connectSourceNodeId !== null)
+    this.refs.aiButton.classList.toggle('is-active', this.state.ai.open)
+    this.refs.aiButton.disabled = this.state.ai.busy
+    this.refs.graphButton.classList.toggle('is-active', this.state.graph.open)
     this.refs.settingsButton.classList.toggle('is-active', this.state.settingsOpen)
     this.refs.panelButton.classList.toggle('is-active', !this.state.inspectorCollapsed)
     document.title = `${this.state.document.title} - Code Mind`
@@ -960,8 +1247,7 @@ class MindMapApp {
     }
 
     const bounds = getWorkspaceBounds(this.state.document)
-    this.refs.canvas.style.width = `${bounds.width}px`
-    this.refs.canvas.style.height = `${bounds.height}px`
+    this.applyCanvasMetrics(bounds)
     this.refs.edgeLayer.setAttribute('viewBox', `0 0 ${bounds.width} ${bounds.height}`)
     this.updateCanvasViewportView()
     this.refs.scroll.classList.toggle('is-marqueeing', Boolean(this.state.marquee))
@@ -1206,6 +1492,156 @@ class MindMapApp {
     `
   }
 
+  private renderAIWorkspace(): void {
+    if (!this.refs) {
+      return
+    }
+
+    if (!this.state.ai.open) {
+      this.refs.aiLayer.innerHTML = ''
+      this.refs.aiLayer.className = ''
+      return
+    }
+
+    const examplePrompt = promptTemplateCopy(this.state.ai.template, this.state.preferences.locale)
+    this.refs.aiLayer.className = 'ai-layer is-visible'
+    this.refs.aiLayer.innerHTML = `
+      <div class="ai-scrim" data-ai-scrim>
+        <section class="ai-drawer" role="dialog" aria-modal="true">
+          <header class="settings-header">
+            <div>
+              <p class="section-label">${this.t('toolbar.ai')}</p>
+              <h2>${this.t('ai.title')}</h2>
+              <p class="inspector-copy">${this.t('ai.subtitle')}</p>
+            </div>
+            <button type="button" class="ghost-button" data-command="close-ai-workspace">${this.t('settings.close')}</button>
+          </header>
+
+          <section class="settings-card">
+            <p class="section-label">${this.t('ai.generate')}</p>
+            <label class="field-row">
+              <span>${this.t('ai.template')}</span>
+              <select class="settings-select" data-ai-field="template">
+                ${AI_TEMPLATES.map((template) => {
+                  return `<option value="${template.id}" ${this.state.ai.template === template.id ? 'selected' : ''}>${templateLabel(template.id, this.state.preferences.locale)}</option>`
+                }).join('')}
+              </select>
+            </label>
+            <label class="field-stack">
+              <span>${this.t('ai.topic')}</span>
+              <input
+                class="settings-input"
+                data-ai-field="topic"
+                value="${escapeAttribute(this.state.ai.topic)}"
+                placeholder="${escapeAttribute(this.t('ai.topicPlaceholder'))}"
+              />
+            </label>
+            <label class="field-stack">
+              <span>${this.t('ai.instructions')}</span>
+              <textarea class="settings-input ai-textarea" data-ai-field="generationInstructions" placeholder="${escapeAttribute(this.t('ai.instructionsPlaceholder'))}">${escapeHtml(this.state.ai.generationInstructions)}</textarea>
+            </label>
+            <div class="ai-action-row">
+              <button type="button" class="action-button primary-action" data-command="ai-generate-map" ${this.state.ai.busy ? 'disabled' : ''}>${this.t('ai.generateAction')}</button>
+              <button type="button" class="chip-button" data-command="create-template-map:${this.state.ai.template}" ${this.state.ai.busy ? 'disabled' : ''}>${this.t('ai.templateAction')}</button>
+            </div>
+            <p class="inspector-copy">${escapeHtml(examplePrompt)}</p>
+          </section>
+
+          <section class="settings-card">
+            <p class="section-label">${this.t('ai.connect')}</p>
+            <p class="inspector-copy">${this.t('ai.connectHint', {
+              nodes: this.state.document.nodes.length,
+              relations: this.state.document.relations.length,
+            })}</p>
+            <label class="field-stack">
+              <span>${this.t('ai.instructions')}</span>
+              <textarea class="settings-input ai-textarea" data-ai-field="relationInstructions" placeholder="${escapeAttribute(this.t('ai.connectPlaceholder'))}">${escapeHtml(this.state.ai.relationInstructions)}</textarea>
+            </label>
+            <div class="ai-action-row">
+              <button type="button" class="chip-button" data-command="test-ai-connection" ${this.state.ai.busy || this.state.ai.testing ? 'disabled' : ''}>${this.state.ai.testing ? `${this.t('ai.testConnection')}...` : this.t('ai.testConnection')}</button>
+              <button type="button" class="action-button" data-command="ai-connect-relations" ${this.state.ai.busy ? 'disabled' : ''}>${this.t('ai.connectAction')}</button>
+            </div>
+            ${
+              this.state.ai.connectionMessage
+                ? `<p class="ai-connection-note ${this.state.ai.connectionOK === true ? 'is-ok' : this.state.ai.connectionOK === false ? 'is-error' : ''}">${
+                    this.state.ai.connectionModel
+                      ? `<strong>${escapeHtml(this.t('ai.connectionModel', { value: this.state.ai.connectionModel }))}</strong><br />`
+                      : ''
+                  }${escapeHtml(this.state.ai.connectionMessage)}</p>`
+                : ''
+            }
+            ${
+              this.state.ai.lastSummary
+                ? `<p class="inspector-copy"><strong>${escapeHtml(this.state.ai.lastModel || this.t('common.unknown'))}</strong>: ${escapeHtml(this.state.ai.lastSummary)}</p>`
+                : ''
+            }
+          </section>
+        </section>
+      </div>
+    `
+  }
+
+  private renderGraphOverlay(): void {
+    if (!this.refs) {
+      return
+    }
+
+    if (!this.state.graph.open) {
+      this.stopGraphAnimation()
+      this.refs.graphLayer.innerHTML = ''
+      this.refs.graphLayer.className = ''
+      return
+    }
+
+    this.refs.graphLayer.className = 'graph-layer is-visible'
+    this.refs.graphLayer.innerHTML = `
+      <div class="graph-scrim" data-graph-scrim>
+        <section class="graph-sheet" role="dialog" aria-modal="true">
+          <header class="graph-header">
+            <div>
+              <p class="section-label">${this.t('toolbar.graph3d')}</p>
+              <h2>${this.t('graph.title')}</h2>
+              <p class="inspector-copy">${this.t('graph.subtitle')}</p>
+            </div>
+            <div class="ai-action-row">
+              <button type="button" class="chip-button" data-command="toggle-graph-autorotate">${this.t('graph.autoRotate', {
+                value: this.state.graph.autoRotate ? this.t('common.on') : this.t('common.off'),
+              })}</button>
+              <button type="button" class="chip-button" data-command="reset-graph-view">${this.t('graph.resetView')}</button>
+              <button type="button" class="chip-button" data-command="focus-graph-selected" ${this.state.graph.selectedNodeId ? '' : 'disabled'}>${this.t('graph.focusAction')}</button>
+              <button type="button" class="ghost-button" data-command="close-graph-overlay">${this.t('settings.close')}</button>
+            </div>
+          </header>
+
+          <div class="graph-toolbar">
+            <input
+              class="settings-input"
+              data-graph-search
+              value="${escapeAttribute(this.state.graph.search)}"
+              placeholder="${escapeAttribute(this.t('graph.searchPlaceholder'))}"
+            />
+            <span class="metric-chip">${this.t('graph.dragHint')}</span>
+            <span class="metric-chip">${this.t('dock.nodes', { value: this.state.document.nodes.length })}</span>
+            <span class="metric-chip">${this.t('dock.relations', { value: this.state.document.relations.length })}</span>
+          </div>
+
+          <div class="graph-layout">
+            <div class="graph-canvas-shell">
+              <canvas class="graph-canvas" data-graph-canvas></canvas>
+            </div>
+            <aside class="graph-sidebar">
+              <div class="graph-result-list" data-graph-result-list>${this.renderGraphResultsList()}</div>
+              <div class="graph-summary" data-graph-summary>${this.renderGraphSummaryContent()}</div>
+            </aside>
+          </div>
+        </section>
+      </div>
+    `
+
+    this.syncGraphAnimation()
+    this.drawGraphScene()
+  }
+
   private renderOnboarding(): void {
     if (!this.refs) {
       return
@@ -1386,8 +1822,20 @@ class MindMapApp {
       return
     }
 
+    const pendingOptions = this.pendingEditorOptions
+    this.pendingEditorOptions = null
     queueMicrotask(() => {
       editor.focus()
+      if (pendingOptions?.value !== undefined && pendingOptions.value !== null) {
+        editor.value = pendingOptions.value
+      }
+
+      if (pendingOptions?.selection === 'end') {
+        const cursor = editor.value.length
+        editor.setSelectionRange(cursor, cursor)
+        return
+      }
+
       editor.select()
     })
   }
@@ -1426,6 +1874,182 @@ class MindMapApp {
     this.state.selectedNodeIds = nextIds
     this.state.selectedNodeId = nextPrimary
     this.state.editingNodeId = null
+    this.pendingEditorOptions = null
+  }
+
+  private moveSelectionByArrow(key: 'ArrowUp' | 'ArrowDown' | 'ArrowLeft' | 'ArrowRight' | string): void {
+    const currentNode = this.selectedNode()
+    if (!currentNode) {
+      return
+    }
+
+    const nextNode = this.findDirectionalNode(currentNode, key)
+    if (!nextNode || nextNode.id === currentNode.id) {
+      return
+    }
+
+    this.setSelection([nextNode.id], nextNode.id)
+    this.render()
+  }
+
+  private extendSelectionByArrow(key: 'ArrowUp' | 'ArrowDown' | 'ArrowLeft' | 'ArrowRight' | string): void {
+    const currentNode = this.selectedNode()
+    if (!currentNode) {
+      return
+    }
+
+    const nextNode = this.findDirectionalNode(currentNode, key)
+    if (!nextNode || nextNode.id === currentNode.id) {
+      return
+    }
+
+    const nextIds = [...this.selectedNodeIds()]
+    if (!nextIds.includes(nextNode.id)) {
+      nextIds.push(nextNode.id)
+    }
+    this.setSelection(nextIds, nextNode.id)
+    this.render()
+  }
+
+  private findDirectionalNode(currentNode: MindNode, direction: string): MindNode | null {
+    const visibleIds = visibleNodeIds(this.state.document)
+    const currentCenter = nodeCenter(currentNode)
+    let bestNode: MindNode | null = null
+    let bestScore = Number.POSITIVE_INFINITY
+
+    for (const candidate of this.state.document.nodes) {
+      if (candidate.id === currentNode.id || !visibleIds.has(candidate.id)) {
+        continue
+      }
+
+      const candidateCenter = nodeCenter(candidate)
+      const deltaX = candidateCenter.x - currentCenter.x
+      const deltaY = candidateCenter.y - currentCenter.y
+      const primaryDelta = directionalPrimaryDelta(direction, deltaX, deltaY)
+      if (primaryDelta <= 0) {
+        continue
+      }
+
+      const crossDelta = directionalCrossDelta(direction, deltaX, deltaY)
+      const score = primaryDelta + Math.abs(crossDelta) * 0.45 + Math.hypot(deltaX, deltaY) * 0.12
+      if (score < bestScore) {
+        bestScore = score
+        bestNode = candidate
+      }
+    }
+
+    return bestNode
+  }
+
+  private copySelectedSubtree(): void {
+    const selectedNode = this.selectedNode()
+    if (!selectedNode) {
+      return
+    }
+
+    const subtreeIds = [selectedNode.id, ...descendantIds(this.state.document, selectedNode.id)]
+    const nodes = subtreeIds
+      .map((nodeId) => this.findNode(nodeId))
+      .filter((node): node is MindNode => Boolean(node))
+      .map((node) => {
+        return {
+          id: node.id,
+          parentId: node.parentId,
+          kind: node.kind,
+          title: node.title,
+          priority: node.priority,
+          collapsed: node.collapsed,
+          width: node.width,
+          height: node.height,
+          offset: {
+            x: node.position.x - selectedNode.position.x,
+            y: node.position.y - selectedNode.position.y,
+          },
+        }
+      })
+
+    if (nodes.length === 0) {
+      return
+    }
+
+    this.copiedSubtree = {
+      rootId: selectedNode.id,
+      nodes,
+    }
+    this.setStatus('status.subtreeCopied', { count: nodes.length })
+    this.renderHeader()
+    this.renderDock()
+  }
+
+  private pasteCopiedSubtree(): void {
+    if (!this.copiedSubtree) {
+      this.setStatus('status.clipboardEmpty')
+      this.render()
+      return
+    }
+
+    const targetNode = this.selectedNode()
+    if (!targetNode) {
+      return
+    }
+
+    const rootSnapshot = this.copiedSubtree.nodes.find((node) => node.id === this.copiedSubtree?.rootId)
+    if (!rootSnapshot) {
+      this.setStatus('status.clipboardEmpty')
+      this.render()
+      return
+    }
+
+    const now = new Date().toISOString()
+    const idMap = new Map<string, string>()
+    const parent = this.findNode(targetNode.id)
+    if (!parent) {
+      return
+    }
+
+    this.captureHistory()
+    parent.collapsed = false
+    parent.updatedAt = now
+
+    const anchor = nextChildPosition(this.state.document, targetNode.id)
+    const insertedNodes: MindNode[] = []
+
+    for (const snapshot of this.copiedSubtree.nodes) {
+      const nextId = createId('node')
+      idMap.set(snapshot.id, nextId)
+      const isClipboardRoot = snapshot.id === this.copiedSubtree.rootId
+      const parentId = isClipboardRoot ? targetNode.id : snapshot.parentId ? idMap.get(snapshot.parentId) : targetNode.id
+      const nodeKind: MindNode['kind'] = isClipboardRoot ? 'topic' : snapshot.kind === 'root' ? 'topic' : snapshot.kind
+      const position = {
+        x: anchor.x + snapshot.offset.x,
+        y: anchor.y + snapshot.offset.y,
+      }
+      insertedNodes.push({
+        id: nextId,
+        parentId,
+        kind: nodeKind,
+        title: snapshot.title,
+        priority: snapshot.priority,
+        collapsed: snapshot.collapsed,
+        width: snapshot.width,
+        height: snapshot.height,
+        position,
+        createdAt: now,
+        updatedAt: now,
+      })
+    }
+
+    this.state.document.nodes.push(...insertedNodes)
+    const pastedRootId = idMap.get(this.copiedSubtree.rootId) ?? insertedNodes[0]?.id
+    if (!pastedRootId) {
+      return
+    }
+
+    this.setSelection([pastedRootId], pastedRootId)
+    touchDocument(this.state.document)
+    this.setStatus('status.subtreePasted', { count: insertedNodes.length })
+    this.render()
+    this.scheduleAutosave('status.layoutSaveScheduled')
   }
 
   private toggleNodeSelection(nodeId: string): void {
@@ -1658,13 +2282,19 @@ class MindMapApp {
     node.updatedAt = new Date().toISOString()
   }
 
-  private startEditingSelected(): void {
+  private startEditingSelected(options: EditorLaunchOptions = {}): void {
     const selectedNode = this.selectedNode()
     if (!selectedNode) {
       return
     }
 
-    this.state.editingNodeId = selectedNode.id
+    this.setSelection([selectedNode.id], selectedNode.id)
+    this.openNodeEditor(selectedNode.id, options)
+  }
+
+  private openNodeEditor(nodeId: string, options: EditorLaunchOptions = {}): void {
+    this.state.editingNodeId = nodeId
+    this.pendingEditorOptions = options
     this.render()
   }
 
@@ -1784,6 +2414,24 @@ class MindMapApp {
         case 'toggle-settings':
           this.toggleSettings()
           return
+        case 'open-ai-workspace':
+          this.openAIWorkspace()
+          return
+        case 'close-ai-workspace':
+          this.closeAIWorkspace()
+          return
+        case 'open-graph-overlay':
+          this.openGraphOverlay()
+          return
+        case 'close-graph-overlay':
+          this.closeGraphOverlay()
+          return
+        case 'toggle-graph-autorotate':
+          this.toggleGraphAutoRotate()
+          return
+        case 'reset-graph-view':
+          this.resetGraphView()
+          return
         case 'close-settings':
           this.closeSettings()
           return
@@ -1813,6 +2461,23 @@ class MindMapApp {
           return
         case 'connect-selected':
           this.startRelationMode()
+          return
+        case 'ai-connect-relations':
+          await this.applyAIRelations()
+          return
+        case 'ai-generate-map':
+          await this.generateAIMap()
+          return
+        case 'create-template-map':
+          await this.createTemplateMap(normalizeAITemplateId(argument))
+          return
+        case 'focus-graph-selected':
+          if (this.state.graph.selectedNodeId) {
+            this.focusNodeFromGraph(this.state.graph.selectedNodeId)
+          }
+          return
+        case 'test-ai-connection':
+          await this.testAIConnection()
           return
         case 'new-child':
           this.createChildNode(this.selectedNode()?.id ?? 'root')
@@ -1967,35 +2632,13 @@ class MindMapApp {
     const title = window.prompt(this.t('dialog.newMapTitle'), this.t('node.untitled')) ?? ''
     const doc = await api.createMap(title)
     await this.refreshMaps()
-    this.state.document = doc
-    this.state.currentMapId = doc.id
-    this.state.view = 'map'
-    this.setSelection([findRoot(doc).id], findRoot(doc).id)
-    this.state.editingNodeId = null
-    this.state.connectSourceNodeId = null
-    this.state.resize = null
-    this.viewport.scale = 1
-    this.didInitializeViewport = false
-    this.refs = null
-    this.resetHistory()
-    this.setStatus('status.mapCreated')
+    this.openLoadedDocument(doc, 'status.mapCreated')
     this.render()
   }
 
   private async openMap(mapId: string): Promise<void> {
     const doc = await api.loadMap(mapId)
-    this.state.document = doc
-    this.state.currentMapId = mapId
-    this.state.view = 'map'
-    this.setSelection([findRoot(doc).id], findRoot(doc).id)
-    this.state.editingNodeId = null
-    this.state.connectSourceNodeId = null
-    this.state.resize = null
-    this.viewport.scale = 1
-    this.didInitializeViewport = false
-    this.refs = null
-    this.resetHistory()
-    this.setStatus('status.loaded')
+    this.openLoadedDocument(doc, 'status.loaded')
     this.render()
   }
 
@@ -2003,6 +2646,9 @@ class MindMapApp {
     await this.refreshMaps('status.mapListLoaded')
     this.state.view = 'home'
     this.state.currentMapId = null
+    this.state.ai.open = false
+    this.state.graph.open = false
+    this.stopGraphAnimation()
     this.refs = null
     this.resetHistory()
     this.render()
@@ -2042,6 +2688,248 @@ class MindMapApp {
 
     this.setStatus('status.mapDeleted')
     this.render()
+  }
+
+  private openAIWorkspace(): void {
+    this.state.ai.open = true
+    this.state.graph.open = false
+    this.stopGraphAnimation()
+    this.setStatus('status.aiPanelOpened')
+    this.render()
+  }
+
+  private closeAIWorkspace(): void {
+    if (!this.state.ai.open) {
+      return
+    }
+
+    this.state.ai.open = false
+    this.setStatus('status.aiPanelClosed')
+    this.render()
+  }
+
+  private openGraphOverlay(): void {
+    this.state.graph.open = true
+    this.state.graph.selectedNodeId = this.state.graph.selectedNodeId ?? this.state.selectedNodeId
+    this.state.ai.open = false
+    this.setStatus('status.graphOpened')
+    this.render()
+  }
+
+  private closeGraphOverlay(): void {
+    if (!this.state.graph.open) {
+      return
+    }
+
+    this.state.graph.open = false
+    this.stopGraphAnimation()
+    this.setStatus('status.graphClosed')
+    this.render()
+  }
+
+  private toggleGraphAutoRotate(): void {
+    this.state.graph.autoRotate = !this.state.graph.autoRotate
+    this.syncGraphAnimation()
+    this.setStatus(this.state.graph.autoRotate ? 'status.graphAutoRotateOn' : 'status.graphAutoRotateOff')
+    this.render()
+  }
+
+  private resetGraphView(): void {
+    this.state.graph.rotation = 0.72
+    this.state.graph.tilt = 0.18
+    this.drawGraphScene()
+    this.setStatus('status.graphViewReset')
+    this.renderHeader()
+  }
+
+  private async testAIConnection(): Promise<void> {
+    if (this.state.ai.busy || this.state.ai.testing) {
+      return
+    }
+
+    this.state.ai.testing = true
+    this.state.ai.connectionMessage = ''
+    this.state.ai.connectionModel = ''
+    this.state.ai.connectionOK = null
+    this.setStatus('status.aiTestingConnection')
+    this.render()
+
+    try {
+      const result = await api.testAIConnection(this.state.preferences.ai)
+      this.state.ai.connectionOK = result.ok
+      this.state.ai.connectionModel = result.model
+      this.state.ai.connectionMessage = result.message
+      this.setStatus('status.aiConnectionOK', { model: result.model || this.t('common.unknown') })
+    } catch (error) {
+      const reason = getErrorMessage(error)
+      this.state.ai.connectionOK = false
+      this.state.ai.connectionModel = ''
+      this.state.ai.connectionMessage = reason
+      this.setStatus('status.aiConnectionFailed', { reason })
+    } finally {
+      this.state.ai.testing = false
+      this.render()
+    }
+  }
+
+  private async applyAIRelations(): Promise<void> {
+    if (this.state.ai.busy) {
+      return
+    }
+
+    this.state.ai.busy = true
+    this.setStatus('status.aiRunning')
+    this.renderHeader()
+    this.renderAIWorkspace()
+
+    try {
+      const result = await api.suggestRelations(this.state.document, this.state.preferences.ai, this.state.ai.relationInstructions)
+      this.state.ai.lastSummary = result.summary
+      this.state.ai.lastModel = result.model
+
+      const nextRelations = result.relations.filter((relation) => {
+        return Boolean(this.findNode(relation.sourceId) && this.findNode(relation.targetId))
+      })
+      if (nextRelations.length === 0) {
+        this.setStatus('status.aiNoRelations')
+        return
+      }
+
+      this.captureHistory()
+      const now = new Date().toISOString()
+      const existingPairs = new Set(this.state.document.relations.map((relation) => normalizedRelationPairKey(relation.sourceId, relation.targetId)))
+      let added = 0
+      for (const relation of nextRelations) {
+        const key = normalizedRelationPairKey(relation.sourceId, relation.targetId)
+        if (existingPairs.has(key)) {
+          continue
+        }
+        existingPairs.add(key)
+        this.state.document.relations.push({
+          id: createId('rel'),
+          sourceId: relation.sourceId,
+          targetId: relation.targetId,
+          label: relation.label,
+          createdAt: now,
+          updatedAt: now,
+        })
+        added += 1
+      }
+
+      if (added === 0) {
+        this.setStatus('status.aiNoRelations')
+        return
+      }
+
+      touchDocument(this.state.document)
+      this.setStatus('status.aiRelationsApplied', { count: added })
+      this.render()
+      this.scheduleAutosave('status.relationSaveScheduled')
+    } catch (error) {
+      this.setStatus('status.aiFailed', { reason: getErrorMessage(error) })
+    } finally {
+      this.state.ai.busy = false
+      this.render()
+    }
+  }
+
+  private async generateAIMap(): Promise<void> {
+    const topic = this.state.ai.topic.trim()
+    if (!topic) {
+      this.setStatus('status.aiTopicRequired')
+      this.render()
+      return
+    }
+    if (this.state.ai.busy) {
+      return
+    }
+
+    this.state.ai.busy = true
+    this.setStatus('status.aiRunning')
+    this.render()
+
+    try {
+      const result = await api.generateKnowledgeMap({
+        topic,
+        template: this.state.ai.template,
+        instructions: this.state.ai.generationInstructions,
+        settings: this.state.preferences.ai,
+      })
+
+      this.state.ai.lastSummary = result.summary
+      this.state.ai.lastModel = result.model
+      await this.persistGeneratedDocument(result.document)
+      this.state.ai.open = false
+      this.setStatus('status.aiMapGenerated', { count: result.document.nodes.length })
+    } catch (error) {
+      this.setStatus('status.aiFailed', { reason: getErrorMessage(error) })
+    } finally {
+      this.state.ai.busy = false
+      this.render()
+    }
+  }
+
+  private async createTemplateMap(templateId: AITemplateId): Promise<void> {
+    const templateDocument = createTemplateDocument(templateId, this.state.preferences.locale)
+    await this.persistGeneratedDocument(templateDocument)
+    this.state.ai.lastSummary = promptTemplateCopy(templateId, this.state.preferences.locale)
+    this.state.ai.open = false
+    this.setStatus('status.templateMapCreated', { title: templateDocument.title })
+    this.render()
+  }
+
+  private async persistGeneratedDocument(document: MindMapDocument): Promise<void> {
+    const created = await api.createMap(document.title)
+    const nextDocument: MindMapDocument = {
+      ...document,
+      id: created.id,
+      meta: created.meta,
+    }
+    const saved = await api.saveMap(nextDocument)
+    await this.refreshMaps()
+    this.openLoadedDocument(saved, 'status.loaded')
+  }
+
+  private openLoadedDocument(document: MindMapDocument, statusKey: TranslationKey): void {
+    this.state.document = document
+    this.state.currentMapId = document.id
+    this.state.view = 'map'
+    this.state.ai.open = false
+    this.state.graph.open = false
+    this.stopGraphAnimation()
+    this.setSelection([findRoot(document).id], findRoot(document).id)
+    this.state.editingNodeId = null
+    this.state.connectSourceNodeId = null
+    this.state.resize = null
+    this.viewport.scale = 1
+    this.didInitializeViewport = false
+    this.refs = null
+    this.resetHistory()
+    this.setStatus(statusKey)
+  }
+
+  private focusNodeFromGraph(nodeId: string): void {
+    this.state.graph.selectedNodeId = nodeId
+    this.state.graph.open = false
+    this.stopGraphAnimation()
+    this.setSelection([nodeId], nodeId)
+    this.render()
+    queueMicrotask(() => {
+      this.centerViewportOnNode(nodeId)
+    })
+  }
+
+  private centerViewportOnNode(nodeId: string): void {
+    const node = this.findNode(nodeId)
+    const scroll = this.refs?.scroll
+    if (!node || !scroll) {
+      return
+    }
+
+    const center = nodeCenter(node)
+    this.viewport.x = scroll.clientWidth / 2 - center.x * this.viewport.scale
+    this.viewport.y = scroll.clientHeight / 2 - center.y * this.viewport.scale
+    this.updateCanvasViewportView()
   }
 
   private tryStartCanvasPan(event: PointerEvent, target: HTMLElement): void {
@@ -2091,6 +2979,7 @@ class MindMapApp {
         this.updatePreferences((preferences) => {
           preferences.ai.provider = value === 'openai-compatible' ? 'openai-compatible' : 'lmstudio'
         })
+        this.resetAIConnectionFeedback()
         this.setStatus('status.aiSettingsSaved')
         this.render()
         return
@@ -2098,6 +2987,7 @@ class MindMapApp {
         this.updatePreferences((preferences) => {
           preferences.ai.baseUrl = value.trim() || DEFAULT_LM_STUDIO_URL
         })
+        this.resetAIConnectionFeedback()
         this.setStatus('status.aiSettingsSaved')
         this.render()
         return
@@ -2105,6 +2995,7 @@ class MindMapApp {
         this.updatePreferences((preferences) => {
           preferences.ai.model = value.trim()
         })
+        this.resetAIConnectionFeedback()
         this.setStatus('status.aiSettingsSaved')
         this.render()
         return
@@ -2128,6 +3019,13 @@ class MindMapApp {
     this.state.settingsOpen = !this.state.settingsOpen
     this.setStatus(this.state.settingsOpen ? 'status.settingsOpened' : 'status.settingsClosed')
     this.render()
+  }
+
+  private resetAIConnectionFeedback(): void {
+    this.state.ai.testing = false
+    this.state.ai.connectionOK = null
+    this.state.ai.connectionMessage = ''
+    this.state.ai.connectionModel = ''
   }
 
   private toggleInspector(): void {
@@ -2177,6 +3075,7 @@ class MindMapApp {
       this.viewport.scale = 1
       this.viewport.x = scroll.clientWidth / 2 - root.position.x * this.viewport.scale
       this.viewport.y = scroll.clientHeight / 2 - root.position.y * this.viewport.scale
+      this.applyCanvasMetrics()
       this.updateCanvasViewportView()
     })
     this.didInitializeViewport = true
@@ -2188,6 +3087,23 @@ class MindMapApp {
 
   private findMapSummary(mapId: string): MindMapSummary | undefined {
     return this.state.maps.find((item) => item.id === mapId)
+  }
+
+  private applyCanvasMetrics(bounds = getWorkspaceBounds(this.state.document)): void {
+    if (!this.refs) {
+      return
+    }
+
+    const scaledWidth = Math.max(1, Math.ceil(bounds.width * this.viewport.scale))
+    const scaledHeight = Math.max(1, Math.ceil(bounds.height * this.viewport.scale))
+
+    this.refs.canvas.style.width = `${scaledWidth}px`
+    this.refs.canvas.style.height = `${scaledHeight}px`
+    this.refs.nodeLayer.style.width = `${bounds.width}px`
+    this.refs.nodeLayer.style.height = `${bounds.height}px`
+    this.refs.nodeLayer.style.setProperty('zoom', String(this.viewport.scale))
+    this.refs.edgeLayer.style.width = `${scaledWidth}px`
+    this.refs.edgeLayer.style.height = `${scaledHeight}px`
   }
 
   private canUndo(): boolean {
@@ -2317,8 +3233,7 @@ class MindMapApp {
     }
 
     const bounds = getWorkspaceBounds(this.state.document)
-    this.refs.canvas.style.width = `${bounds.width}px`
-    this.refs.canvas.style.height = `${bounds.height}px`
+    this.applyCanvasMetrics(bounds)
     this.refs.edgeLayer.setAttribute('viewBox', `0 0 ${bounds.width} ${bounds.height}`)
 
     for (const nodeId of nodeIds) {
@@ -2398,7 +3313,210 @@ class MindMapApp {
       return
     }
 
-    this.refs.canvas.style.transform = `translate(${Math.round(this.viewport.x)}px, ${Math.round(this.viewport.y)}px) scale(${this.viewport.scale})`
+    this.refs.canvas.style.transform = `translate(${Math.round(this.viewport.x)}px, ${Math.round(this.viewport.y)}px)`
+  }
+
+  private renderGraphResultsList(): string {
+    const matches = this.findGraphMatches(this.state.graph.search).slice(0, 8)
+    if (matches.length === 0) {
+      return `<p class="empty-state">${this.t('graph.emptySearch')}</p>`
+    }
+
+    return matches
+      .map((node) => {
+        const active = node.id === this.state.graph.selectedNodeId
+        return `<button type="button" class="graph-result-item ${active ? 'is-active' : ''}" data-graph-node-result="${node.id}">${escapeHtml(shorten(node.title, 36))}</button>`
+      })
+      .join('')
+  }
+
+  private renderGraphSummaryContent(): string {
+    const selectedNode = this.findNode(this.state.graph.selectedNodeId ?? '')
+    if (!selectedNode) {
+      return `
+        <p class="section-label">${this.t('graph.selection')}</p>
+        <h3>${this.t('common.unknownNode')}</h3>
+        <p class="inspector-copy">${this.t('graph.selectionHint')}</p>
+      `
+    }
+
+    const relatedRelations = connectedRelations(this.state.document, selectedNode.id)
+    const descendants = descendantIds(this.state.document, selectedNode.id)
+    return `
+      <p class="section-label">${this.t('graph.selection')}</p>
+      <h3>${escapeHtml(selectedNode.title)}</h3>
+      <div class="metric-row">
+        <span class="metric-chip">${kindLabel(this.state.preferences.locale, selectedNode.kind)}</span>
+        <span class="metric-chip">${this.t('inspector.children', { value: childrenOf(this.state.document, selectedNode.id).length })}</span>
+        <span class="metric-chip">${this.t('inspector.relationsCount', { value: relatedRelations.length })}</span>
+      </div>
+      <p class="inspector-copy">${this.t('graph.summaryCopy', { value: descendants.length })}</p>
+      <p class="inspector-copy">${this.t('graph.doubleClickHint')}</p>
+    `
+  }
+
+  private updateGraphSummaryPanel(): void {
+    const summary = this.rootEl.querySelector<HTMLElement>('[data-graph-summary]')
+    if (summary) {
+      summary.innerHTML = this.renderGraphSummaryContent()
+    }
+
+    const resultList = this.rootEl.querySelector<HTMLElement>('[data-graph-result-list]')
+    if (resultList) {
+      resultList.innerHTML = this.renderGraphResultsList()
+    }
+  }
+
+  private syncGraphAnimation(): void {
+    if (!this.state.graph.open || !this.state.graph.autoRotate) {
+      this.stopGraphAnimation()
+      this.drawGraphScene()
+      return
+    }
+
+    if (this.graphAnimationHandle !== null) {
+      return
+    }
+
+    const animate = () => {
+      if (!this.state.graph.open || !this.state.graph.autoRotate) {
+        this.graphAnimationHandle = null
+        return
+      }
+
+      this.state.graph.rotation = (this.state.graph.rotation + 0.006) % (Math.PI * 2)
+      this.drawGraphScene()
+      this.graphAnimationHandle = window.requestAnimationFrame(animate)
+    }
+
+    this.graphAnimationHandle = window.requestAnimationFrame(animate)
+  }
+
+  private stopGraphAnimation(): void {
+    if (this.graphAnimationHandle !== null) {
+      window.cancelAnimationFrame(this.graphAnimationHandle)
+      this.graphAnimationHandle = null
+    }
+    this.graphHitNodes = []
+  }
+
+  private drawGraphScene(): void {
+    if (!this.state.graph.open) {
+      return
+    }
+
+    const canvas = this.rootEl.querySelector<HTMLCanvasElement>('[data-graph-canvas]')
+    if (!canvas) {
+      return
+    }
+
+    const context = canvas.getContext('2d')
+    if (!context) {
+      return
+    }
+
+    const width = Math.max(canvas.clientWidth, 320)
+    const height = Math.max(canvas.clientHeight, 240)
+    const dpr = Math.max(window.devicePixelRatio || 1, 1)
+    if (canvas.width !== Math.round(width * dpr) || canvas.height !== Math.round(height * dpr)) {
+      canvas.width = Math.round(width * dpr)
+      canvas.height = Math.round(height * dpr)
+    }
+    context.setTransform(dpr, 0, 0, dpr, 0, 0)
+    context.clearRect(0, 0, width, height)
+
+    const frame = buildGraphFrame(
+      this.state.document,
+      width,
+      height,
+      this.state.graph.rotation,
+      this.state.graph.tilt,
+      this.state.graph.search,
+      this.state.graph.selectedNodeId,
+    )
+    this.graphHitNodes = frame.hitNodes
+
+    const background = context.createLinearGradient(0, 0, width, height)
+    background.addColorStop(0, 'rgba(15, 23, 42, 0.96)')
+    background.addColorStop(1, 'rgba(12, 18, 32, 0.96)')
+    context.fillStyle = background
+    context.fillRect(0, 0, width, height)
+
+    context.strokeStyle = 'rgba(148, 163, 184, 0.08)'
+    for (let index = 0; index < width; index += 48) {
+      context.beginPath()
+      context.moveTo(index, 0)
+      context.lineTo(index, height)
+      context.stroke()
+    }
+    for (let index = 0; index < height; index += 48) {
+      context.beginPath()
+      context.moveTo(0, index)
+      context.lineTo(width, index)
+      context.stroke()
+    }
+
+    for (const edge of frame.edges) {
+      context.beginPath()
+      context.strokeStyle = edge.type === 'relation' ? `rgba(253, 186, 116, ${edge.opacity})` : `rgba(147, 197, 253, ${edge.opacity})`
+      context.lineWidth = edge.type === 'relation' ? 1.4 : 1
+      context.moveTo(edge.x1, edge.y1)
+      context.lineTo(edge.x2, edge.y2)
+      context.stroke()
+    }
+
+    context.textAlign = 'center'
+    context.textBaseline = 'middle'
+    for (const node of frame.nodes) {
+      context.beginPath()
+      context.fillStyle = node.selected ? 'rgba(129, 140, 248, 0.95)' : node.highlighted ? 'rgba(96, 165, 250, 0.92)' : `rgba(30, 41, 59, ${node.opacity})`
+      context.strokeStyle = node.selected ? 'rgba(199, 210, 254, 0.95)' : `rgba(148, 163, 184, ${Math.max(0.22, node.opacity)})`
+      context.lineWidth = node.selected ? 2.4 : 1.3
+      context.arc(node.x, node.y, node.radius, 0, Math.PI * 2)
+      context.fill()
+      context.stroke()
+
+      context.fillStyle = 'rgba(241, 245, 249, 0.96)'
+      context.font = `${node.selected ? 14 : 12}px "Segoe UI", sans-serif`
+      context.fillText(node.label, node.x, node.y)
+    }
+  }
+
+  private selectGraphNodeAtPoint(clientX: number, clientY: number): string | null {
+    const canvas = this.rootEl.querySelector<HTMLCanvasElement>('[data-graph-canvas]')
+    if (!canvas) {
+      return null
+    }
+
+    const rect = canvas.getBoundingClientRect()
+    const localX = clientX - rect.left
+    const localY = clientY - rect.top
+    let matched: GraphHitNode | null = null
+    for (const hitNode of this.graphHitNodes) {
+      const distance = Math.hypot(localX - hitNode.x, localY - hitNode.y)
+      if (distance <= hitNode.radius + 6) {
+        matched = hitNode
+        break
+      }
+    }
+
+    if (!matched) {
+      return null
+    }
+
+    this.state.graph.selectedNodeId = matched.id
+    this.updateGraphSummaryPanel()
+    this.drawGraphScene()
+    return matched.id
+  }
+
+  private findGraphMatches(query: string): MindNode[] {
+    const normalized = query.trim().toLowerCase()
+    if (!normalized) {
+      return this.state.document.nodes.slice(0, 8)
+    }
+
+    return this.state.document.nodes.filter((node) => node.title.toLowerCase().includes(normalized))
   }
 
   private t(key: TranslationKey, values?: Record<string, string | number>): string {
@@ -2410,7 +3528,7 @@ class MindMapApp {
   }
 
   private overlayBlocksCanvas(): boolean {
-    return this.onboardingOpen() || this.state.settingsOpen
+    return this.onboardingOpen() || this.state.settingsOpen || this.state.ai.open || this.state.graph.open
   }
 
   private applyTheme(): void {
@@ -2461,6 +3579,297 @@ function shorten(value: string, maxLength: number): string {
     return value
   }
   return `${value.slice(0, Math.max(0, maxLength - 3))}...`
+}
+
+function normalizeAITemplateId(value: string): AITemplateId {
+  switch (value) {
+    case 'project-planning':
+      return 'project-planning'
+    case 'character-network':
+      return 'character-network'
+    default:
+      return 'concept-graph'
+  }
+}
+
+function templateLabel(templateId: AITemplateId, locale: Locale): string {
+  if (locale === 'zh-CN') {
+    switch (templateId) {
+      case 'project-planning':
+        return '项目规划图谱'
+      case 'character-network':
+        return '人物关系图谱'
+      default:
+        return '概念知识图谱'
+    }
+  }
+
+  switch (templateId) {
+    case 'project-planning':
+      return 'Project Planning Graph'
+    case 'character-network':
+      return 'Character Network'
+    default:
+      return 'Concept Graph'
+  }
+}
+
+function promptTemplateCopy(templateId: AITemplateId, locale: Locale): string {
+  if (locale === 'zh-CN') {
+    switch (templateId) {
+      case 'project-planning':
+        return '模板提示词：围绕目标、范围、里程碑、风险、依赖、资源和成功指标，生成一个可直接用于执行沟通的项目脑图。'
+      case 'character-network':
+        return '模板提示词：围绕人物、阵营、动机、冲突、盟友、关键事件，生成一个便于阅读关系线的角色网络图。'
+      default:
+        return '模板提示词：围绕定义、核心概念、机制、应用、对比、风险和案例，生成一个高密度概念知识图谱。'
+    }
+  }
+
+  switch (templateId) {
+    case 'project-planning':
+      return 'Template prompt: generate a project map around goals, scope, milestones, risks, dependencies, resources, and success metrics.'
+    case 'character-network':
+      return 'Template prompt: generate a character network around roles, factions, motivations, conflicts, alliances, and turning points.'
+    default:
+      return 'Template prompt: generate a concept graph around definition, components, mechanisms, applications, comparisons, risks, and examples.'
+  }
+}
+
+function createTemplateDocument(templateId: AITemplateId, locale: Locale): MindMapDocument {
+  const doc = createDefaultDocument()
+  const root = findRoot(doc)
+  const rootTitle =
+    templateId === 'project-planning'
+      ? locale === 'zh-CN'
+        ? '项目规划模板'
+        : 'Project Planning Template'
+      : templateId === 'character-network'
+        ? locale === 'zh-CN'
+          ? '人物关系模板'
+          : 'Character Network Template'
+        : locale === 'zh-CN'
+          ? '概念图谱模板'
+          : 'Concept Graph Template'
+
+  root.title = rootTitle
+  doc.title = rootTitle
+
+  const now = new Date().toISOString()
+  const addNode = (title: string, x: number, y: number, parentId = 'root', priority: Priority = ''): string => {
+    const node = createNode({
+      title,
+      position: { x, y },
+      kind: parentId ? 'topic' : 'floating',
+      parentId: parentId || undefined,
+    })
+    node.priority = priority
+    node.createdAt = now
+    node.updatedAt = now
+    doc.nodes.push(node)
+    return node.id
+  }
+
+  if (templateId === 'project-planning') {
+    const goals = addNode(locale === 'zh-CN' ? '目标' : 'Goals', root.position.x + 280, root.position.y - 140, 'root', 'P1')
+    const scope = addNode(locale === 'zh-CN' ? '范围' : 'Scope', root.position.x + 280, root.position.y - 20)
+    const timeline = addNode(locale === 'zh-CN' ? '里程碑' : 'Milestones', root.position.x + 280, root.position.y + 120)
+    const risks = addNode(locale === 'zh-CN' ? '风险' : 'Risks', root.position.x - 280, root.position.y - 90)
+    const resources = addNode(locale === 'zh-CN' ? '资源' : 'Resources', root.position.x - 280, root.position.y + 70)
+    const metrics = addNode(locale === 'zh-CN' ? '指标' : 'Metrics', root.position.x - 280, root.position.y + 190)
+    addNode(locale === 'zh-CN' ? '验收标准' : 'Acceptance', root.position.x + 560, root.position.y - 140, goals)
+    addNode(locale === 'zh-CN' ? '边界' : 'Boundaries', root.position.x + 560, root.position.y - 20, scope)
+    addNode(locale === 'zh-CN' ? '关键日期' : 'Dates', root.position.x + 560, root.position.y + 120, timeline)
+    addNode(locale === 'zh-CN' ? '依赖' : 'Dependencies', root.position.x - 560, root.position.y - 120, risks)
+    addNode(locale === 'zh-CN' ? '预算' : 'Budget', root.position.x - 560, root.position.y + 30, resources)
+    addNode(locale === 'zh-CN' ? '复盘' : 'Review', root.position.x - 560, root.position.y + 210, metrics)
+    doc.relations.push(createTemplateRelation(scope, timeline, locale === 'zh-CN' ? '影响排期' : 'affects timeline'))
+    doc.relations.push(createTemplateRelation(resources, risks, locale === 'zh-CN' ? '缓解' : 'mitigates'))
+  } else if (templateId === 'character-network') {
+    const roles = addNode(locale === 'zh-CN' ? '主要角色' : 'Main Roles', root.position.x + 280, root.position.y - 130)
+    const factions = addNode(locale === 'zh-CN' ? '阵营' : 'Factions', root.position.x + 280, root.position.y + 20)
+    const motives = addNode(locale === 'zh-CN' ? '动机' : 'Motivations', root.position.x - 280, root.position.y - 70)
+    const conflicts = addNode(locale === 'zh-CN' ? '冲突' : 'Conflicts', root.position.x - 280, root.position.y + 120, 'root', 'P1')
+    const hero = addNode(locale === 'zh-CN' ? '主角' : 'Protagonist', root.position.x + 560, root.position.y - 180, roles)
+    const rival = addNode(locale === 'zh-CN' ? '对手' : 'Rival', root.position.x + 560, root.position.y - 70, roles)
+    const guild = addNode(locale === 'zh-CN' ? '公会' : 'Guild', root.position.x + 560, root.position.y + 20, factions)
+    const empire = addNode(locale === 'zh-CN' ? '帝国' : 'Empire', root.position.x + 560, root.position.y + 120, factions)
+    const freedom = addNode(locale === 'zh-CN' ? '自由' : 'Freedom', root.position.x - 560, root.position.y - 90, motives)
+    const revenge = addNode(locale === 'zh-CN' ? '复仇' : 'Revenge', root.position.x - 560, root.position.y + 10, motives)
+    const betrayal = addNode(locale === 'zh-CN' ? '背叛' : 'Betrayal', root.position.x - 560, root.position.y + 120, conflicts)
+    doc.relations.push(createTemplateRelation(hero, rival, locale === 'zh-CN' ? '宿敌' : 'rivals'))
+    doc.relations.push(createTemplateRelation(guild, freedom, locale === 'zh-CN' ? '推动' : 'drives'))
+    doc.relations.push(createTemplateRelation(empire, betrayal, locale === 'zh-CN' ? '诱发' : 'triggers'))
+    doc.relations.push(createTemplateRelation(revenge, rival, locale === 'zh-CN' ? '针对' : 'targets'))
+  } else {
+    const definition = addNode(locale === 'zh-CN' ? '定义' : 'Definition', root.position.x + 280, root.position.y - 150, 'root', 'P1')
+    const concepts = addNode(locale === 'zh-CN' ? '核心概念' : 'Core Concepts', root.position.x + 280, root.position.y - 10)
+    const workflow = addNode(locale === 'zh-CN' ? '工作流' : 'Workflow', root.position.x + 280, root.position.y + 130)
+    const applications = addNode(locale === 'zh-CN' ? '应用场景' : 'Use Cases', root.position.x - 280, root.position.y - 100)
+    const tradeoffs = addNode(locale === 'zh-CN' ? '权衡' : 'Tradeoffs', root.position.x - 280, root.position.y + 40)
+    const examples = addNode(locale === 'zh-CN' ? '案例' : 'Examples', root.position.x - 280, root.position.y + 180)
+    const ontology = addNode(locale === 'zh-CN' ? '本体' : 'Ontology', root.position.x + 560, root.position.y - 60, concepts)
+    const entities = addNode(locale === 'zh-CN' ? '实体与关系' : 'Entities & Edges', root.position.x + 560, root.position.y + 20, concepts)
+    const pipeline = addNode(locale === 'zh-CN' ? '采集到推理' : 'Ingest to Reasoning', root.position.x + 560, root.position.y + 130, workflow)
+    const recommendation = addNode(locale === 'zh-CN' ? '推荐系统' : 'Recommendation', root.position.x - 560, root.position.y - 120, applications)
+    const quality = addNode(locale === 'zh-CN' ? '数据质量' : 'Data Quality', root.position.x - 560, root.position.y + 40, tradeoffs)
+    const search = addNode(locale === 'zh-CN' ? '搜索增强' : 'Search Augment', root.position.x - 560, root.position.y + 180, examples)
+    doc.relations.push(createTemplateRelation(ontology, quality, locale === 'zh-CN' ? '依赖一致性' : 'needs consistency'))
+    doc.relations.push(createTemplateRelation(recommendation, entities, locale === 'zh-CN' ? '使用' : 'uses'))
+    doc.relations.push(createTemplateRelation(search, pipeline, locale === 'zh-CN' ? '接入' : 'plugs into'))
+    doc.relations.push(createTemplateRelation(definition, applications, locale === 'zh-CN' ? '落地到' : 'applies to'))
+  }
+
+  touchDocument(doc)
+  return doc
+}
+
+function createTemplateRelation(sourceId: string, targetId: string, label: string): RelationEdge {
+  const now = new Date().toISOString()
+  return {
+    id: createId('rel'),
+    sourceId,
+    targetId,
+    label,
+    createdAt: now,
+    updatedAt: now,
+  }
+}
+
+function normalizedRelationPairKey(left: string, right: string): string {
+  return left < right ? `${left}::${right}` : `${right}::${left}`
+}
+
+function buildGraphFrame(
+  document: MindMapDocument,
+  width: number,
+  height: number,
+  rotation: number,
+  tilt: number,
+  searchQuery: string,
+  selectedNodeId: string | null,
+): {
+  nodes: Array<{ id: string; x: number; y: number; radius: number; label: string; opacity: number; selected: boolean; highlighted: boolean }>
+  edges: Array<{ x1: number; y1: number; x2: number; y2: number; opacity: number; type: 'hierarchy' | 'relation' }>
+  hitNodes: GraphHitNode[]
+} {
+  const root = findRoot(document)
+  const query = searchQuery.trim().toLowerCase()
+  const projected = new Map<
+    string,
+    {
+      id: string
+      x: number
+      y: number
+      radius: number
+      depth: number
+      z: number
+      opacity: number
+      selected: boolean
+      highlighted: boolean
+      label: string
+    }
+  >()
+
+  document.nodes.forEach((node, index) => {
+    const depth = graphNodeDepth(document, node)
+    const relationCount = connectedRelations(document, node.id).length
+    const offsetX = node.position.x - root.position.x
+    const offsetY = node.position.y - root.position.y
+    const orbit = index * 0.27 + depth * 0.18
+    const baseX = offsetX * 0.58 + Math.cos(orbit) * (54 + depth * 18)
+    const baseY = offsetY * 0.42 + Math.sin(orbit * 1.2) * (22 + depth * 10)
+    const baseZ = Math.sin(orbit * 0.9) * 190 + Math.cos(orbit * 0.45) * 54 + relationCount * 16 - depth * 10
+
+    const yawX = baseX * Math.cos(rotation) - baseZ * Math.sin(rotation)
+    const yawZ = baseX * Math.sin(rotation) + baseZ * Math.cos(rotation)
+    const pitchY = baseY * Math.cos(tilt) - yawZ * Math.sin(tilt)
+    const pitchZ = baseY * Math.sin(tilt) + yawZ * Math.cos(tilt)
+
+    const perspective = 720 / (720 + pitchZ + 360)
+    const x = width / 2 + yawX * perspective
+    const y = height / 2 + pitchY * perspective
+    const radius = clamp(10 + relationCount * 1.2 + (node.kind === 'root' ? 8 : 0), 10, 24) * Math.max(0.78, perspective)
+    const selected = node.id === selectedNodeId
+    const highlighted = selected || (query !== '' && node.title.toLowerCase().includes(query))
+    projected.set(node.id, {
+      id: node.id,
+      x,
+      y,
+      radius,
+      depth,
+      z: pitchZ,
+      opacity: clamp(0.24 + perspective * 0.84, 0.24, 1),
+      selected,
+      highlighted,
+      label: shorten(node.title, selected ? 18 : highlighted ? 10 : 4),
+    })
+  })
+
+  const edges: Array<{ x1: number; y1: number; x2: number; y2: number; opacity: number; type: 'hierarchy' | 'relation' }> = []
+  for (const node of document.nodes) {
+    if (!node.parentId) {
+      continue
+    }
+
+    const source = projected.get(node.parentId)
+    const target = projected.get(node.id)
+    if (!source || !target) {
+      continue
+    }
+
+    edges.push({
+      x1: source.x,
+      y1: source.y,
+      x2: target.x,
+      y2: target.y,
+      opacity: clamp((source.opacity + target.opacity) / 2 * 0.62, 0.12, 0.72),
+      type: 'hierarchy',
+    })
+  }
+
+  for (const relation of document.relations) {
+    const source = projected.get(relation.sourceId)
+    const target = projected.get(relation.targetId)
+    if (!source || !target) {
+      continue
+    }
+
+    edges.push({
+      x1: source.x,
+      y1: source.y,
+      x2: target.x,
+      y2: target.y,
+      opacity: clamp((source.opacity + target.opacity) / 2 * 0.74, 0.14, 0.82),
+      type: 'relation',
+    })
+  }
+
+  const nodes = [...projected.values()].sort((left, right) => left.z - right.z || left.depth - right.depth)
+  return {
+    nodes,
+    edges,
+    hitNodes: nodes.map((node) => ({
+      id: node.id,
+      x: node.x,
+      y: node.y,
+      radius: node.radius,
+    })),
+  }
+}
+
+function graphNodeDepth(document: MindMapDocument, node: MindNode): number {
+  let depth = 0
+  let current = node
+  while (current.parentId) {
+    const parent = findNode(document, current.parentId)
+    if (!parent) {
+      break
+    }
+    depth += 1
+    current = parent
+  }
+  return depth
 }
 
 function buildNodeDimensionStyle(node: MindNode): string {
@@ -2546,6 +3955,15 @@ function estimateNodeHeight(node: MindNode): number {
   return MIN_NODE_HEIGHT
 }
 
+function nodeCenter(node: MindNode): Position {
+  const width = node.width ?? estimateNodeWidth(node)
+  const height = node.height ?? estimateNodeHeight(node)
+  return {
+    x: node.position.x + width / 2,
+    y: node.position.y + height / 2,
+  }
+}
+
 function downloadTextFile(filename: string, content: string): void {
   const blob = new Blob([content], { type: 'text/plain;charset=utf-8' })
   const url = URL.createObjectURL(blob)
@@ -2566,8 +3984,36 @@ function slugify(value: string): string {
   return normalized || 'code-mind'
 }
 
+function isDirectTypingKey(event: KeyboardEvent): boolean {
+  if (event.ctrlKey || event.metaKey || event.altKey || event.key === ' ') {
+    return false
+  }
+
+  return event.key.length === 1
+}
+
 function isTypingTarget(target: EventTarget | null): boolean {
   return target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement
+}
+
+function directionalPrimaryDelta(direction: string, deltaX: number, deltaY: number): number {
+  if (direction === 'ArrowUp') {
+    return -deltaY
+  }
+  if (direction === 'ArrowDown') {
+    return deltaY
+  }
+  if (direction === 'ArrowLeft') {
+    return -deltaX
+  }
+  return deltaX
+}
+
+function directionalCrossDelta(direction: string, deltaX: number, deltaY: number): number {
+  if (direction === 'ArrowUp' || direction === 'ArrowDown') {
+    return deltaX
+  }
+  return deltaY
 }
 
 function getErrorMessage(error: unknown): string {

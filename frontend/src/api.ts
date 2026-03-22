@@ -1,8 +1,17 @@
-import type { MindMapDocument, MindMapSummary } from './types'
+import type {
+  AIGenerateResponse,
+  AIRelationResponse,
+  AITestResponse,
+  AITemplateId,
+  AISettings,
+  MindMapDocument,
+  MindMapSummary,
+} from './types'
 
 const JSON_HEADERS = {
   'Content-Type': 'application/json',
 }
+
 const API_BASE = resolveApiBase()
 
 export const api = {
@@ -105,6 +114,61 @@ export const api = {
 
     return normalizeDocument(await readJSON<MindMapDocument>(response, '/api/import'))
   },
+
+  async suggestRelations(document: MindMapDocument, settings: AISettings, instructions: string): Promise<AIRelationResponse> {
+    const response = await fetch(`${API_BASE}/ai/relations`, {
+      method: 'POST',
+      headers: JSON_HEADERS,
+      body: JSON.stringify({
+        document,
+        settings,
+        instructions,
+      }),
+    })
+
+    if (!response.ok) {
+      throw new Error(await readError(response))
+    }
+
+    return await readJSON<AIRelationResponse>(response, '/api/ai/relations')
+  },
+
+  async generateKnowledgeMap(input: {
+    topic: string
+    template: AITemplateId
+    instructions: string
+    settings: AISettings
+  }): Promise<AIGenerateResponse> {
+    const response = await fetch(`${API_BASE}/ai/generate`, {
+      method: 'POST',
+      headers: JSON_HEADERS,
+      body: JSON.stringify(input),
+    })
+
+    if (!response.ok) {
+      throw new Error(await readError(response))
+    }
+
+    const payload = await readJSON<AIGenerateResponse>(response, '/api/ai/generate')
+    return {
+      ...payload,
+      document: normalizeDocument(payload.document),
+    }
+  },
+
+  async testAIConnection(settings: AISettings): Promise<AITestResponse> {
+    const response = await fetch(`${API_BASE}/ai/test`, {
+      method: 'POST',
+      headers: JSON_HEADERS,
+      body: JSON.stringify({ settings }),
+    })
+
+    if (!response.ok) {
+      throw new Error(await readError(response))
+    }
+
+    return await readJSON<AITestResponse>(response, '/api/ai/test')
+  },
 }
 
 function normalizeDocument(document: MindMapDocument): MindMapDocument {
@@ -124,6 +188,7 @@ function resolveApiBase(): string {
   if (configuredBase) {
     return `${configuredBase.replace(/\/+$/, '')}/api`
   }
+
   return '/api'
 }
 

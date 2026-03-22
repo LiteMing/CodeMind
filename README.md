@@ -28,11 +28,16 @@ Current focus:
 - Double-click or `F2` rename
 - First-run language picker with English and Simplified Chinese
 - In-page settings drawer for locale, theme, and local AI defaults
+- AI workspace for automatic semantic relation suggestions
+- AI connection test for LM Studio or another OpenAI-compatible local endpoint
+- AI topic-based knowledge graph generation
+- Built-in AI template example maps
 - Priority badges: `P0` to `P3`
 - Branch collapse and expand
 - Node drag for non-root nodes
 - Manual relation edges with editable labels
 - Hierarchy auto layout
+- Read-only 3D floating graph overlay with search, drag-to-orbit, optional auto-rotate, and jump-back
 - Local JSON persistence through the Go backend
 - Markdown export and Markdown/TXT import
 - Wails desktop shell build
@@ -42,31 +47,35 @@ Current focus:
 - `Tab`: add child node
 - `Enter`: add sibling node
 - `Delete`: delete selected node subtree
-- `Space`: collapse or expand selected branch
+- `Space`: enter editing with cursor at the end
 - `F2`: rename selected node
+- `Arrow keys`: move selection by direction
+- `Shift + Arrow keys`: extend selection
+- `Ctrl/Cmd + C`: copy current primary subtree
+- `Ctrl/Cmd + V`: paste subtree under current primary node
 - `Ctrl/Cmd + L`: tidy hierarchy layout
 - `Ctrl/Cmd + S`: save
 
+Detailed shortcut notes live in `docs/keyboard-shortcuts.md`.
+
 ## Run
 
-Backend:
+Root dev mode:
+
+```powershell
+npm install
+npm run dev
+```
+
+Backend only:
 
 ```powershell
 go run ./cmd/server
 ```
 
-Frontend dev server:
-
-```powershell
-cd frontend
-npm install
-npm run dev
-```
-
 Production frontend build:
 
 ```powershell
-cd frontend
 npm run build
 ```
 
