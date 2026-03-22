@@ -28,6 +28,7 @@ Current focus:
 - Double-click or `F2` rename
 - First-run language picker with English and Simplified Chinese
 - In-page settings drawer for locale, theme, and local AI defaults
+- Local AI settings now include optional API Key and configurable max output tokens
 - AI workspace for automatic semantic relation suggestions
 - AI connection test for LM Studio or another OpenAI-compatible local endpoint
 - AI topic-based knowledge graph generation

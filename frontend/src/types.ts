@@ -61,6 +61,8 @@ export interface AISettings {
   provider: AIProvider
   baseUrl: string
   model: string
+  apiKey: string
+  maxTokens: number
 }
 
 export interface AIRelationSuggestion {

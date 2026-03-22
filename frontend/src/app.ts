@@ -20,7 +20,7 @@ import {
   visibleNodeIds,
 } from './document'
 import { type TranslationKey, kindLabel, themeLabel, translate } from './i18n'
-import { DEFAULT_LM_STUDIO_URL, loadPreferences, savePreferences } from './preferences'
+import { DEFAULT_AI_MAX_TOKENS, DEFAULT_LM_STUDIO_URL, loadPreferences, normalizeAIMaxTokens, savePreferences } from './preferences'
 import type {
   AppPreferences,
   AITemplateId,
@@ -1477,6 +1477,17 @@ class MindMapApp {
               <input class="settings-input" data-setting-field="ai.baseUrl" value="${escapeAttribute(this.state.preferences.ai.baseUrl)}" />
             </label>
             <label class="field-stack">
+              <span>${this.t('settings.aiApiKey')}</span>
+              <input
+                class="settings-input"
+                type="password"
+                autocomplete="off"
+                data-setting-field="ai.apiKey"
+                value="${escapeAttribute(this.state.preferences.ai.apiKey)}"
+                placeholder="${escapeAttribute(this.t('settings.aiApiKeyPlaceholder'))}"
+              />
+            </label>
+            <label class="field-stack">
               <span>${this.t('settings.aiModel')}</span>
               <input
                 class="settings-input"
@@ -1485,6 +1496,20 @@ class MindMapApp {
                 placeholder="${escapeAttribute(this.t('settings.aiModelPlaceholder'))}"
               />
             </label>
+            <label class="field-stack">
+              <span>${this.t('settings.aiMaxTokens')}</span>
+              <input
+                class="settings-input"
+                type="number"
+                min="256"
+                max="32768"
+                step="256"
+                inputmode="numeric"
+                data-setting-field="ai.maxTokens"
+                value="${escapeAttribute(String(this.state.preferences.ai.maxTokens || DEFAULT_AI_MAX_TOKENS))}"
+              />
+            </label>
+            <p class="inspector-copy">${this.t('settings.aiMaxTokensHint')}</p>
             <p class="inspector-copy">${this.t('settings.aiHint')}</p>
           </section>
         </section>
@@ -3022,11 +3047,26 @@ class MindMapApp {
         this.setStatus('status.aiSettingsSaved')
         this.render()
         return
+      case 'ai.apiKey':
+        this.updatePreferences((preferences) => {
+          preferences.ai.apiKey = value.trim()
+        })
+        this.resetAIConnectionFeedback()
+        this.setStatus('status.aiSettingsSaved')
+        this.render()
+        return
       case 'ai.model':
         this.updatePreferences((preferences) => {
           preferences.ai.model = value.trim()
         })
         this.resetAIConnectionFeedback()
+        this.setStatus('status.aiSettingsSaved')
+        this.render()
+        return
+      case 'ai.maxTokens':
+        this.updatePreferences((preferences) => {
+          preferences.ai.maxTokens = normalizeAIMaxTokens(value)
+        })
         this.setStatus('status.aiSettingsSaved')
         this.render()
         return

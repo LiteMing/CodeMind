@@ -3,6 +3,7 @@ package server
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -225,6 +226,9 @@ func TestAITestEndpoint(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/v1/models":
+			if auth := r.Header.Get("Authorization"); auth != "Bearer test-key" {
+				t.Fatalf("expected Authorization header Bearer test-key, got %q", auth)
+			}
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"data":[{"id":"qwen-local"},{"id":"phi-local"}]}`))
 		default:
@@ -237,7 +241,7 @@ func TestAITestEndpoint(t *testing.T) {
 	server.httpClient = upstream.Client()
 	handler := server.Handler()
 
-	req := httptest.NewRequest(http.MethodPost, "/api/ai/test", strings.NewReader(`{"settings":{"baseUrl":"`+upstream.URL+`","model":"qwen-local"}}`))
+	req := httptest.NewRequest(http.MethodPost, "/api/ai/test", strings.NewReader(`{"settings":{"provider":"openai-compatible","baseUrl":"`+upstream.URL+`","model":"qwen-local","apiKey":"test-key","maxTokens":4096}}`))
 	req.Header.Set("Content-Type", "application/json")
 	res := httptest.NewRecorder()
 	handler.ServeHTTP(res, req)
@@ -265,8 +269,25 @@ func TestAIGenerateEndpoint(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/v1/models":
+			if auth := r.Header.Get("Authorization"); auth != "Bearer test-key" {
+				t.Fatalf("expected Authorization header Bearer test-key on /models, got %q", auth)
+			}
 			_, _ = w.Write([]byte(`{"data":[{"id":"qwen-local"}]}`))
 		case "/v1/chat/completions":
+			if auth := r.Header.Get("Authorization"); auth != "Bearer test-key" {
+				t.Fatalf("expected Authorization header Bearer test-key on /chat/completions, got %q", auth)
+			}
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				t.Fatalf("failed to read upstream request body: %v", err)
+			}
+			var payload openAIChatRequest
+			if err := json.Unmarshal(body, &payload); err != nil {
+				t.Fatalf("failed to decode upstream chat request: %v", err)
+			}
+			if payload.MaxTokens != 4096 {
+				t.Fatalf("expected max_tokens 4096, got %d", payload.MaxTokens)
+			}
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"model":"qwen-local","choices":[{"message":{"role":"assistant","content":"{\"title\":\"Graph Databases\",\"summary\":\"覆盖概念、建模、查询与场景。\",\"nodes\":[{\"id\":\"root-topic\",\"title\":\"Graph Databases\",\"parentId\":\"\",\"kind\":\"root\",\"priority\":\"\"},{\"id\":\"concepts\",\"title\":\"Core Concepts\",\"parentId\":\"root-topic\",\"kind\":\"topic\",\"priority\":\"P1\"},{\"id\":\"query\",\"title\":\"Query Languages\",\"parentId\":\"root-topic\",\"kind\":\"topic\",\"priority\":\"\"},{\"id\":\"use-cases\",\"title\":\"Use Cases\",\"parentId\":\"root-topic\",\"kind\":\"topic\",\"priority\":\"\"},{\"id\":\"rdf\",\"title\":\"RDF vs Property Graph\",\"parentId\":\"concepts\",\"kind\":\"topic\",\"priority\":\"\"},{\"id\":\"cypher\",\"title\":\"Cypher\",\"parentId\":\"query\",\"kind\":\"topic\",\"priority\":\"\"},{\"id\":\"recommendation\",\"title\":\"Recommendation\",\"parentId\":\"use-cases\",\"kind\":\"topic\",\"priority\":\"\"}],\"relations\":[{\"sourceId\":\"cypher\",\"targetId\":\"rdf\",\"label\":\"对比\"},{\"sourceId\":\"recommendation\",\"targetId\":\"concepts\",\"label\":\"依赖建模\"}]}"}}]}`))
 		default:
@@ -279,7 +300,7 @@ func TestAIGenerateEndpoint(t *testing.T) {
 	server.httpClient = upstream.Client()
 	handler := server.Handler()
 
-	req := httptest.NewRequest(http.MethodPost, "/api/ai/generate", strings.NewReader(`{"settings":{"baseUrl":"`+upstream.URL+`","model":""},"topic":"Graph Databases","template":"concept-graph","instructions":"Focus on practical overview."}`))
+	req := httptest.NewRequest(http.MethodPost, "/api/ai/generate", strings.NewReader(`{"settings":{"provider":"openai-compatible","baseUrl":"`+upstream.URL+`","model":"","apiKey":"test-key","maxTokens":4096},"topic":"Graph Databases","template":"concept-graph","instructions":"Focus on practical overview."}`))
 	req.Header.Set("Content-Type", "application/json")
 	res := httptest.NewRecorder()
 	handler.ServeHTTP(res, req)

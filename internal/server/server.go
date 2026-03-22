@@ -18,11 +18,12 @@ import (
 )
 
 const (
-	defaultAIBaseURL  = "http://127.0.0.1:1234/v1"
-	defaultRootX      = 820
-	defaultRootY      = 320
-	defaultBranchGapX = 280
-	defaultBranchGapY = 100
+	defaultAIBaseURL   = "http://127.0.0.1:1234/v1"
+	defaultAIMaxTokens = 3200
+	defaultRootX       = 820
+	defaultRootY       = 320
+	defaultBranchGapX  = 280
+	defaultBranchGapY  = 100
 )
 
 type Server struct {
@@ -48,9 +49,11 @@ type markdownResponse struct {
 }
 
 type aiSettingsRequest struct {
-	Provider string `json:"provider"`
-	BaseURL  string `json:"baseUrl"`
-	Model    string `json:"model"`
+	Provider  string `json:"provider"`
+	BaseURL   string `json:"baseUrl"`
+	Model     string `json:"model"`
+	APIKey    string `json:"apiKey"`
+	MaxTokens int    `json:"maxTokens"`
 }
 
 type aiRelationsRequest struct {
@@ -559,7 +562,7 @@ func (s *Server) generateAIDocument(req aiGenerateRequest) (aiGenerateResponse, 
 
 func (s *Server) testAIConnection(settings aiSettingsRequest) (aiTestResponse, error) {
 	baseURL := normalizeAIBaseURL(settings.BaseURL)
-	models, err := s.listAIModels(baseURL)
+	models, err := s.listAIModels(settings, baseURL)
 	if err != nil {
 		return aiTestResponse{}, err
 	}
@@ -595,15 +598,15 @@ func (s *Server) testAIConnection(settings aiSettingsRequest) (aiTestResponse, e
 
 func (s *Server) runJSONTask(settings aiSettingsRequest, systemPrompt string, userPrompt string, schema map[string]any, target any) (string, error) {
 	baseURL := normalizeAIBaseURL(settings.BaseURL)
-	model, err := s.resolveAIModel(baseURL, strings.TrimSpace(settings.Model))
+	model, err := s.resolveAIModel(settings, baseURL, strings.TrimSpace(settings.Model))
 	if err != nil {
 		return "", err
 	}
 
-	raw, responseModel, err := s.chatCompletion(baseURL, model, systemPrompt, userPrompt, schema)
+	raw, responseModel, err := s.chatCompletion(settings, baseURL, model, systemPrompt, userPrompt, schema)
 	if err != nil && schema != nil {
 		fallbackSystemPrompt := systemPrompt + "\nReturn valid JSON only. Do not wrap it in markdown fences."
-		raw, responseModel, err = s.chatCompletion(baseURL, model, fallbackSystemPrompt, userPrompt, nil)
+		raw, responseModel, err = s.chatCompletion(settings, baseURL, model, fallbackSystemPrompt, userPrompt, nil)
 	}
 	if err != nil {
 		return "", err
@@ -620,12 +623,12 @@ func (s *Server) runJSONTask(settings aiSettingsRequest, systemPrompt string, us
 	return model, nil
 }
 
-func (s *Server) resolveAIModel(baseURL string, configuredModel string) (string, error) {
+func (s *Server) resolveAIModel(settings aiSettingsRequest, baseURL string, configuredModel string) (string, error) {
 	if configuredModel != "" {
 		return configuredModel, nil
 	}
 
-	models, err := s.listAIModels(baseURL)
+	models, err := s.listAIModels(settings, baseURL)
 	if err != nil {
 		return "", err
 	}
@@ -636,12 +639,15 @@ func (s *Server) resolveAIModel(baseURL string, configuredModel string) (string,
 	return models[0], nil
 }
 
-func (s *Server) listAIModels(baseURL string) ([]string, error) {
+func (s *Server) listAIModels(settings aiSettingsRequest, baseURL string) ([]string, error) {
 	request, err := http.NewRequest(http.MethodGet, baseURL+"/models", nil)
 	if err != nil {
 		return nil, err
 	}
 	request.Header.Set("Accept", "application/json")
+	if token := authorizationToken(settings); token != "" {
+		request.Header.Set("Authorization", "Bearer "+token)
+	}
 
 	response, err := s.httpClient.Do(request)
 	if err != nil {
@@ -672,12 +678,12 @@ func (s *Server) listAIModels(baseURL string) ([]string, error) {
 	return models, nil
 }
 
-func (s *Server) chatCompletion(baseURL string, model string, systemPrompt string, userPrompt string, schema any) (string, string, error) {
+func (s *Server) chatCompletion(settings aiSettingsRequest, baseURL string, model string, systemPrompt string, userPrompt string, schema any) (string, string, error) {
 	requestBody := openAIChatRequest{
 		Model:       model,
 		Messages:    []openAIChatMessage{{Role: "system", Content: systemPrompt}, {Role: "user", Content: userPrompt}},
 		Temperature: 0.2,
-		MaxTokens:   1800,
+		MaxTokens:   normalizeAIMaxTokens(settings.MaxTokens),
 		Stream:      false,
 	}
 	if schema != nil {
@@ -695,7 +701,9 @@ func (s *Server) chatCompletion(baseURL string, model string, systemPrompt strin
 	}
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Accept", "application/json")
-	request.Header.Set("Authorization", "Bearer lm-studio")
+	if token := authorizationToken(settings); token != "" {
+		request.Header.Set("Authorization", "Bearer "+token)
+	}
 
 	response, err := s.httpClient.Do(request)
 	if err != nil {
@@ -720,6 +728,30 @@ func (s *Server) chatCompletion(baseURL string, model string, systemPrompt strin
 	}
 
 	return payloadResponse.Choices[0].Message.Content, payloadResponse.Model, nil
+}
+
+func authorizationToken(settings aiSettingsRequest) string {
+	token := strings.TrimSpace(settings.APIKey)
+	if token != "" {
+		return token
+	}
+	if strings.TrimSpace(settings.Provider) == "lmstudio" {
+		return "lm-studio"
+	}
+	return ""
+}
+
+func normalizeAIMaxTokens(value int) int {
+	if value <= 0 {
+		return defaultAIMaxTokens
+	}
+	if value < 256 {
+		return 256
+	}
+	if value > 32768 {
+		return 32768
+	}
+	return value
 }
 
 func marshalMindMapForPrompt(doc mindmap.Document) (string, error) {
