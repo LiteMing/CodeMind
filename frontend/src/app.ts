@@ -6,8 +6,8 @@ import {
   createDefaultDocument,
   createId,
   createNode,
-  deleteNodeTree,
   deleteRelation,
+  descendantIds,
   findNode,
   findRoot,
   hiddenDescendantCount,
@@ -37,8 +37,10 @@ type AppView = 'home' | 'map'
 
 interface DragState {
   nodeId: string
+  nodeIds: string[]
   offsetX: number
   offsetY: number
+  initialPositions: Record<string, Position>
   historyCaptured: boolean
 }
 
@@ -62,7 +64,24 @@ interface ResizeState {
 interface HistorySnapshot {
   document: MindMapDocument
   selectedNodeId: string
+  selectedNodeIds: string[]
   connectSourceNodeId: string | null
+}
+
+interface ContextMenuState {
+  clientX: number
+  clientY: number
+  nodeId: string | null
+}
+
+interface MarqueeState {
+  pointerId: number
+  button: number
+  startClientX: number
+  startClientY: number
+  currentClientX: number
+  currentClientY: number
+  active: boolean
 }
 
 interface StatusDescriptor {
@@ -76,10 +95,13 @@ interface AppState {
   document: MindMapDocument
   currentMapId: string | null
   selectedNodeId: string
+  selectedNodeIds: string[]
   editingNodeId: string | null
   connectSourceNodeId: string | null
   drag: DragState | null
   resize: ResizeState | null
+  contextMenu: ContextMenuState | null
+  marquee: MarqueeState | null
   status: StatusDescriptor
   preferences: AppPreferences
   settingsOpen: boolean
@@ -112,6 +134,7 @@ interface ShellRefs {
   settingsLayer: HTMLElement
   onboardingLayer: HTMLElement
   dock: HTMLElement
+  overlayLayer: HTMLElement
 }
 
 const WORKSPACE_MIN_WIDTH = 2400
@@ -140,8 +163,9 @@ class MindMapApp {
   private historyPast: HistorySnapshot[] = []
   private historyFuture: HistorySnapshot[] = []
   private liveCanvasHandle: number | null = null
-  private liveNodeId: string | null = null
-  private liveNodeDimensionsDirty = false
+  private liveNodeIds = new Set<string>()
+  private liveNodeDimensionIds = new Set<string>()
+  private suppressContextMenuOnce = false
   private state: AppState
 
   constructor(rootEl: HTMLElement) {
@@ -152,10 +176,13 @@ class MindMapApp {
       maps: [],
       currentMapId: null,
       selectedNodeId: 'root',
+      selectedNodeIds: ['root'],
       editingNodeId: null,
       connectSourceNodeId: null,
       drag: null,
       resize: null,
+      contextMenu: null,
+      marquee: null,
       status: { key: 'status.loading' },
       preferences: loadPreferences(),
       settingsOpen: false,
@@ -179,6 +206,7 @@ class MindMapApp {
 
   private bindEvents(): void {
     this.rootEl.addEventListener('click', this.handleClick)
+    this.rootEl.addEventListener('contextmenu', this.handleContextMenu)
     this.rootEl.addEventListener('dblclick', this.handleDoubleClick)
     this.rootEl.addEventListener('pointerdown', this.handlePointerDown)
     this.rootEl.addEventListener('keydown', this.handleEditorKeyDown)
@@ -197,6 +225,11 @@ class MindMapApp {
       return
     }
 
+    const closedContextMenu = Boolean(this.state.contextMenu) && !target.closest('[data-context-menu]')
+    if (closedContextMenu) {
+      this.state.contextMenu = null
+    }
+
     const settingsScrim = target.closest<HTMLElement>('[data-settings-scrim]')
     if (settingsScrim && target === settingsScrim) {
       this.closeSettings()
@@ -211,6 +244,7 @@ class MindMapApp {
 
     const command = target.closest<HTMLElement>('[data-command]')?.dataset.command
     if (command) {
+      this.state.contextMenu = null
       void this.runCommand(command)
       return
     }
@@ -227,8 +261,56 @@ class MindMapApp {
 
     const nodeButton = target.closest<HTMLElement>('[data-node-button]')
     if (nodeButton?.dataset.nodeButton) {
-      this.selectNode(nodeButton.dataset.nodeButton)
+      const nodeId = nodeButton.dataset.nodeButton
+      if (this.state.connectSourceNodeId && this.state.connectSourceNodeId !== nodeId) {
+        this.createRelation(this.state.connectSourceNodeId, nodeId)
+        return
+      }
+
+      if (event.shiftKey) {
+        this.selectNodeSubtree(nodeId)
+        return
+      }
+
+      if (event.ctrlKey || event.metaKey) {
+        this.toggleNodeSelection(nodeId)
+        return
+      }
+
+      this.selectNode(nodeId)
+      return
     }
+
+    if (closedContextMenu) {
+      this.renderOverlay()
+      this.renderHeader()
+    }
+  }
+
+  private readonly handleContextMenu = (event: MouseEvent): void => {
+    if (this.state.view !== 'map' || this.overlayBlocksCanvas()) {
+      return
+    }
+
+    event.preventDefault()
+    if (this.suppressContextMenuOnce) {
+      this.suppressContextMenuOnce = false
+      return
+    }
+
+    const target = event.target
+    const element = target instanceof HTMLElement ? target : null
+    const nodeId = element?.closest<HTMLElement>('[data-node-button]')?.dataset.nodeButton ?? null
+    if (nodeId && !this.state.selectedNodeIds.includes(nodeId)) {
+      this.setSelection([nodeId], nodeId)
+    }
+
+    this.state.contextMenu = {
+      clientX: event.clientX,
+      clientY: event.clientY,
+      nodeId,
+    }
+    this.render()
   }
 
   private readonly handleDoubleClick = (event: MouseEvent): void => {
@@ -247,17 +329,41 @@ class MindMapApp {
     }
 
     this.state.editingNodeId = nodeButton.dataset.nodeButton
-    this.state.selectedNodeId = nodeButton.dataset.nodeButton
+    this.setSelection([nodeButton.dataset.nodeButton], nodeButton.dataset.nodeButton)
     this.render()
   }
 
   private readonly handlePointerDown = (event: PointerEvent): void => {
-    if (this.state.view !== 'map' || event.button !== 0 || this.overlayBlocksCanvas()) {
+    if (this.state.view !== 'map' || this.overlayBlocksCanvas()) {
       return
     }
 
     const target = event.target
     if (!(target instanceof HTMLElement)) {
+      return
+    }
+
+    if (event.button === 2) {
+      const withinScroll = target.closest<HTMLElement>('[data-workspace-scroll]')
+      if (!withinScroll) {
+        return
+      }
+
+      this.state.contextMenu = null
+      this.state.marquee = {
+        pointerId: event.pointerId,
+        button: event.button,
+        startClientX: event.clientX,
+        startClientY: event.clientY,
+        currentClientX: event.clientX,
+        currentClientY: event.clientY,
+        active: false,
+      }
+      this.renderOverlay()
+      return
+    }
+
+    if (event.button !== 0) {
       return
     }
 
@@ -281,6 +387,10 @@ class MindMapApp {
       return
     }
 
+    if (event.shiftKey || event.ctrlKey || event.metaKey) {
+      return
+    }
+
     const nodeButton = target.closest<HTMLElement>('[data-node-button]')
     const nodeId = nodeButton?.dataset.nodeButton
     if (!nodeId) {
@@ -288,8 +398,16 @@ class MindMapApp {
       return
     }
 
+    if (!this.state.selectedNodeIds.includes(nodeId)) {
+      this.setSelection([nodeId], nodeId)
+    }
+
     const node = this.findNode(nodeId)
-    if (!node || node.kind === 'root' || this.state.editingNodeId === nodeId || this.state.connectSourceNodeId !== null) {
+    const dragNodeIds = (this.state.selectedNodeIds.includes(nodeId) ? this.state.selectedNodeIds : [nodeId]).filter((candidateId) => {
+      return this.findNode(candidateId)?.kind !== 'root'
+    })
+
+    if (!node || dragNodeIds.length === 0 || this.state.editingNodeId === nodeId || this.state.connectSourceNodeId !== null) {
       this.tryStartCanvasPan(event, target)
       return
     }
@@ -302,14 +420,43 @@ class MindMapApp {
     const pointerPosition = this.clientToCanvasPosition(event.clientX, event.clientY)
     this.state.drag = {
       nodeId,
+      nodeIds: dragNodeIds,
       offsetX: pointerPosition.x - node.position.x,
       offsetY: pointerPosition.y - node.position.y,
+      initialPositions: Object.fromEntries(
+        dragNodeIds
+          .map((candidateId) => {
+            const candidateNode = this.findNode(candidateId)
+            if (!candidateNode) {
+              return null
+            }
+            return [candidateId, { ...candidateNode.position }] as const
+          })
+          .filter((entry): entry is readonly [string, Position] => entry !== null),
+      ),
       historyCaptured: false,
     }
   }
 
   private readonly handlePointerMove = (event: PointerEvent): void => {
     if (this.state.view !== 'map') {
+      return
+    }
+
+    if (this.state.marquee && event.pointerId === this.state.marquee.pointerId) {
+      this.state.marquee.currentClientX = event.clientX
+      this.state.marquee.currentClientY = event.clientY
+      if (!this.state.marquee.active) {
+        const deltaX = event.clientX - this.state.marquee.startClientX
+        const deltaY = event.clientY - this.state.marquee.startClientY
+        if (Math.hypot(deltaX, deltaY) > 8) {
+          this.state.marquee.active = true
+        }
+      }
+      this.renderOverlay()
+      if (this.state.marquee.active) {
+        event.preventDefault()
+      }
       return
     }
 
@@ -359,14 +506,42 @@ class MindMapApp {
       this.renderHeader()
     }
 
-    this.updateNode(this.state.drag.nodeId, (node) => {
-      node.position = nextPosition
-    })
-    this.scheduleLiveNodeUpdate(this.state.drag.nodeId)
+    const anchorStart = this.state.drag.initialPositions[this.state.drag.nodeId]
+    if (!anchorStart) {
+      return
+    }
+
+    const deltaX = nextPosition.x - anchorStart.x
+    const deltaY = nextPosition.y - anchorStart.y
+    for (const candidateId of this.state.drag.nodeIds) {
+      const candidateStart = this.state.drag.initialPositions[candidateId]
+      if (!candidateStart) {
+        continue
+      }
+
+      this.updateNode(candidateId, (node) => {
+        node.position = {
+          x: clampMin(candidateStart.x + deltaX, 120),
+          y: clampMin(candidateStart.y + deltaY, 96),
+        }
+      })
+      this.scheduleLiveNodeUpdate(candidateId)
+    }
   }
 
-  private readonly handlePointerUp = (): void => {
+  private readonly handlePointerUp = (event: PointerEvent): void => {
     if (this.state.view !== 'map') {
+      return
+    }
+
+    if (this.state.marquee && event.pointerId === this.state.marquee.pointerId) {
+      const marquee = this.state.marquee
+      this.state.marquee = null
+      if (marquee.active) {
+        this.applyMarqueeSelection(marquee)
+        this.suppressContextMenuOnce = true
+      }
+      this.renderOverlay()
       return
     }
 
@@ -606,6 +781,7 @@ class MindMapApp {
     this.renderWorkspace()
     this.renderInspector()
     this.renderDock()
+    this.renderOverlay()
     this.renderSettings()
     this.renderOnboarding()
     this.initializeViewportIfNeeded()
@@ -709,6 +885,7 @@ class MindMapApp {
 
           <aside class="inspector" data-inspector></aside>
           <section class="floating-bar floating-bar-bottom" data-dock></section>
+          <div class="overlay-layer" data-overlay-layer></div>
           <div data-settings-layer></div>
           <div data-onboarding-layer></div>
         </div>
@@ -741,6 +918,7 @@ class MindMapApp {
       settingsLayer: requiredElement(this.rootEl, '[data-settings-layer]'),
       onboardingLayer: requiredElement(this.rootEl, '[data-onboarding-layer]'),
       dock: requiredElement(this.rootEl, '[data-dock]'),
+      overlayLayer: requiredElement(this.rootEl, '[data-overlay-layer]'),
     }
   }
 
@@ -786,6 +964,7 @@ class MindMapApp {
     this.refs.canvas.style.height = `${bounds.height}px`
     this.refs.edgeLayer.setAttribute('viewBox', `0 0 ${bounds.width} ${bounds.height}`)
     this.updateCanvasViewportView()
+    this.refs.scroll.classList.toggle('is-marqueeing', Boolean(this.state.marquee))
     this.refs.edgeLayer.innerHTML = this.renderEdges()
     this.refs.nodeLayer.innerHTML = this.renderNodes()
   }
@@ -799,6 +978,9 @@ class MindMapApp {
     const relatedRelations = connectedRelations(this.state.document, selectedNode.id)
     const directChildren = childrenOf(this.state.document, selectedNode.id)
     const hiddenChildren = hiddenDescendantCount(this.state.document, selectedNode.id)
+    const selectedCount = this.selectedNodeIds().length
+    const singleSelection = selectedCount === 1
+    const canDeleteSelection = this.selectedNodeIds().some((nodeId) => this.findNode(nodeId)?.kind !== 'root')
     const relationModeText = this.state.connectSourceNodeId
       ? this.t('inspector.relationConnecting', {
           title: this.findNode(this.state.connectSourceNodeId)?.title ?? this.t('common.unknown'),
@@ -810,8 +992,9 @@ class MindMapApp {
       ? `
         <section class="inspector-card inspector-card-compact">
           <p class="section-label">${this.t('inspector.summary')}</p>
-          <h2>${escapeHtml(shorten(selectedNode.title, 24))}</h2>
+          <h2>${escapeHtml(shorten(singleSelection ? selectedNode.title : this.t('context.selectionCount', { value: selectedCount }), 24))}</h2>
           <div class="metric-row">
+            <span class="metric-chip">${this.t('dock.selected', { value: selectedCount })}</span>
             <span class="metric-chip">${this.t('inspector.children', { value: directChildren.length })}</span>
             <span class="metric-chip">${this.t('inspector.relationsCount', { value: relatedRelations.length })}</span>
           </div>
@@ -823,11 +1006,12 @@ class MindMapApp {
           <div class="inspector-header">
             <div>
               <p class="section-label">${this.t('inspector.selected')}</p>
-              <h2>${escapeHtml(selectedNode.title)}</h2>
+              <h2>${escapeHtml(singleSelection ? selectedNode.title : this.t('context.selectionCount', { value: selectedCount }))}</h2>
             </div>
             <button type="button" class="ghost-button" data-command="toggle-inspector">${this.t('inspector.close')}</button>
           </div>
           <div class="metric-row">
+            <span class="metric-chip">${this.t('dock.selected', { value: selectedCount })}</span>
             <span class="metric-chip">${this.t('inspector.type', { value: kindLabel(this.state.preferences.locale, selectedNode.kind) })}</span>
             <span class="metric-chip">${this.t('inspector.children', { value: directChildren.length })}</span>
             <span class="metric-chip">${this.t('inspector.relationsCount', { value: relatedRelations.length })}</span>
@@ -841,14 +1025,14 @@ class MindMapApp {
             ${PRIORITY_VALUES.map((priority) => this.renderPriorityButton(priority, selectedNode.priority ?? '')).join('')}
           </div>
           <div class="action-grid">
-            <button type="button" class="chip-button" data-command="new-child">${this.t('action.newChild')}</button>
-            <button type="button" class="chip-button" data-command="new-sibling">${this.t('action.newSibling')}</button>
-            <button type="button" class="chip-button" data-command="rename-selected">${this.t('action.rename')}</button>
-            <button type="button" class="chip-button" data-command="toggle-collapse" ${directChildren.length === 0 ? 'disabled' : ''}>
+            <button type="button" class="chip-button" data-command="new-child" ${singleSelection ? '' : 'disabled'}>${this.t('action.newChild')}</button>
+            <button type="button" class="chip-button" data-command="new-sibling" ${singleSelection ? '' : 'disabled'}>${this.t('action.newSibling')}</button>
+            <button type="button" class="chip-button" data-command="rename-selected" ${singleSelection ? '' : 'disabled'}>${this.t('action.rename')}</button>
+            <button type="button" class="chip-button" data-command="toggle-collapse" ${singleSelection && directChildren.length > 0 ? '' : 'disabled'}>
               ${selectedNode.collapsed ? this.t('action.expand') : this.t('action.collapse')}
             </button>
-            <button type="button" class="chip-button ${this.state.connectSourceNodeId ? 'is-active' : ''}" data-command="connect-selected">${this.t('action.linkRelation')}</button>
-            <button type="button" class="chip-button danger" data-command="delete-selected" ${selectedNode.id === 'root' ? 'disabled' : ''}>${this.t('action.delete')}</button>
+            <button type="button" class="chip-button ${this.state.connectSourceNodeId ? 'is-active' : ''}" data-command="connect-selected" ${singleSelection ? '' : 'disabled'}>${this.t('action.linkRelation')}</button>
+            <button type="button" class="chip-button danger" data-command="delete-selected" ${canDeleteSelection ? '' : 'disabled'}>${this.t('action.delete')}</button>
           </div>
         </section>
 
@@ -866,10 +1050,87 @@ class MindMapApp {
     }
 
     this.refs.dock.innerHTML = `
+      <span class="dock-chip">${this.t('dock.selected', { value: this.selectedNodeIds().length })}</span>
       <span class="dock-chip">${this.t('dock.nodes', { value: this.state.document.nodes.length })}</span>
       <span class="dock-chip">${this.t('dock.relations', { value: this.state.document.relations.length })}</span>
       <span class="dock-chip">${Math.round(this.viewport.scale * 100)}%</span>
       <span class="dock-chip">${this.t('dock.theme', { value: themeLabel(this.state.preferences.locale, this.state.document.theme) })}</span>
+    `
+  }
+
+  private renderOverlay(): void {
+    if (!this.refs) {
+      return
+    }
+
+    if (this.overlayBlocksCanvas()) {
+      this.refs.overlayLayer.innerHTML = ''
+      this.refs.overlayLayer.classList.remove('is-visible')
+      return
+    }
+
+    const marqueeMarkup = this.state.marquee?.active ? this.renderMarqueeBox(this.state.marquee) : ''
+    const contextMenuMarkup = this.state.contextMenu ? this.renderContextMenu() : ''
+
+    this.refs.overlayLayer.classList.toggle('is-visible', Boolean(marqueeMarkup || contextMenuMarkup))
+    this.refs.overlayLayer.innerHTML = `${marqueeMarkup}${contextMenuMarkup}`
+  }
+
+  private renderMarqueeBox(marquee: MarqueeState): string {
+    const left = Math.min(marquee.startClientX, marquee.currentClientX)
+    const top = Math.min(marquee.startClientY, marquee.currentClientY)
+    const width = Math.abs(marquee.currentClientX - marquee.startClientX)
+    const height = Math.abs(marquee.currentClientY - marquee.startClientY)
+    const stageRect = this.refs?.overlayLayer.getBoundingClientRect()
+    if (!stageRect) {
+      return ''
+    }
+
+    return `
+      <div
+        class="marquee-box"
+        style="left: ${Math.round(left - stageRect.left)}px; top: ${Math.round(top - stageRect.top)}px; width: ${Math.round(width)}px; height: ${Math.round(height)}px;"
+      ></div>
+    `
+  }
+
+  private renderContextMenu(): string {
+    if (!this.refs || !this.state.contextMenu) {
+      return ''
+    }
+
+    const stageRect = this.refs.overlayLayer.getBoundingClientRect()
+    const estimatedWidth = 236
+    const estimatedHeight = 320
+    const left = clamp(this.state.contextMenu.clientX - stageRect.left, 12, Math.max(12, stageRect.width - estimatedWidth - 12))
+    const top = clamp(this.state.contextMenu.clientY - stageRect.top, 12, Math.max(12, stageRect.height - estimatedHeight - 12))
+    const selectedIds = this.selectedNodeIds()
+    const selectedCount = selectedIds.length
+    const primaryNode = this.selectedNode()
+    const primaryChildren = primaryNode ? childrenOf(this.state.document, primaryNode.id).length : 0
+    const canUseSingleNodeActions = selectedCount === 1 && Boolean(primaryNode)
+    const canDelete = selectedIds.some((nodeId) => this.findNode(nodeId)?.kind !== 'root')
+    const heading = selectedCount > 1
+      ? this.t('context.selectionCount', { value: selectedCount })
+      : escapeHtml(primaryNode?.title ?? this.t('context.canvas'))
+
+    return `
+      <section class="context-menu" data-context-menu style="left: ${Math.round(left)}px; top: ${Math.round(top)}px;">
+        <p class="section-label">${this.t(this.state.contextMenu.nodeId ? 'context.node' : 'context.canvas')}</p>
+        <h3 class="context-menu-title">${heading}</h3>
+        <button type="button" class="chip-button context-menu-button" data-command="new-child" ${canUseSingleNodeActions ? '' : 'disabled'}>${this.t('action.newChild')}</button>
+        <button type="button" class="chip-button context-menu-button" data-command="new-sibling" ${canUseSingleNodeActions ? '' : 'disabled'}>${this.t('action.newSibling')}</button>
+        <button type="button" class="chip-button context-menu-button" data-command="rename-selected" ${canUseSingleNodeActions ? '' : 'disabled'}>${this.t('action.rename')}</button>
+        <button type="button" class="chip-button context-menu-button" data-command="toggle-collapse" ${canUseSingleNodeActions && primaryChildren > 0 ? '' : 'disabled'}>
+          ${primaryNode?.collapsed ? this.t('action.expand') : this.t('action.collapse')}
+        </button>
+        <button type="button" class="chip-button context-menu-button" data-command="connect-selected" ${canUseSingleNodeActions ? '' : 'disabled'}>${this.t('action.linkRelation')}</button>
+        <div class="context-menu-divider"></div>
+        <button type="button" class="chip-button context-menu-button" data-command="set-priority:P0">${this.t('context.priorityP0')}</button>
+        <button type="button" class="chip-button context-menu-button" data-command="set-priority:P1">${this.t('context.priorityP1')}</button>
+        <button type="button" class="chip-button context-menu-button" data-command="set-priority:">${this.t('context.clearPriority')}</button>
+        <button type="button" class="chip-button danger context-menu-button" data-command="delete-selected" ${canDelete ? '' : 'disabled'}>${this.t('action.delete')}</button>
+      </section>
     `
   }
 
@@ -1022,6 +1283,7 @@ class MindMapApp {
 
   private renderNodes(): string {
     const visibleIds = visibleNodeIds(this.state.document)
+    const selectedIds = new Set(this.selectedNodeIds())
 
     return this.state.document.nodes
       .filter((node) => visibleIds.has(node.id))
@@ -1030,6 +1292,7 @@ class MindMapApp {
           'node-card',
           `node-${node.kind}`,
           node.id === this.state.selectedNodeId ? 'is-selected' : '',
+          selectedIds.has(node.id) && node.id !== this.state.selectedNodeId ? 'is-selected-secondary' : '',
           node.id === this.state.connectSourceNodeId ? 'is-connect-source' : '',
           node.collapsed ? 'is-collapsed' : '',
         ]
@@ -1133,6 +1396,70 @@ class MindMapApp {
     return this.findNode(this.state.selectedNodeId) ?? findRoot(this.state.document)
   }
 
+  private selectedNodeIds(): string[] {
+    const seen = new Set<string>()
+    const orderedIds: string[] = []
+    for (const nodeId of this.state.selectedNodeIds) {
+      if (seen.has(nodeId) || !this.findNode(nodeId)) {
+        continue
+      }
+      seen.add(nodeId)
+      orderedIds.push(nodeId)
+    }
+
+    if (orderedIds.length === 0) {
+      const rootId = findRoot(this.state.document).id
+      return [rootId]
+    }
+
+    return orderedIds
+  }
+
+  private setSelection(nodeIds: string[], primaryNodeId = nodeIds[nodeIds.length - 1] ?? 'root'): void {
+    const normalizedIds = nodeIds.filter((nodeId, index) => {
+      return nodeIds.indexOf(nodeId) === index && Boolean(this.findNode(nodeId))
+    })
+    const fallbackId = findRoot(this.state.document).id
+    const nextIds = normalizedIds.length > 0 ? normalizedIds : [fallbackId]
+    const nextPrimary = nextIds.includes(primaryNodeId) ? primaryNodeId : nextIds[nextIds.length - 1]
+
+    this.state.selectedNodeIds = nextIds
+    this.state.selectedNodeId = nextPrimary
+    this.state.editingNodeId = null
+  }
+
+  private toggleNodeSelection(nodeId: string): void {
+    if (this.state.connectSourceNodeId && this.state.connectSourceNodeId !== nodeId) {
+      this.createRelation(this.state.connectSourceNodeId, nodeId)
+      return
+    }
+
+    const currentIds = this.selectedNodeIds()
+    if (currentIds.includes(nodeId)) {
+      if (currentIds.length === 1) {
+        this.setSelection([nodeId], nodeId)
+      } else {
+        const nextIds = currentIds.filter((candidateId) => candidateId !== nodeId)
+        this.setSelection(nextIds, nextIds[nextIds.length - 1])
+      }
+    } else {
+      this.setSelection([...currentIds, nodeId], nodeId)
+    }
+
+    this.render()
+  }
+
+  private selectNodeSubtree(nodeId: string): void {
+    if (this.state.connectSourceNodeId && this.state.connectSourceNodeId !== nodeId) {
+      this.createRelation(this.state.connectSourceNodeId, nodeId)
+      return
+    }
+
+    const subtreeIds = [nodeId, ...descendantIds(this.state.document, nodeId)]
+    this.setSelection(subtreeIds, nodeId)
+    this.render()
+  }
+
   private selectNode(nodeId: string): void {
     if (this.state.connectSourceNodeId && this.state.connectSourceNodeId !== nodeId) {
       this.createRelation(this.state.connectSourceNodeId, nodeId)
@@ -1144,8 +1471,7 @@ class MindMapApp {
       this.setStatus('status.relationModeCancelled')
     }
 
-    this.state.selectedNodeId = nodeId
-    this.state.editingNodeId = null
+    this.setSelection([nodeId], nodeId)
     this.render()
   }
 
@@ -1166,7 +1492,7 @@ class MindMapApp {
     })
 
     this.state.document.nodes.push(newNode)
-    this.state.selectedNodeId = newNode.id
+    this.setSelection([newNode.id], newNode.id)
     this.state.editingNodeId = newNode.id
     touchDocument(this.state.document)
     this.render()
@@ -1203,7 +1529,7 @@ class MindMapApp {
     }
 
     this.state.document.nodes.push(newNode)
-    this.state.selectedNodeId = newNode.id
+    this.setSelection([newNode.id], newNode.id)
     this.state.editingNodeId = newNode.id
     touchDocument(this.state.document)
     this.render()
@@ -1244,7 +1570,7 @@ class MindMapApp {
     this.captureHistory()
     this.state.document.relations.push(relation)
     this.state.connectSourceNodeId = null
-    this.state.selectedNodeId = targetId
+    this.setSelection([targetId], targetId)
     touchDocument(this.state.document)
     this.setStatus('status.relationCreated')
     this.render()
@@ -1252,47 +1578,70 @@ class MindMapApp {
   }
 
   private deleteSelectedNode(): void {
-    const selectedNode = this.selectedNode()
-    if (!selectedNode || selectedNode.id === 'root') {
+    const selectedIds = this.selectedNodeIds()
+    const removableIds = selectedIds.filter((nodeId) => this.findNode(nodeId)?.kind !== 'root')
+    if (removableIds.length === 0) {
       this.setStatus('status.rootCannotDelete')
       this.render()
       return
     }
 
-    const fallbackNodeId = selectedNode.parentId || findRoot(this.state.document).id
+    const primaryNode = this.selectedNode()
+    const removeIds = new Set<string>()
+    for (const nodeId of removableIds) {
+      removeIds.add(nodeId)
+      for (const descendantId of descendantIds(this.state.document, nodeId)) {
+        removeIds.add(descendantId)
+      }
+    }
+
+    const fallbackNodeId = primaryNode?.parentId && !removeIds.has(primaryNode.parentId) ? primaryNode.parentId : findRoot(this.state.document).id
+    const relationCountBefore = this.state.document.relations.length
+    const nodeCountBefore = this.state.document.nodes.length
+
     this.captureHistory()
-    const result = deleteNodeTree(this.state.document, selectedNode.id)
-    if (result.removedNodes === 0) {
+    this.state.document.nodes = this.state.document.nodes.filter((node) => !removeIds.has(node.id))
+    this.state.document.relations = this.state.document.relations.filter((relation) => !removeIds.has(relation.sourceId) && !removeIds.has(relation.targetId))
+
+    const removedNodes = nodeCountBefore - this.state.document.nodes.length
+    const removedRelations = relationCountBefore - this.state.document.relations.length
+    if (removedNodes === 0) {
       return
     }
 
-    this.state.selectedNodeId = fallbackNodeId
+    this.setSelection([fallbackNodeId], fallbackNodeId)
     this.state.editingNodeId = null
     this.state.connectSourceNodeId = null
     touchDocument(this.state.document)
     this.setStatus('status.deletedSummary', {
-      nodes: result.removedNodes,
-      relations: result.removedRelations,
+      nodes: removedNodes,
+      relations: removedRelations,
     })
     this.render()
     this.scheduleAutosave('status.deletionSaveScheduled')
   }
 
   private setPriority(priority: Priority): void {
-    const node = this.selectedNode()
-    if (!node) {
+    const targetIds = this.selectedNodeIds().filter((nodeId) => Boolean(this.findNode(nodeId)))
+    if (targetIds.length === 0) {
       return
     }
 
     const nextPriority = priority || undefined
-    if ((node.priority ?? undefined) === nextPriority) {
+    const targetNodes = targetIds
+      .map((nodeId) => this.findNode(nodeId))
+      .filter((node): node is MindNode => Boolean(node))
+
+    if (targetNodes.every((node) => (node.priority ?? undefined) === nextPriority)) {
       return
     }
 
     this.captureHistory()
-    this.updateNode(node.id, (draft) => {
-      draft.priority = nextPriority
-    })
+    for (const node of targetNodes) {
+      this.updateNode(node.id, (draft) => {
+        draft.priority = nextPriority
+      })
+    }
     touchDocument(this.state.document)
     this.setStatus(priority ? 'status.priorityApplied' : 'status.priorityCleared', priority ? { priority } : undefined)
     this.render()
@@ -1343,7 +1692,7 @@ class MindMapApp {
       node.title = title
     })
     this.state.editingNodeId = null
-    this.state.selectedNodeId = nodeId
+    this.setSelection([nodeId], nodeId)
     touchDocument(this.state.document)
     this.setStatus('status.nodeTitleUpdated')
     this.render()
@@ -1474,6 +1823,9 @@ class MindMapApp {
         case 'rename-selected':
           this.startEditingSelected()
           return
+        case 'set-priority':
+          this.setPriority((argument.toUpperCase() as Priority) || '')
+          return
         case 'toggle-collapse':
           this.toggleSelectedCollapse()
           return
@@ -1588,7 +1940,7 @@ class MindMapApp {
       }
       this.captureHistory()
       this.state.document = importedDocument
-      this.state.selectedNodeId = findRoot(importedDocument).id
+      this.setSelection([findRoot(importedDocument).id], findRoot(importedDocument).id)
       this.state.editingNodeId = null
       this.state.connectSourceNodeId = null
       this.viewport.scale = 1
@@ -1618,7 +1970,7 @@ class MindMapApp {
     this.state.document = doc
     this.state.currentMapId = doc.id
     this.state.view = 'map'
-    this.state.selectedNodeId = findRoot(doc).id
+    this.setSelection([findRoot(doc).id], findRoot(doc).id)
     this.state.editingNodeId = null
     this.state.connectSourceNodeId = null
     this.state.resize = null
@@ -1635,7 +1987,7 @@ class MindMapApp {
     this.state.document = doc
     this.state.currentMapId = mapId
     this.state.view = 'map'
-    this.state.selectedNodeId = findRoot(doc).id
+    this.setSelection([findRoot(doc).id], findRoot(doc).id)
     this.state.editingNodeId = null
     this.state.connectSourceNodeId = null
     this.state.resize = null
@@ -1850,6 +2202,7 @@ class MindMapApp {
     return {
       document: cloneDocument(this.state.document),
       selectedNodeId: this.state.selectedNodeId,
+      selectedNodeIds: [...this.selectedNodeIds()],
       connectSourceNodeId: this.state.connectSourceNodeId,
     }
   }
@@ -1873,13 +2226,15 @@ class MindMapApp {
 
   private applyHistorySnapshot(snapshot: HistorySnapshot): void {
     this.state.document = cloneDocument(snapshot.document)
-    this.state.selectedNodeId = findNode(this.state.document, snapshot.selectedNodeId)?.id ?? findRoot(this.state.document).id
+    this.setSelection(snapshot.selectedNodeIds, snapshot.selectedNodeId)
     this.state.connectSourceNodeId = snapshot.connectSourceNodeId && findNode(this.state.document, snapshot.connectSourceNodeId)
       ? snapshot.connectSourceNodeId
       : null
     this.state.editingNodeId = null
     this.state.drag = null
     this.state.resize = null
+    this.state.contextMenu = null
+    this.state.marquee = null
     this.applyTheme()
   }
 
@@ -1918,8 +2273,10 @@ class MindMapApp {
   }
 
   private scheduleLiveNodeUpdate(nodeId: string, includeDimensions = false): void {
-    this.liveNodeId = nodeId
-    this.liveNodeDimensionsDirty = this.liveNodeDimensionsDirty || includeDimensions
+    this.liveNodeIds.add(nodeId)
+    if (includeDimensions) {
+      this.liveNodeDimensionIds.add(nodeId)
+    }
 
     if (this.liveCanvasHandle !== null) {
       return
@@ -1927,12 +2284,12 @@ class MindMapApp {
 
     this.liveCanvasHandle = window.requestAnimationFrame(() => {
       this.liveCanvasHandle = null
-      const nextNodeId = this.liveNodeId
-      const nextDimensionsDirty = this.liveNodeDimensionsDirty
-      this.liveNodeId = null
-      this.liveNodeDimensionsDirty = false
-      if (nextNodeId) {
-        this.applyLiveNodeUpdate(nextNodeId, nextDimensionsDirty)
+      const nextNodeIds = [...this.liveNodeIds]
+      const nextDimensionIds = new Set(this.liveNodeDimensionIds)
+      this.liveNodeIds.clear()
+      this.liveNodeDimensionIds.clear()
+      if (nextNodeIds.length > 0) {
+        this.applyLiveNodeUpdate(nextNodeIds, nextDimensionIds)
       }
     })
   }
@@ -1944,17 +2301,17 @@ class MindMapApp {
 
     window.cancelAnimationFrame(this.liveCanvasHandle)
     this.liveCanvasHandle = null
-    const nextNodeId = this.liveNodeId
-    const nextDimensionsDirty = this.liveNodeDimensionsDirty
-    this.liveNodeId = null
-    this.liveNodeDimensionsDirty = false
+    const nextNodeIds = [...this.liveNodeIds]
+    const nextDimensionIds = new Set(this.liveNodeDimensionIds)
+    this.liveNodeIds.clear()
+    this.liveNodeDimensionIds.clear()
 
-    if (nextNodeId) {
-      this.applyLiveNodeUpdate(nextNodeId, nextDimensionsDirty)
+    if (nextNodeIds.length > 0) {
+      this.applyLiveNodeUpdate(nextNodeIds, nextDimensionIds)
     }
   }
 
-  private applyLiveNodeUpdate(nodeId: string, includeDimensions: boolean): void {
+  private applyLiveNodeUpdate(nodeIds: string[], includeDimensionIds: Set<string>): void {
     if (!this.refs) {
       return
     }
@@ -1964,21 +2321,45 @@ class MindMapApp {
     this.refs.canvas.style.height = `${bounds.height}px`
     this.refs.edgeLayer.setAttribute('viewBox', `0 0 ${bounds.width} ${bounds.height}`)
 
-    const node = this.findNode(nodeId)
-    const element = this.rootEl.querySelector<HTMLElement>(`[data-node-id="${nodeId}"]`)
-    if (node && element) {
-      element.style.left = `${node.position.x}px`
-      element.style.top = `${node.position.y}px`
-      if (includeDimensions) {
-        const sizingTarget = element.querySelector<HTMLElement>('.node-shell, .node-editor')
-        if (sizingTarget) {
-          sizingTarget.style.width = node.width ? `${Math.max(node.width, MIN_NODE_WIDTH)}px` : ''
-          sizingTarget.style.height = node.height ? `${Math.max(node.height, MIN_NODE_HEIGHT)}px` : ''
+    for (const nodeId of nodeIds) {
+      const node = this.findNode(nodeId)
+      const element = this.rootEl.querySelector<HTMLElement>(`[data-node-id="${nodeId}"]`)
+      if (node && element) {
+        element.style.left = `${node.position.x}px`
+        element.style.top = `${node.position.y}px`
+        if (includeDimensionIds.has(nodeId)) {
+          const sizingTarget = element.querySelector<HTMLElement>('.node-shell, .node-editor')
+          if (sizingTarget) {
+            sizingTarget.style.width = node.width ? `${Math.max(node.width, MIN_NODE_WIDTH)}px` : ''
+            sizingTarget.style.height = node.height ? `${Math.max(node.height, MIN_NODE_HEIGHT)}px` : ''
+          }
         }
       }
     }
 
     this.refs.edgeLayer.innerHTML = this.renderEdges()
+  }
+
+  private applyMarqueeSelection(marquee: MarqueeState): void {
+    const selectionRect = normalizeClientRect(marquee.startClientX, marquee.startClientY, marquee.currentClientX, marquee.currentClientY)
+    const matchedIds = this.state.document.nodes
+      .map((node) => {
+        const element = this.rootEl.querySelector<HTMLElement>(`[data-node-id="${node.id}"]`)
+        if (!element) {
+          return null
+        }
+
+        return rectanglesIntersect(selectionRect, element.getBoundingClientRect()) ? node.id : null
+      })
+      .filter((nodeId): nodeId is string => Boolean(nodeId))
+
+    if (matchedIds.length === 0) {
+      this.render()
+      return
+    }
+
+    this.setSelection(matchedIds, matchedIds[matchedIds.length - 1])
+    this.render()
   }
 
   private scheduleAutosave(statusKey: TranslationKey, values?: Record<string, string | number>): void {
@@ -2198,6 +2579,18 @@ function getErrorMessage(error: unknown): string {
 
 function cloneDocument(document: MindMapDocument): MindMapDocument {
   return JSON.parse(JSON.stringify(document)) as MindMapDocument
+}
+
+function normalizeClientRect(startX: number, startY: number, endX: number, endY: number): DOMRect {
+  const left = Math.min(startX, endX)
+  const top = Math.min(startY, endY)
+  const width = Math.abs(endX - startX)
+  const height = Math.abs(endY - startY)
+  return new DOMRect(left, top, width, height)
+}
+
+function rectanglesIntersect(left: Pick<DOMRect, 'left' | 'right' | 'top' | 'bottom'>, right: Pick<DOMRect, 'left' | 'right' | 'top' | 'bottom'>): boolean {
+  return left.left <= right.right && left.right >= right.left && left.top <= right.bottom && left.bottom >= right.top
 }
 
 function requiredElement<T extends Element>(root: ParentNode, selector: string): T {

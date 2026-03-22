@@ -258,6 +258,10 @@ kbd {
   cursor: grabbing;
 }
 
+.workspace-scroll.is-marqueeing {
+  cursor: crosshair;
+}
+
 .workspace-scroll.is-panning,
 .workspace-scroll.is-panning * {
   user-select: none;
@@ -425,6 +429,57 @@ kbd {
 
 .inspector.is-collapsed {
   width: min(220px, calc(100% - 32px));
+}
+
+.overlay-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 7;
+  pointer-events: none;
+}
+
+.overlay-layer.is-visible {
+  display: block;
+}
+
+.marquee-box {
+  position: absolute;
+  border: 1px solid var(--accent);
+  background: color-mix(in srgb, var(--accent-soft) 88%, transparent);
+  border-radius: 16px;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 32%, transparent);
+}
+
+.context-menu {
+  position: absolute;
+  width: 236px;
+  padding: 12px;
+  border-radius: 20px;
+  border: 1px solid var(--line);
+  background: color-mix(in srgb, var(--panel-strong) 96%, transparent);
+  box-shadow: var(--shadow-card);
+  backdrop-filter: blur(20px);
+  pointer-events: auto;
+}
+
+.context-menu-title {
+  margin: 0 0 12px;
+  color: var(--text);
+  font-size: 1rem;
+  line-height: 1.3;
+}
+
+.context-menu-button {
+  width: 100%;
+  display: flex;
+  justify-content: flex-start;
+  margin-top: 6px;
+}
+
+.context-menu-divider {
+  height: 1px;
+  margin: 10px 0 4px;
+  background: var(--line);
 }
 
 .inspector-card,
@@ -777,6 +832,12 @@ kbd {
 .node-card.is-selected .node-editor {
   border-color: var(--accent);
   box-shadow: 0 0 0 4px var(--accent-soft), var(--shadow-card);
+}
+
+.node-card.is-selected-secondary .node-shell,
+.node-card.is-selected-secondary .node-editor {
+  border-color: color-mix(in srgb, var(--accent) 72%, var(--node-border));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-soft) 82%, transparent), var(--shadow-card);
 }
 
 .node-card.is-connect-source .node-shell {
