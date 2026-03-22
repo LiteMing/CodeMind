@@ -1,0 +1,107 @@
+{
+  "id": "default",
+  "title": "New Mind Map",
+  "theme": "dark",
+  "nodes": [
+    {
+      "id": "root",
+      "kind": "root",
+      "title": "New Mind Map",
+      "position": {
+        "x": 820,
+        "y": 320
+      },
+      "createdAt": "2026-03-22T02:05:00.2874995Z",
+      "updatedAt": "2026-03-22T02:37:28.319Z"
+    },
+    {
+      "id": "node-1774145116283-313325",
+      "parentId": "root",
+      "kind": "topic",
+      "title": "New Child",
+      "position": {
+        "x": 1100,
+        "y": 320
+      },
+      "createdAt": "2026-03-22T02:05:16.283Z",
+      "updatedAt": "2026-03-22T02:05:57.585Z"
+    },
+    {
+      "id": "node-1774145121899-79205",
+      "parentId": "node-1774145116283-313325",
+      "kind": "topic",
+      "title": "New Child",
+      "position": {
+        "x": 1380,
+        "y": 224
+      },
+      "createdAt": "2026-03-22T02:05:21.899Z",
+      "updatedAt": "2026-03-22T02:34:40.111Z"
+    },
+    {
+      "id": "node-1774145123451-589868",
+      "parentId": "node-1774145116283-313325",
+      "kind": "topic",
+      "title": "New Sibling",
+      "position": {
+        "x": 1380,
+        "y": 320
+      },
+      "createdAt": "2026-03-22T02:05:23.451Z",
+      "updatedAt": "2026-03-22T02:05:57.585Z"
+    },
+    {
+      "id": "node-1774145124360-191353",
+      "parentId": "node-1774145116283-313325",
+      "kind": "topic",
+      "title": "New Sibling",
+      "position": {
+        "x": 1380,
+        "y": 416
+      },
+      "createdAt": "2026-03-22T02:05:24.36Z",
+      "updatedAt": "2026-03-22T02:05:57.585Z"
+    },
+    {
+      "id": "node-1774146880112-851770",
+      "parentId": "node-1774145121899-79205",
+      "kind": "topic",
+      "title": "New Child",
+      "position": {
+        "x": 1660,
+        "y": 224
+      },
+      "createdAt": "2026-03-22T02:34:40.112Z",
+      "updatedAt": "2026-03-22T02:34:40.737Z"
+    },
+    {
+      "id": "node-1774147033238-502048",
+      "parentId": "root",
+      "kind": "topic",
+      "title": "New Child",
+      "position": {
+        "x": 1100,
+        "y": 416
+      },
+      "createdAt": "2026-03-22T02:37:13.238Z",
+      "updatedAt": "2026-03-22T02:37:13.949Z"
+    },
+    {
+      "id": "node-1774147035360-531904",
+      "kind": "floating",
+      "title": "New Floating Node",
+      "position": {
+        "x": 1337.3333740234375,
+        "y": 690.6666259765625
+      },
+      "createdAt": "2026-03-22T02:37:15.36Z",
+      "updatedAt": "2026-03-22T02:37:26.177Z"
+    }
+  ],
+  "relations": [],
+  "meta": {
+    "version": 1,
+    "lastEditedAt": "2026-03-22T02:37:29.0431796Z",
+    "lastOpenedAt": "2026-03-22T02:05:00.2874995Z"
+  }
+}
