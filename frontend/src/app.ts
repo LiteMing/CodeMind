@@ -1504,6 +1504,7 @@ class MindMapApp {
     }
 
     const examplePrompt = promptTemplateCopy(this.state.ai.template, this.state.preferences.locale)
+    const aiStatusNotice = this.renderAIStatusNotice()
     this.refs.aiLayer.className = 'ai-layer is-visible'
     this.refs.aiLayer.innerHTML = `
       <div class="ai-scrim" data-ai-scrim>
@@ -1516,6 +1517,8 @@ class MindMapApp {
             </div>
             <button type="button" class="ghost-button" data-command="close-ai-workspace">${this.t('settings.close')}</button>
           </header>
+
+          ${aiStatusNotice}
 
           <section class="settings-card">
             <p class="section-label">${this.t('ai.generate')}</p>
@@ -1579,6 +1582,34 @@ class MindMapApp {
         </section>
       </div>
     `
+  }
+
+  private renderAIStatusNotice(): string {
+    const tone = this.aiStatusTone()
+    if (!tone) {
+      return ''
+    }
+
+    return `<p class="ai-status-note ${tone}">${escapeHtml(this.t(this.state.status.key, this.state.status.values))}</p>`
+  }
+
+  private aiStatusTone(): 'is-busy' | 'is-error' | 'is-ok' | 'is-info' | null {
+    switch (this.state.status.key) {
+      case 'status.aiRunning':
+      case 'status.aiTestingConnection':
+        return 'is-busy'
+      case 'status.aiFailed':
+      case 'status.aiConnectionFailed':
+        return 'is-error'
+      case 'status.aiRelationsApplied':
+      case 'status.aiConnectionOK':
+        return 'is-ok'
+      case 'status.aiNoRelations':
+      case 'status.aiTopicRequired':
+        return 'is-info'
+      default:
+        return null
+    }
   }
 
   private renderGraphOverlay(): void {

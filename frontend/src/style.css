@@ -708,6 +708,35 @@ kbd {
   margin-top: 14px;
 }
 
+.ai-status-note {
+  margin: 0 0 14px;
+  padding: 12px 14px;
+  border-radius: 16px;
+  border: 1px solid var(--line);
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
+  color: var(--text);
+  line-height: 1.5;
+}
+
+.ai-status-note.is-busy {
+  border-color: color-mix(in srgb, var(--accent) 46%, transparent);
+  background: color-mix(in srgb, var(--accent-soft) 46%, var(--surface));
+}
+
+.ai-status-note.is-error {
+  border-color: color-mix(in srgb, #ef4444 38%, transparent);
+  background: color-mix(in srgb, #ef4444 10%, var(--surface));
+}
+
+.ai-status-note.is-ok {
+  border-color: color-mix(in srgb, #22c55e 38%, transparent);
+  background: color-mix(in srgb, #22c55e 10%, var(--surface));
+}
+
+.ai-status-note.is-info {
+  border-color: color-mix(in srgb, var(--line) 82%, transparent);
+}
+
 .settings-header {
   display: flex;
   align-items: flex-start;
