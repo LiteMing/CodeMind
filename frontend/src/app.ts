@@ -149,6 +149,7 @@ interface AppState {
 }
 
 interface ShellRefs {
+  topChrome: HTMLElement
   eyebrow: HTMLParagraphElement
   title: HTMLHeadingElement
   status: HTMLParagraphElement
@@ -318,6 +319,11 @@ class MindMapApp {
     window.addEventListener('pointerup', this.handlePointerUp)
     window.addEventListener('pointercancel', this.handlePointerUp)
     window.addEventListener('keydown', this.handleGlobalKeyDown)
+    window.addEventListener('resize', this.handleWindowResize)
+  }
+
+  private readonly handleWindowResize = (): void => {
+    this.syncFloatingLayout()
   }
 
   private readonly handleClick = (event: MouseEvent): void => {
@@ -1040,6 +1046,7 @@ class MindMapApp {
     this.renderGraphOverlay()
     this.renderOnboarding()
     this.initializeViewportIfNeeded()
+    this.syncFloatingLayout()
     this.focusEditorIfNeeded()
   }
 
@@ -1120,7 +1127,7 @@ class MindMapApp {
     this.rootEl.innerHTML = `
       <div class="app-shell">
         <div class="workspace-stage">
-          <header class="top-chrome">
+          <header class="top-chrome" data-top-chrome>
             <section class="floating-bar project-bar">
               <div class="project-copy">
                 <p class="eyebrow" data-app-eyebrow></p>
@@ -1175,6 +1182,7 @@ class MindMapApp {
     `
 
     this.refs = {
+      topChrome: requiredElement(this.rootEl, '[data-top-chrome]'),
       eyebrow: requiredElement(this.rootEl, '[data-app-eyebrow]'),
       title: requiredElement(this.rootEl, '[data-app-title]'),
       status: requiredElement(this.rootEl, '[data-app-status]'),
@@ -1332,6 +1340,26 @@ class MindMapApp {
           ${this.renderRelationList(selectedNode.id)}
         </section>
       `
+  }
+
+  private syncFloatingLayout(): void {
+    if (!this.refs) {
+      return
+    }
+
+    if (window.innerWidth <= 980) {
+      this.refs.inspector.style.top = ''
+      return
+    }
+
+    const stageRect = this.refs.topChrome.parentElement?.getBoundingClientRect()
+    const chromeRect = this.refs.topChrome.getBoundingClientRect()
+    if (!stageRect || chromeRect.height === 0) {
+      return
+    }
+
+    const nextTop = Math.round(chromeRect.bottom - stageRect.top + 12)
+    this.refs.inspector.style.top = `${nextTop}px`
   }
 
   private renderDock(): void {

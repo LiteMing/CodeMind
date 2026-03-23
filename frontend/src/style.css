@@ -344,11 +344,12 @@ kbd {
   display: flex;
   flex-wrap: wrap;
   align-items: flex-start;
-  justify-content: space-between;
   gap: 12px;
 }
 
 .toolbar-rack .floating-bar {
+  flex: 0 1 auto;
+  width: fit-content;
   max-width: 100%;
 }
 
@@ -417,12 +418,10 @@ kbd {
 }
 
 .toolbar-cluster-main {
-  flex: 1 1 42rem;
-  justify-content: center;
+  justify-content: flex-start;
 }
 
 .toolbar-cluster-secondary {
-  flex: 0 1 36rem;
   justify-content: flex-end;
   margin-left: auto;
 }
@@ -1173,23 +1172,11 @@ code {
 
 @media (max-width: 1240px) {
   .toolbar-rack {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .toolbar-cluster-main,
-  .toolbar-cluster-secondary {
-    flex: 1 1 auto;
     justify-content: flex-start;
-    margin-left: 0;
   }
 
-  .project-bar .ghost-button {
+  .toolbar-cluster-secondary {
     margin-left: 0;
-  }
-
-  .inspector {
-    top: 202px;
   }
 }
 
