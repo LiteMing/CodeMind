@@ -143,6 +143,7 @@ interface AppState {
   status: StatusDescriptor
   preferences: AppPreferences
   settingsOpen: boolean
+  topPanelCollapsed: boolean
   inspectorCollapsed: boolean
   ai: AIWorkspaceState
   graph: GraphOverlayState
@@ -150,10 +151,12 @@ interface AppState {
 
 interface ShellRefs {
   topChrome: HTMLElement
+  topPanel: HTMLElement
   eyebrow: HTMLParagraphElement
   title: HTMLHeadingElement
   status: HTMLParagraphElement
   homeButton: HTMLButtonElement
+  topPanelButton: HTMLButtonElement
   renameMapButton: HTMLButtonElement
   deleteMapButton: HTMLButtonElement
   settingsButton: HTMLButtonElement
@@ -176,7 +179,6 @@ interface ShellRefs {
   inspector: HTMLElement
   settingsLayer: HTMLElement
   onboardingLayer: HTMLElement
-  dock: HTMLElement
   overlayLayer: HTMLElement
   aiLayer: HTMLElement
   graphLayer: HTMLElement
@@ -265,6 +267,7 @@ class MindMapApp {
       status: { key: 'status.loading' },
       preferences: loadPreferences(),
       settingsOpen: false,
+      topPanelCollapsed: false,
       inspectorCollapsed: true,
       ai: {
         open: false,
@@ -778,7 +781,7 @@ class MindMapApp {
     this.viewport.scale = nextScale
     this.applyCanvasMetrics()
     this.updateCanvasViewportView()
-    this.renderDock()
+    this.renderInspector()
   }
 
   private readonly handleGlobalKeyDown = (event: KeyboardEvent): void => {
@@ -1039,7 +1042,6 @@ class MindMapApp {
     this.renderHeader()
     this.renderWorkspace()
     this.renderInspector()
-    this.renderDock()
     this.renderOverlay()
     this.renderSettings()
     this.renderAIWorkspace()
@@ -1128,37 +1130,44 @@ class MindMapApp {
       <div class="app-shell">
         <div class="workspace-stage">
           <header class="top-chrome" data-top-chrome>
-            <section class="floating-bar project-bar">
-              <div class="project-copy">
-                <p class="eyebrow" data-app-eyebrow></p>
-                <h1 data-app-title></h1>
+            <section class="panel-shell top-panel" data-top-panel>
+              <div class="top-panel-header">
+                <div class="project-copy top-panel-copy">
+                  <p class="eyebrow" data-app-eyebrow></p>
+                  <div class="top-panel-title-row">
+                    <h1 data-app-title></h1>
+                    <p class="status-pill" data-app-status></p>
+                  </div>
+                </div>
+                <div class="top-panel-actions">
+                  <button type="button" class="ghost-button" data-command="go-home">${this.t('toolbar.home')}</button>
+                  <button type="button" class="ghost-button" data-role="top-panel-button" data-command="toggle-top-panel"></button>
+                </div>
               </div>
-              <p class="status-pill" data-app-status></p>
-              <button type="button" class="ghost-button" data-command="go-home">${this.t('toolbar.home')}</button>
+
+              <div class="top-panel-body">
+                <section class="toolbar-strip">
+                  <button type="button" class="action-button" data-role="undo-button" data-command="undo"></button>
+                  <button type="button" class="action-button" data-role="redo-button" data-command="redo"></button>
+                  <button type="button" class="action-button" data-role="save-button" data-command="save"></button>
+                  <button type="button" class="action-button" data-role="layout-button" data-command="auto-layout"></button>
+                  <button type="button" class="action-button" data-role="connect-button" data-command="connect-selected"></button>
+                  <button type="button" class="action-button" data-role="ai-button" data-command="open-ai-workspace"></button>
+                  <button type="button" class="action-button" data-role="graph-button" data-command="open-graph-overlay"></button>
+                  <button type="button" class="action-button" data-role="export-button" data-command="export-markdown"></button>
+                </section>
+
+                <section class="toolbar-strip toolbar-strip-secondary">
+                  <button type="button" class="action-button" data-command="rename-map">${this.t('toolbar.renameMap')}</button>
+                  <button type="button" class="action-button danger" data-command="delete-map">${this.t('toolbar.deleteMap')}</button>
+                  <button type="button" class="action-button" data-role="panel-button" data-command="toggle-inspector"></button>
+                  <button type="button" class="action-button" data-role="theme-button" data-command="theme-toggle"></button>
+                  <button type="button" class="action-button" data-role="settings-button" data-command="toggle-settings"></button>
+                  <button type="button" class="action-button" data-role="import-button" data-command="import-file"></button>
+                  <input type="file" accept=".md,.markdown,.txt,text/plain,text/markdown" data-role="import-input" data-import-input hidden />
+                </section>
+              </div>
             </section>
-
-            <div class="toolbar-rack">
-              <section class="floating-bar toolbar-cluster toolbar-cluster-main">
-                <button type="button" class="action-button" data-role="undo-button" data-command="undo"></button>
-                <button type="button" class="action-button" data-role="redo-button" data-command="redo"></button>
-                <button type="button" class="action-button" data-role="save-button" data-command="save"></button>
-                <button type="button" class="action-button" data-role="layout-button" data-command="auto-layout"></button>
-                <button type="button" class="action-button" data-role="connect-button" data-command="connect-selected"></button>
-                <button type="button" class="action-button" data-role="ai-button" data-command="open-ai-workspace"></button>
-                <button type="button" class="action-button" data-role="graph-button" data-command="open-graph-overlay"></button>
-                <button type="button" class="action-button" data-role="export-button" data-command="export-markdown"></button>
-              </section>
-
-              <section class="floating-bar toolbar-cluster toolbar-cluster-secondary">
-                <button type="button" class="action-button" data-command="rename-map">${this.t('toolbar.renameMap')}</button>
-                <button type="button" class="action-button danger" data-command="delete-map">${this.t('toolbar.deleteMap')}</button>
-                <button type="button" class="action-button" data-role="panel-button" data-command="toggle-inspector"></button>
-                <button type="button" class="action-button" data-role="theme-button" data-command="theme-toggle"></button>
-                <button type="button" class="action-button" data-role="settings-button" data-command="toggle-settings"></button>
-                <button type="button" class="action-button" data-role="import-button" data-command="import-file"></button>
-                <input type="file" accept=".md,.markdown,.txt,text/plain,text/markdown" data-role="import-input" data-import-input hidden />
-              </section>
-            </div>
           </header>
 
           <section class="workspace-panel">
@@ -1171,7 +1180,6 @@ class MindMapApp {
           </section>
 
           <aside class="inspector" data-inspector></aside>
-          <section class="floating-bar floating-bar-bottom" data-dock></section>
           <div class="overlay-layer" data-overlay-layer></div>
           <div data-ai-layer></div>
           <div data-graph-layer></div>
@@ -1183,10 +1191,12 @@ class MindMapApp {
 
     this.refs = {
       topChrome: requiredElement(this.rootEl, '[data-top-chrome]'),
+      topPanel: requiredElement(this.rootEl, '[data-top-panel]'),
       eyebrow: requiredElement(this.rootEl, '[data-app-eyebrow]'),
       title: requiredElement(this.rootEl, '[data-app-title]'),
       status: requiredElement(this.rootEl, '[data-app-status]'),
       homeButton: requiredElement(this.rootEl, '[data-command="go-home"]'),
+      topPanelButton: requiredElement(this.rootEl, '[data-role="top-panel-button"]'),
       renameMapButton: requiredElement(this.rootEl, '[data-command="rename-map"]'),
       deleteMapButton: requiredElement(this.rootEl, '[data-command="delete-map"]'),
       settingsButton: requiredElement(this.rootEl, '[data-role="settings-button"]'),
@@ -1209,7 +1219,6 @@ class MindMapApp {
       inspector: requiredElement(this.rootEl, '[data-inspector]'),
       settingsLayer: requiredElement(this.rootEl, '[data-settings-layer]'),
       onboardingLayer: requiredElement(this.rootEl, '[data-onboarding-layer]'),
-      dock: requiredElement(this.rootEl, '[data-dock]'),
       overlayLayer: requiredElement(this.rootEl, '[data-overlay-layer]'),
       aiLayer: requiredElement(this.rootEl, '[data-ai-layer]'),
       graphLayer: requiredElement(this.rootEl, '[data-graph-layer]'),
@@ -1222,10 +1231,12 @@ class MindMapApp {
     }
 
     const locale = this.state.preferences.locale
+    this.refs.topPanel.classList.toggle('is-collapsed', this.state.topPanelCollapsed)
     this.refs.eyebrow.textContent = this.t('app.eyebrow')
     this.refs.title.textContent = this.state.document.title
     this.refs.status.textContent = this.t(this.state.status.key, this.state.status.values)
     this.refs.homeButton.textContent = this.t('toolbar.home')
+    this.refs.topPanelButton.textContent = this.t(this.state.topPanelCollapsed ? 'panel.top.show' : 'panel.top.hide')
     this.refs.renameMapButton.textContent = this.t('toolbar.renameMap')
     this.refs.deleteMapButton.textContent = this.t('toolbar.deleteMap')
     this.refs.undoButton.textContent = this.t('toolbar.undo')
@@ -1237,7 +1248,7 @@ class MindMapApp {
     this.refs.aiButton.textContent = this.t('toolbar.ai')
     this.refs.graphButton.textContent = this.t('toolbar.graph3d')
     this.refs.settingsButton.textContent = this.t('toolbar.settings')
-    this.refs.panelButton.textContent = this.t('toolbar.panel')
+    this.refs.panelButton.textContent = this.t(this.state.inspectorCollapsed ? 'panel.side.show' : 'panel.side.hide')
     this.refs.themeButton.textContent = this.t('toolbar.theme', {
       theme: themeLabel(locale, this.state.document.theme),
     })
@@ -1250,6 +1261,7 @@ class MindMapApp {
     this.refs.graphButton.classList.toggle('is-active', this.state.graph.open)
     this.refs.settingsButton.classList.toggle('is-active', this.state.settingsOpen)
     this.refs.panelButton.classList.toggle('is-active', !this.state.inspectorCollapsed)
+    this.refs.topPanelButton.setAttribute('aria-pressed', String(!this.state.topPanelCollapsed))
     document.title = `${this.state.document.title} - Code Mind`
   }
 
@@ -1284,19 +1296,26 @@ class MindMapApp {
           title: this.findNode(this.state.connectSourceNodeId)?.title ?? this.t('common.unknown'),
         })
       : this.t('inspector.relationIdle')
+    const selectionTitle = singleSelection
+      ? selectedNode.title
+      : this.t('context.selectionCount', {
+          value: selectedCount,
+        })
+    const workspaceMetrics = `
+      <span class="metric-chip">${this.t('dock.selected', { value: selectedCount })}</span>
+      <span class="metric-chip">${this.t('dock.nodes', { value: this.state.document.nodes.length })}</span>
+      <span class="metric-chip">${this.t('dock.relations', { value: this.state.document.relations.length })}</span>
+      <span class="metric-chip">${Math.round(this.viewport.scale * 100)}%</span>
+      <span class="metric-chip">${this.t('dock.theme', { value: themeLabel(this.state.preferences.locale, this.state.document.theme) })}</span>
+    `
 
     this.refs.inspector.classList.toggle('is-collapsed', this.state.inspectorCollapsed)
     this.refs.inspector.innerHTML = this.state.inspectorCollapsed
       ? `
-        <section class="inspector-card inspector-card-compact">
+        <section class="inspector-card inspector-card-compact inspector-handle-card">
           <p class="section-label">${this.t('inspector.summary')}</p>
-          <h2>${escapeHtml(shorten(singleSelection ? selectedNode.title : this.t('context.selectionCount', { value: selectedCount }), 24))}</h2>
-          <div class="metric-row">
-            <span class="metric-chip">${this.t('dock.selected', { value: selectedCount })}</span>
-            <span class="metric-chip">${this.t('inspector.children', { value: directChildren.length })}</span>
-            <span class="metric-chip">${this.t('inspector.relationsCount', { value: relatedRelations.length })}</span>
-          </div>
-          <button type="button" class="action-button inspector-toggle-button" data-command="toggle-inspector">${this.t('inspector.open')}</button>
+          <p class="inspector-handle-copy">${escapeHtml(shorten(selectionTitle, 24))}</p>
+          <button type="button" class="action-button inspector-toggle-button" data-command="toggle-inspector">${this.t('panel.side.show')}</button>
         </section>
       `
       : `
@@ -1304,9 +1323,9 @@ class MindMapApp {
           <div class="inspector-header">
             <div>
               <p class="section-label">${this.t('inspector.selected')}</p>
-              <h2>${escapeHtml(singleSelection ? selectedNode.title : this.t('context.selectionCount', { value: selectedCount }))}</h2>
+              <h2>${escapeHtml(selectionTitle)}</h2>
             </div>
-            <button type="button" class="ghost-button" data-command="toggle-inspector">${this.t('inspector.close')}</button>
+            <button type="button" class="ghost-button" data-command="toggle-inspector">${this.t('panel.side.hide')}</button>
           </div>
           <div class="metric-row">
             <span class="metric-chip">${this.t('dock.selected', { value: selectedCount })}</span>
@@ -1331,6 +1350,13 @@ class MindMapApp {
             </button>
             <button type="button" class="chip-button ${this.state.connectSourceNodeId ? 'is-active' : ''}" data-command="connect-selected" ${singleSelection ? '' : 'disabled'}>${this.t('action.linkRelation')}</button>
             <button type="button" class="chip-button danger" data-command="delete-selected" ${canDeleteSelection ? '' : 'disabled'}>${this.t('action.delete')}</button>
+          </div>
+        </section>
+
+        <section class="inspector-card">
+          <p class="section-label">${this.t('panel.workspace')}</p>
+          <div class="metric-row">
+            ${workspaceMetrics}
           </div>
         </section>
 
@@ -1360,20 +1386,6 @@ class MindMapApp {
 
     const nextTop = Math.round(chromeRect.bottom - stageRect.top + 12)
     this.refs.inspector.style.top = `${nextTop}px`
-  }
-
-  private renderDock(): void {
-    if (!this.refs) {
-      return
-    }
-
-    this.refs.dock.innerHTML = `
-      <span class="dock-chip">${this.t('dock.selected', { value: this.selectedNodeIds().length })}</span>
-      <span class="dock-chip">${this.t('dock.nodes', { value: this.state.document.nodes.length })}</span>
-      <span class="dock-chip">${this.t('dock.relations', { value: this.state.document.relations.length })}</span>
-      <span class="dock-chip">${Math.round(this.viewport.scale * 100)}%</span>
-      <span class="dock-chip">${this.t('dock.theme', { value: themeLabel(this.state.preferences.locale, this.state.document.theme) })}</span>
-    `
   }
 
   private renderOverlay(): void {
@@ -2075,7 +2087,6 @@ class MindMapApp {
     }
     this.setStatus('status.subtreeCopied', { count: nodes.length })
     this.renderHeader()
-    this.renderDock()
   }
 
   private pasteCopiedSubtree(): void {
@@ -2504,6 +2515,9 @@ class MindMapApp {
           return
         case 'delete-map':
           await this.deleteMap(argument || this.state.currentMapId || this.state.document.id)
+          return
+        case 'toggle-top-panel':
+          this.toggleTopPanel()
           return
         case 'toggle-inspector':
           this.toggleInspector()
@@ -3130,6 +3144,12 @@ class MindMapApp {
   private toggleSettings(): void {
     this.state.settingsOpen = !this.state.settingsOpen
     this.setStatus(this.state.settingsOpen ? 'status.settingsOpened' : 'status.settingsClosed')
+    this.render()
+  }
+
+  private toggleTopPanel(): void {
+    this.state.topPanelCollapsed = !this.state.topPanelCollapsed
+    this.setStatus(this.state.topPanelCollapsed ? 'status.topPanelClosed' : 'status.topPanelOpened')
     this.render()
   }
 
