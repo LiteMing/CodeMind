@@ -9,7 +9,7 @@ export function createDefaultDocument(): MindMapDocument {
   return {
     id: 'default',
     title: 'New Mind Map',
-    theme: 'light',
+    theme: 'dark',
     nodes: [
       {
         id: 'root',

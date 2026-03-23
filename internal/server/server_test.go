@@ -62,6 +62,9 @@ func TestHealthAndMapLifecycle(t *testing.T) {
 	if created.Title != "Roadmap" {
 		t.Fatalf("expected created title to be Roadmap, got %q", created.Title)
 	}
+	if created.Theme != mindmap.ThemeDark {
+		t.Fatalf("expected created theme to default to %q, got %q", mindmap.ThemeDark, created.Theme)
+	}
 
 	listReq = httptest.NewRequest(http.MethodGet, "/api/maps", nil)
 	listRes = httptest.NewRecorder()

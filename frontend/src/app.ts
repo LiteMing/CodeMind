@@ -3664,8 +3664,9 @@ class MindMapApp {
   }
 
   private applyTheme(): void {
-    document.documentElement.dataset.theme = this.state.document.theme
-    document.documentElement.style.colorScheme = this.state.document.theme
+    const theme = this.state.view === 'home' ? 'dark' : this.state.document.theme
+    document.documentElement.dataset.theme = theme
+    document.documentElement.style.colorScheme = theme
   }
 
   private applyLocale(): void {

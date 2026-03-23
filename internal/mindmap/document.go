@@ -97,7 +97,7 @@ func NewDefaultDocument() Document {
 	return Document{
 		ID:        "default",
 		Title:     root.Title,
-		Theme:     ThemeLight,
+		Theme:     ThemeDark,
 		Nodes:     []Node{root},
 		Relations: []RelationEdge{},
 		Meta: Meta{

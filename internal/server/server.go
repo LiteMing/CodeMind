@@ -876,7 +876,7 @@ func generatedGraphToDocument(topic string, payload aiGeneratedGraph) (mindmap.D
 	doc := mindmap.Document{
 		ID:    "generated-preview",
 		Title: title,
-		Theme: mindmap.ThemeLight,
+		Theme: mindmap.ThemeDark,
 		Nodes: []mindmap.Node{
 			{
 				ID:        "root",
