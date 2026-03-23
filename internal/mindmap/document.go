@@ -112,9 +112,6 @@ func (d *Document) Validate() error {
 	if strings.TrimSpace(d.ID) == "" {
 		return errors.New("document id is required")
 	}
-	if d.Relations == nil {
-		d.Relations = []RelationEdge{}
-	}
 	if len(d.Nodes) == 0 {
 		return errors.New("document must contain at least one node")
 	}
@@ -171,14 +168,39 @@ func (d *Document) Validate() error {
 		}
 	}
 
-	d.Title = d.Root().Title
-	d.Meta.Version = 1
-	d.Meta.LastEditedAt = time.Now().UTC()
-	if d.Meta.LastOpenedAt.IsZero() {
-		d.Meta.LastOpenedAt = d.Meta.LastEditedAt
+	return nil
+}
+
+func (d *Document) PrepareForSave(now time.Time) {
+	if d.Relations == nil {
+		d.Relations = []RelationEdge{}
 	}
 
-	return nil
+	root := d.Root()
+	if strings.TrimSpace(root.Title) != "" {
+		d.Title = root.Title
+	}
+	d.Meta.Version = 1
+	d.Meta.LastEditedAt = now
+	if d.Meta.LastOpenedAt.IsZero() {
+		d.Meta.LastOpenedAt = now
+	}
+}
+
+func (d *Document) TouchOpened(now time.Time) {
+	if d.Relations == nil {
+		d.Relations = []RelationEdge{}
+	}
+
+	root := d.Root()
+	if strings.TrimSpace(root.Title) != "" {
+		d.Title = root.Title
+	}
+	d.Meta.Version = 1
+	if d.Meta.LastEditedAt.IsZero() {
+		d.Meta.LastEditedAt = now
+	}
+	d.Meta.LastOpenedAt = now
 }
 
 func (d Document) Root() Node {

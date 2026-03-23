@@ -1120,35 +1120,39 @@ class MindMapApp {
     this.rootEl.innerHTML = `
       <div class="app-shell">
         <div class="workspace-stage">
-          <section class="floating-bar floating-bar-left project-bar">
-            <div class="project-copy">
-              <p class="eyebrow" data-app-eyebrow></p>
-              <h1 data-app-title></h1>
+          <header class="top-chrome">
+            <section class="floating-bar project-bar">
+              <div class="project-copy">
+                <p class="eyebrow" data-app-eyebrow></p>
+                <h1 data-app-title></h1>
+              </div>
+              <p class="status-pill" data-app-status></p>
+              <button type="button" class="ghost-button" data-command="go-home">${this.t('toolbar.home')}</button>
+            </section>
+
+            <div class="toolbar-rack">
+              <section class="floating-bar toolbar-cluster toolbar-cluster-main">
+                <button type="button" class="action-button" data-role="undo-button" data-command="undo"></button>
+                <button type="button" class="action-button" data-role="redo-button" data-command="redo"></button>
+                <button type="button" class="action-button" data-role="save-button" data-command="save"></button>
+                <button type="button" class="action-button" data-role="layout-button" data-command="auto-layout"></button>
+                <button type="button" class="action-button" data-role="connect-button" data-command="connect-selected"></button>
+                <button type="button" class="action-button" data-role="ai-button" data-command="open-ai-workspace"></button>
+                <button type="button" class="action-button" data-role="graph-button" data-command="open-graph-overlay"></button>
+                <button type="button" class="action-button" data-role="export-button" data-command="export-markdown"></button>
+              </section>
+
+              <section class="floating-bar toolbar-cluster toolbar-cluster-secondary">
+                <button type="button" class="action-button" data-command="rename-map">${this.t('toolbar.renameMap')}</button>
+                <button type="button" class="action-button danger" data-command="delete-map">${this.t('toolbar.deleteMap')}</button>
+                <button type="button" class="action-button" data-role="panel-button" data-command="toggle-inspector"></button>
+                <button type="button" class="action-button" data-role="theme-button" data-command="theme-toggle"></button>
+                <button type="button" class="action-button" data-role="settings-button" data-command="toggle-settings"></button>
+                <button type="button" class="action-button" data-role="import-button" data-command="import-file"></button>
+                <input type="file" accept=".md,.markdown,.txt,text/plain,text/markdown" data-role="import-input" data-import-input hidden />
+              </section>
             </div>
-            <p class="status-pill" data-app-status></p>
-            <button type="button" class="ghost-button" data-command="go-home">${this.t('toolbar.home')}</button>
-          </section>
-
-          <section class="floating-bar floating-bar-center toolbar-cluster">
-            <button type="button" class="action-button" data-role="undo-button" data-command="undo"></button>
-            <button type="button" class="action-button" data-role="redo-button" data-command="redo"></button>
-            <button type="button" class="action-button" data-role="save-button" data-command="save"></button>
-            <button type="button" class="action-button" data-role="layout-button" data-command="auto-layout"></button>
-            <button type="button" class="action-button" data-role="connect-button" data-command="connect-selected"></button>
-            <button type="button" class="action-button" data-role="ai-button" data-command="open-ai-workspace"></button>
-            <button type="button" class="action-button" data-role="graph-button" data-command="open-graph-overlay"></button>
-            <button type="button" class="action-button" data-role="export-button" data-command="export-markdown"></button>
-          </section>
-
-          <section class="floating-bar floating-bar-right toolbar-cluster">
-            <button type="button" class="action-button" data-command="rename-map">${this.t('toolbar.renameMap')}</button>
-            <button type="button" class="action-button danger" data-command="delete-map">${this.t('toolbar.deleteMap')}</button>
-            <button type="button" class="action-button" data-role="panel-button" data-command="toggle-inspector"></button>
-            <button type="button" class="action-button" data-role="theme-button" data-command="theme-toggle"></button>
-            <button type="button" class="action-button" data-role="settings-button" data-command="toggle-settings"></button>
-            <button type="button" class="action-button" data-role="import-button" data-command="import-file"></button>
-            <input type="file" accept=".md,.markdown,.txt,text/plain,text/markdown" data-role="import-input" data-import-input hidden />
-          </section>
+          </header>
 
           <section class="workspace-panel">
             <div class="workspace-scroll" data-workspace-scroll>

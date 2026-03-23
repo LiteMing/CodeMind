@@ -6,8 +6,11 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"code-mind/internal/mindmap"
 	"code-mind/internal/store"
@@ -324,6 +327,115 @@ func TestAIGenerateEndpoint(t *testing.T) {
 	}
 }
 
+func TestListMapsPreservesLastEditedAt(t *testing.T) {
+	storePath := t.TempDir()
+	handler := New(store.NewFileStore(storePath)).Handler()
+
+	lastEditedAt := time.Date(2026, time.March, 1, 9, 30, 0, 0, time.UTC)
+	lastOpenedAt := time.Date(2026, time.March, 2, 10, 0, 0, 0, time.UTC)
+	writeTestDocument(t, storePath, newStoredDocument("roadmap", "Roadmap", lastEditedAt, lastOpenedAt))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/maps", nil)
+	res := httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d with body %s", res.Code, res.Body.String())
+	}
+
+	var summaries []store.MapSummary
+	if err := json.Unmarshal(res.Body.Bytes(), &summaries); err != nil {
+		t.Fatalf("failed to decode map summaries: %v", err)
+	}
+	if len(summaries) != 1 {
+		t.Fatalf("expected 1 summary, got %d", len(summaries))
+	}
+	if !summaries[0].LastEditedAt.Equal(lastEditedAt) {
+		t.Fatalf("expected LastEditedAt %s, got %s", lastEditedAt, summaries[0].LastEditedAt)
+	}
+	if !summaries[0].LastOpenedAt.Equal(lastOpenedAt) {
+		t.Fatalf("expected LastOpenedAt %s, got %s", lastOpenedAt, summaries[0].LastOpenedAt)
+	}
+}
+
+func TestLoadMapTouchesLastOpenedAtWithoutEditing(t *testing.T) {
+	storePath := t.TempDir()
+	handler := New(store.NewFileStore(storePath)).Handler()
+
+	lastEditedAt := time.Date(2026, time.March, 1, 9, 30, 0, 0, time.UTC)
+	lastOpenedAt := time.Date(2026, time.March, 2, 10, 0, 0, 0, time.UTC)
+	writeTestDocument(t, storePath, newStoredDocument("roadmap", "Roadmap", lastEditedAt, lastOpenedAt))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/maps/roadmap", nil)
+	res := httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d with body %s", res.Code, res.Body.String())
+	}
+
+	var payload mindmap.Document
+	if err := json.Unmarshal(res.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("failed to decode loaded document: %v", err)
+	}
+	if !payload.Meta.LastEditedAt.Equal(lastEditedAt) {
+		t.Fatalf("expected LastEditedAt %s, got %s", lastEditedAt, payload.Meta.LastEditedAt)
+	}
+	if !payload.Meta.LastOpenedAt.After(lastOpenedAt) {
+		t.Fatalf("expected LastOpenedAt to move forward from %s, got %s", lastOpenedAt, payload.Meta.LastOpenedAt)
+	}
+
+	stored := readStoredDocument(t, storePath, "roadmap")
+	if !stored.Meta.LastEditedAt.Equal(lastEditedAt) {
+		t.Fatalf("expected persisted LastEditedAt %s, got %s", lastEditedAt, stored.Meta.LastEditedAt)
+	}
+	if !stored.Meta.LastOpenedAt.After(lastOpenedAt) {
+		t.Fatalf("expected persisted LastOpenedAt to move forward from %s, got %s", lastOpenedAt, stored.Meta.LastOpenedAt)
+	}
+}
+
+func TestSaveMapUpdatesLastEditedAt(t *testing.T) {
+	storePath := t.TempDir()
+	handler := New(store.NewFileStore(storePath)).Handler()
+
+	lastEditedAt := time.Date(2026, time.March, 1, 9, 30, 0, 0, time.UTC)
+	lastOpenedAt := time.Date(2026, time.March, 2, 10, 0, 0, 0, time.UTC)
+	doc := newStoredDocument("roadmap", "Roadmap", lastEditedAt, lastOpenedAt)
+	writeTestDocument(t, storePath, doc)
+
+	doc.Nodes = append(doc.Nodes, mindmap.Node{
+		ID:        "scope",
+		ParentID:  "root",
+		Kind:      mindmap.NodeKindTopic,
+		Title:     "Scope",
+		Position:  mindmap.Position{X: 1100, Y: 320},
+		CreatedAt: lastEditedAt,
+		UpdatedAt: lastEditedAt,
+	})
+
+	body, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatalf("failed to marshal document: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPut, "/api/maps/roadmap", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	res := httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d with body %s", res.Code, res.Body.String())
+	}
+
+	stored := readStoredDocument(t, storePath, "roadmap")
+	if !stored.Meta.LastEditedAt.After(lastEditedAt) {
+		t.Fatalf("expected LastEditedAt to move forward from %s, got %s", lastEditedAt, stored.Meta.LastEditedAt)
+	}
+	if !stored.Meta.LastOpenedAt.Equal(lastOpenedAt) {
+		t.Fatalf("expected LastOpenedAt to stay at %s, got %s", lastOpenedAt, stored.Meta.LastOpenedAt)
+	}
+}
+
 func newTestHandler(t *testing.T) http.Handler {
 	t.Helper()
 	return newTestServer(t).Handler()
@@ -335,4 +447,55 @@ func newTestServer(t *testing.T) *Server {
 	storePath := t.TempDir()
 	fileStore := store.NewFileStore(storePath)
 	return New(fileStore)
+}
+
+func newStoredDocument(id string, title string, lastEditedAt time.Time, lastOpenedAt time.Time) mindmap.Document {
+	return mindmap.Document{
+		ID:    id,
+		Title: title,
+		Theme: mindmap.ThemeLight,
+		Nodes: []mindmap.Node{
+			{
+				ID:        "root",
+				Kind:      mindmap.NodeKindRoot,
+				Title:     title,
+				Position:  mindmap.Position{X: 820, Y: 320},
+				CreatedAt: lastEditedAt,
+				UpdatedAt: lastEditedAt,
+			},
+		},
+		Relations: []mindmap.RelationEdge{},
+		Meta: mindmap.Meta{
+			Version:      1,
+			LastEditedAt: lastEditedAt,
+			LastOpenedAt: lastOpenedAt,
+		},
+	}
+}
+
+func writeTestDocument(t *testing.T, storePath string, doc mindmap.Document) {
+	t.Helper()
+
+	payload, err := json.MarshalIndent(doc, "", "  ")
+	if err != nil {
+		t.Fatalf("failed to marshal test document: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(storePath, doc.ID+".json"), payload, 0o644); err != nil {
+		t.Fatalf("failed to write test document: %v", err)
+	}
+}
+
+func readStoredDocument(t *testing.T, storePath string, id string) mindmap.Document {
+	t.Helper()
+
+	payload, err := os.ReadFile(filepath.Join(storePath, id+".json"))
+	if err != nil {
+		t.Fatalf("failed to read stored document: %v", err)
+	}
+
+	var doc mindmap.Document
+	if err := json.Unmarshal(payload, &doc); err != nil {
+		t.Fatalf("failed to decode stored document: %v", err)
+	}
+	return doc
 }

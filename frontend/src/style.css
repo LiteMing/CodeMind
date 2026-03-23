@@ -270,6 +270,21 @@ kbd {
   position: relative;
 }
 
+.top-chrome {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  right: 12px;
+  z-index: 6;
+  display: grid;
+  gap: 12px;
+  pointer-events: none;
+}
+
+.top-chrome > * {
+  pointer-events: auto;
+}
+
 .workspace-scroll {
   width: 100%;
   height: 100%;
@@ -321,24 +336,24 @@ kbd {
   backdrop-filter: blur(18px);
 }
 
-.floating-bar-left {
-  top: 12px;
-  left: 12px;
-  max-width: min(32rem, calc(100% - 24px));
+.top-chrome .floating-bar {
+  position: static;
 }
 
-.floating-bar-center {
-  top: 12px;
-  left: 50%;
-  transform: translateX(-50%);
+.toolbar-rack {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
 }
 
-.floating-bar-right {
-  top: 12px;
-  right: 12px;
+.toolbar-rack .floating-bar {
+  max-width: 100%;
 }
 
 .floating-bar-bottom {
+  position: absolute;
   right: 16px;
   bottom: 16px;
 }
@@ -346,10 +361,21 @@ kbd {
 .project-bar {
   align-items: flex-start;
   gap: 18px;
+  flex-wrap: wrap;
+  max-width: min(46rem, 100%);
 }
 
 .project-copy {
+  flex: 1 1 16rem;
   min-width: 0;
+}
+
+.project-bar .status-pill {
+  flex: 1 1 16rem;
+}
+
+.project-bar .ghost-button {
+  margin-left: auto;
 }
 
 .eyebrow,
@@ -384,7 +410,21 @@ kbd {
 }
 
 .toolbar-cluster {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
   gap: 8px;
+}
+
+.toolbar-cluster-main {
+  flex: 1 1 42rem;
+  justify-content: center;
+}
+
+.toolbar-cluster-secondary {
+  flex: 0 1 36rem;
+  justify-content: flex-end;
+  margin-left: auto;
 }
 
 .action-button,
@@ -409,6 +449,7 @@ kbd {
   border-radius: 14px;
   padding: 10px 14px;
   cursor: pointer;
+  white-space: nowrap;
 }
 
 .action-button:hover,
@@ -1131,15 +1172,24 @@ code {
 }
 
 @media (max-width: 1240px) {
-  .floating-bar-center {
-    left: auto;
-    right: 12px;
-    top: 76px;
-    transform: none;
+  .toolbar-rack {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .toolbar-cluster-main,
+  .toolbar-cluster-secondary {
+    flex: 1 1 auto;
+    justify-content: flex-start;
+    margin-left: 0;
+  }
+
+  .project-bar .ghost-button {
+    margin-left: 0;
   }
 
   .inspector {
-    top: 144px;
+    top: 202px;
   }
 }
 
@@ -1162,16 +1212,24 @@ code {
     height: 76vh;
   }
 
-  .floating-bar-left,
-  .floating-bar-center,
-  .floating-bar-right {
+  .top-chrome {
     position: static;
-    transform: none;
-    margin: 12px;
-    width: calc(100% - 24px);
+    padding: 12px 12px 0;
+  }
+
+  .top-chrome .floating-bar {
+    width: 100%;
     box-sizing: border-box;
+  }
+
+  .toolbar-rack {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .toolbar-cluster-main,
+  .toolbar-cluster-secondary {
     justify-content: flex-start;
-    flex-wrap: wrap;
   }
 
   .workspace-panel {

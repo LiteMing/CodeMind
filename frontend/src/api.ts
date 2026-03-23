@@ -12,6 +12,7 @@ const JSON_HEADERS = {
   'Content-Type': 'application/json',
 }
 
+const DESKTOP_API_BASE = 'http://127.0.0.1:34117/api'
 const API_BASE = resolveApiBase()
 const DEV_BACKEND_HINT =
   '当前 AI 测试会先访问本地 Go API，再由 Go API 转发到 LM Studio。开发模式请在项目根目录运行 `npm run dev`，或至少同时运行 `go run ./cmd/server` 和 `cd frontend && npm run dev`。'
@@ -191,7 +192,19 @@ function resolveApiBase(): string {
     return `${configuredBase.replace(/\/+$/, '')}/api`
   }
 
+  if (isWailsDesktopRuntime()) {
+    return DESKTOP_API_BASE
+  }
+
   return '/api'
+}
+
+function isWailsDesktopRuntime(): boolean {
+  const globalWithRuntime = globalThis as typeof globalThis & {
+    runtime?: unknown
+  }
+
+  return typeof globalWithRuntime.runtime === 'object' && globalWithRuntime.runtime !== null
 }
 
 async function readError(response: Response): Promise<string> {

@@ -223,7 +223,10 @@ func (s *FileStore) loadLocked(id string, touchOpened bool) (mindmap.Document, e
 	}
 
 	if touchOpened {
-		doc.Meta.LastOpenedAt = time.Now().UTC()
+		doc.TouchOpened(time.Now().UTC())
+		if err := doc.Validate(); err != nil {
+			return mindmap.Document{}, err
+		}
 		if err := s.writeLocked(doc); err != nil {
 			return mindmap.Document{}, err
 		}
@@ -236,6 +239,7 @@ func (s *FileStore) saveLocked(doc mindmap.Document) error {
 	if strings.TrimSpace(doc.ID) == "" {
 		doc.ID = sanitizeID(mindmap.NewID("map"))
 	}
+	doc.PrepareForSave(time.Now().UTC())
 	if err := doc.Validate(); err != nil {
 		return err
 	}
