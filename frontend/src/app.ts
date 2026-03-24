@@ -192,6 +192,15 @@ interface GraphHitNode {
   radius: number
 }
 
+interface WorkspaceBounds {
+  minX: number
+  minY: number
+  width: number
+  height: number
+  originX: number
+  originY: number
+}
+
 interface CopiedSubtreeNode {
   id: string
   parentId?: string
@@ -328,6 +337,14 @@ class MindMapApp {
   private copiedSubtree: CopiedSubtree | null = null
   private suppressContextMenuOnce = false
   private pendingEditorOptions: EditorLaunchOptions | null = null
+  private workspaceBounds: WorkspaceBounds = {
+    minX: 0,
+    minY: 0,
+    width: WORKSPACE_MIN_WIDTH,
+    height: WORKSPACE_MIN_HEIGHT,
+    originX: 0,
+    originY: 0,
+  }
   private state: AppState
 
   constructor(rootEl: HTMLElement) {
@@ -768,8 +785,8 @@ class MindMapApp {
 
     const pointerPosition = this.clientToCanvasPosition(event.clientX, event.clientY)
     const nextPosition = {
-      x: clampMin(pointerPosition.x - this.state.drag.offsetX, 120),
-      y: clampMin(pointerPosition.y - this.state.drag.offsetY, 96),
+      x: pointerPosition.x - this.state.drag.offsetX,
+      y: pointerPosition.y - this.state.drag.offsetY,
     }
     const currentNode = this.findNode(this.state.drag.nodeId)
 
@@ -798,8 +815,8 @@ class MindMapApp {
 
       this.updateNode(candidateId, (node) => {
         node.position = {
-          x: clampMin(candidateStart.x + deltaX, 120),
-          y: clampMin(candidateStart.y + deltaY, 96),
+          x: candidateStart.x + deltaX,
+          y: candidateStart.y + deltaY,
         }
       })
       this.scheduleLiveNodeUpdate(candidateId)
@@ -1925,6 +1942,7 @@ class MindMapApp {
 
   private renderEdges(): string {
     const visibleIds = visibleNodeIds(this.state.document)
+    const projectPosition = (position: Position) => this.toWorkspacePosition(position)
     const hierarchyEdges = this.state.document.nodes
       .filter((node) => Boolean(node.parentId) && visibleIds.has(node.id) && visibleIds.has(node.parentId ?? ''))
       .map((node) => {
@@ -1932,7 +1950,7 @@ class MindMapApp {
         if (!parent) {
           return ''
         }
-        return `<path class="edge edge-hierarchy" d="${buildHierarchyPath(parent.position, node.position)}" />`
+        return `<path class="edge edge-hierarchy" d="${buildHierarchyPath(projectPosition(parent.position), projectPosition(node.position))}" />`
       })
       .join('')
 
@@ -1944,13 +1962,15 @@ class MindMapApp {
           return ''
         }
 
-        const mid = getRelationMidpoint(source.position, target.position)
+        const projectedSource = projectPosition(source.position)
+        const projectedTarget = projectPosition(target.position)
+        const mid = getRelationMidpoint(projectedSource, projectedTarget)
         const label = edge.label
           ? `<text class="relation-label" x="${mid.x}" y="${mid.y - 10}">${escapeHtml(edge.label)}</text>`
           : ''
 
         return `<g>
-          <path class="edge edge-relation" d="${buildRelationPath(source.position, target.position)}" />
+          <path class="edge edge-relation" d="${buildRelationPath(projectedSource, projectedTarget)}" />
           ${label}
         </g>`
       })
@@ -1962,6 +1982,8 @@ class MindMapApp {
   private renderNodes(): string {
     const visibleIds = visibleNodeIds(this.state.document)
     const selectedIds = new Set(this.selectedNodeIds())
+    const originX = this.workspaceBounds.originX
+    const originY = this.workspaceBounds.originY
 
     return this.state.document.nodes
       .filter((node) => visibleIds.has(node.id))
@@ -2007,7 +2029,7 @@ class MindMapApp {
           <article
             class="${classes}"
             data-node-id="${node.id}"
-            style="left: ${node.position.x}px; top: ${node.position.y}px; ${nodePresentationStyle}"
+            style="left: ${node.position.x + originX}px; top: ${node.position.y + originY}px; ${nodePresentationStyle}"
           >
             ${content}
             ${resizeHandle}
@@ -3278,7 +3300,7 @@ class MindMapApp {
       return
     }
 
-    const center = nodeCenter(node)
+    const center = this.toWorkspacePosition(node.position)
     this.viewport.x = scroll.clientWidth / 2 - center.x * this.viewport.scale
     this.viewport.y = scroll.clientHeight / 2 - center.y * this.viewport.scale
     this.updateCanvasViewportView()
@@ -3445,10 +3467,12 @@ class MindMapApp {
     const root = findRoot(this.state.document)
     const { scroll } = this.refs
     queueMicrotask(() => {
+      const bounds = getWorkspaceBounds(this.state.document)
+      const rootPosition = this.toWorkspacePosition(root.position, bounds)
       this.viewport.scale = 1
-      this.viewport.x = scroll.clientWidth / 2 - root.position.x * this.viewport.scale
-      this.viewport.y = scroll.clientHeight / 2 - root.position.y * this.viewport.scale
-      this.applyCanvasMetrics()
+      this.viewport.x = scroll.clientWidth / 2 - rootPosition.x * this.viewport.scale
+      this.viewport.y = scroll.clientHeight / 2 - rootPosition.y * this.viewport.scale
+      this.applyCanvasMetrics(bounds)
       this.updateCanvasViewportView()
     })
     this.didInitializeViewport = true
@@ -3467,6 +3491,7 @@ class MindMapApp {
       return
     }
 
+    this.workspaceBounds = bounds
     const scaledWidth = Math.max(1, Math.ceil(bounds.width * this.viewport.scale))
     const scaledHeight = Math.max(1, Math.ceil(bounds.height * this.viewport.scale))
 
@@ -3613,8 +3638,9 @@ class MindMapApp {
       const node = this.findNode(nodeId)
       const element = this.rootEl.querySelector<HTMLElement>(`[data-node-id="${nodeId}"]`)
       if (node && element) {
-        element.style.left = `${node.position.x}px`
-        element.style.top = `${node.position.y}px`
+        const workspacePosition = this.toWorkspacePosition(node.position, bounds)
+        element.style.left = `${workspacePosition.x}px`
+        element.style.top = `${workspacePosition.y}px`
         if (includeDimensionIds.has(nodeId)) {
           const sizingTarget = element.querySelector<HTMLElement>('.node-shell, .node-editor')
           if (sizingTarget) {
@@ -3676,8 +3702,15 @@ class MindMapApp {
 
     const rect = scroll.getBoundingClientRect()
     return {
-      x: (clientX - rect.left - this.viewport.x) / this.viewport.scale,
-      y: (clientY - rect.top - this.viewport.y) / this.viewport.scale,
+      x: (clientX - rect.left - this.viewport.x) / this.viewport.scale - this.workspaceBounds.originX,
+      y: (clientY - rect.top - this.viewport.y) / this.viewport.scale - this.workspaceBounds.originY,
+    }
+  }
+
+  private toWorkspacePosition(position: Position, bounds = this.workspaceBounds): Position {
+    return {
+      x: position.x + bounds.originX,
+      y: position.y + bounds.originY,
     }
   }
 
@@ -4512,20 +4545,30 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max)
 }
 
-function getWorkspaceBounds(document: MindMapDocument): { width: number; height: number } {
-  let maxX = WORKSPACE_MIN_WIDTH - WORKSPACE_PADDING
-  let maxY = WORKSPACE_MIN_HEIGHT - WORKSPACE_PADDING
+function getWorkspaceBounds(document: MindMapDocument): WorkspaceBounds {
+  let minX = 0
+  let minY = 0
+  let maxX = WORKSPACE_MIN_WIDTH
+  let maxY = WORKSPACE_MIN_HEIGHT
 
   for (const node of document.nodes) {
     const nodeWidth = node.width ?? estimateNodeWidth(node)
     const nodeHeight = node.height ?? estimateNodeHeight(node)
-    maxX = Math.max(maxX, node.position.x + nodeWidth / 2)
-    maxY = Math.max(maxY, node.position.y + nodeHeight / 2)
+    minX = Math.min(minX, node.position.x - nodeWidth / 2 - WORKSPACE_PADDING)
+    minY = Math.min(minY, node.position.y - nodeHeight / 2 - WORKSPACE_PADDING)
+    maxX = Math.max(maxX, node.position.x + nodeWidth / 2 + WORKSPACE_PADDING)
+    maxY = Math.max(maxY, node.position.y + nodeHeight / 2 + WORKSPACE_PADDING)
   }
 
+  const width = Math.max(WORKSPACE_MIN_WIDTH, Math.ceil(maxX - minX))
+  const height = Math.max(WORKSPACE_MIN_HEIGHT, Math.ceil(maxY - minY))
   return {
-    width: Math.max(WORKSPACE_MIN_WIDTH, Math.ceil(maxX + WORKSPACE_PADDING)),
-    height: Math.max(WORKSPACE_MIN_HEIGHT, Math.ceil(maxY + WORKSPACE_PADDING)),
+    minX,
+    minY,
+    width,
+    height,
+    originX: -minX,
+    originY: -minY,
   }
 }
 
