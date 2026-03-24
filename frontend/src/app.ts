@@ -471,6 +471,7 @@ class MindMapApp {
       return
     }
 
+    event.preventDefault()
     this.setSelection([nodeButton.dataset.nodeButton], nodeButton.dataset.nodeButton)
     this.openNodeEditor(nodeButton.dataset.nodeButton, { selection: 'all' })
   }
@@ -1847,7 +1848,7 @@ class MindMapApp {
         const nodeDimensions = buildNodeDimensionStyle(node)
 
         const content = this.state.editingNodeId === node.id
-          ? `<input class="node-editor" style="${nodeDimensions}" data-node-editor="${node.id}" value="${escapeAttribute(node.title)}" maxlength="120" />`
+          ? `<input class="node-editor" type="text" style="${nodeDimensions}" data-node-editor="${node.id}" value="${escapeAttribute(node.title)}" maxlength="120" />`
           : `<button type="button" class="node-shell" style="${nodeDimensions}" data-node-button="${node.id}">
                ${priorityBadge}
                <span class="node-title">${escapeHtml(shorten(node.title, node.kind === 'root' ? 60 : 72))}</span>
@@ -1925,28 +1926,58 @@ class MindMapApp {
     const pendingOptions = this.pendingEditorOptions
     this.pendingEditorOptions = null
     queueMicrotask(() => {
-      editor.focus()
       if (pendingOptions?.value !== undefined && pendingOptions.value !== null) {
         editor.value = pendingOptions.value
       }
-
-      const applySelection = () => {
-        if (pendingOptions?.selection === 'end') {
-          const cursor = editor.value.length
-          editor.setSelectionRange(cursor, cursor)
-          return
-        }
-
-        editor.select()
-      }
-
-      applySelection()
-      window.requestAnimationFrame(() => {
-        if (document.activeElement === editor) {
-          applySelection()
-        }
-      })
+      this.restoreEditorSelection(editor, pendingOptions)
+      window.setTimeout(() => {
+        this.restoreEditorSelection(editor, pendingOptions)
+      }, 0)
     })
+  }
+
+  private restoreEditorSelection(editor: HTMLInputElement, options: EditorLaunchOptions | null | undefined, attempt = 0): void {
+    if (!editor.isConnected || this.state.editingNodeId !== editor.dataset.nodeEditor) {
+      return
+    }
+
+    try {
+      editor.focus({ preventScroll: true })
+    } catch {
+      editor.focus()
+    }
+
+    const selectionMode = options?.selection ?? 'all'
+    if (selectionMode === 'end') {
+      const cursor = editor.value.length
+      editor.setSelectionRange(cursor, cursor)
+    } else {
+      editor.select()
+      editor.setSelectionRange(0, editor.value.length)
+    }
+
+    if (this.editorSelectionSettled(editor, selectionMode) || attempt >= 4) {
+      return
+    }
+
+    window.requestAnimationFrame(() => {
+      this.restoreEditorSelection(editor, options, attempt + 1)
+    })
+  }
+
+  private editorSelectionSettled(editor: HTMLInputElement, selectionMode: NonNullable<EditorLaunchOptions['selection']> | 'all'): boolean {
+    if (document.activeElement !== editor) {
+      return false
+    }
+
+    const selectionStart = editor.selectionStart ?? -1
+    const selectionEnd = editor.selectionEnd ?? -1
+    if (selectionMode === 'end') {
+      const cursor = editor.value.length
+      return selectionStart === cursor && selectionEnd === cursor
+    }
+
+    return selectionStart === 0 && selectionEnd === editor.value.length
   }
 
   private selectedNode(): MindNode | undefined {
