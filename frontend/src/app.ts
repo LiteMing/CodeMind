@@ -4315,7 +4315,7 @@ function buildGraphFrame(
     const yawZ = baseX * Math.sin(rotation) + baseZ * Math.cos(rotation)
     const pitchY = baseY * Math.cos(tilt) - yawZ * Math.sin(tilt)
     const pitchZ = baseY * Math.sin(tilt) + yawZ * Math.cos(tilt)
-    const scale = clamp(cameraDistance / (cameraDistance - pitchZ), minScale, maxScale)
+    const scale = clamp(cameraDistance / (cameraDistance + pitchZ), minScale, maxScale)
     const depthProgress = clamp((scale - minScale) / (maxScale - minScale), 0, 1)
     const x = centerX + yawX * scale
     const y = centerY + pitchY * scale - pitchZ * 0.08
@@ -4390,7 +4390,7 @@ function buildGraphFrame(
     })
   }
 
-  const nodes = [...projected.values()].sort((left, right) => left.scale - right.scale || left.depth - right.depth)
+  const nodes = [...projected.values()].sort((left, right) => right.z - left.z || left.depth - right.depth)
   return {
     nodes,
     edges,
