@@ -64,7 +64,7 @@ interface ResizeState {
 
 interface HistorySnapshot {
   document: MindMapDocument
-  selectedNodeId: string
+  selectedNodeId: string | null
   selectedNodeIds: string[]
   connectSourceNodeId: string | null
 }
@@ -132,7 +132,7 @@ interface AppState {
   maps: MindMapSummary[]
   document: MindMapDocument
   currentMapId: string | null
-  selectedNodeId: string
+  selectedNodeId: string | null
   selectedNodeIds: string[]
   editingNodeId: string | null
   connectSourceNodeId: string | null
@@ -426,6 +426,11 @@ class MindMapApp {
     if (closedContextMenu) {
       this.renderOverlay()
       this.renderHeader()
+    }
+
+    const clickedWorkspace = target.closest<HTMLElement>('[data-workspace-scroll]')
+    if (clickedWorkspace) {
+      this.clearSelection()
     }
   }
 
@@ -1050,11 +1055,6 @@ class MindMapApp {
       return
     }
 
-    const selectedNode = this.selectedNode()
-    if (!selectedNode) {
-      return
-    }
-
     this.ensureShell()
     this.renderHeader()
     this.renderWorkspace()
@@ -1297,15 +1297,55 @@ class MindMapApp {
   }
 
   private renderInspector(): void {
+    if (!this.refs) {
+      return
+    }
+
     const selectedNode = this.selectedNode()
-    if (!selectedNode || !this.refs) {
+    const selectedCount = this.selectedNodeIds().length
+    const workspaceMetrics = `
+      <span class="metric-chip">${this.t('dock.selected', { value: selectedCount })}</span>
+      <span class="metric-chip">${this.t('dock.nodes', { value: this.state.document.nodes.length })}</span>
+      <span class="metric-chip">${this.t('dock.relations', { value: this.state.document.relations.length })}</span>
+      <span class="metric-chip">${Math.round(this.viewport.scale * 100)}%</span>
+      <span class="metric-chip">${this.t('dock.theme', { value: themeLabel(this.state.preferences.locale, this.state.document.theme) })}</span>
+    `
+
+    this.refs.inspector.classList.toggle('is-collapsed', this.state.inspectorCollapsed)
+    if (!selectedNode) {
+      this.refs.inspector.innerHTML = this.state.inspectorCollapsed
+        ? `
+          <section class="inspector-card inspector-card-compact inspector-handle-card">
+            <p class="section-label">${this.t('inspector.summary')}</p>
+            <p class="inspector-handle-copy">${this.t('inspector.noneSelected')}</p>
+            <button type="button" class="action-button inspector-toggle-button" data-command="toggle-inspector">${this.t('panel.side.show')}</button>
+          </section>
+        `
+        : `
+          <section class="inspector-card">
+            <div class="inspector-header">
+              <div>
+                <p class="section-label">${this.t('inspector.selected')}</p>
+                <h2>${this.t('inspector.noneSelected')}</h2>
+              </div>
+              <button type="button" class="ghost-button" data-command="toggle-inspector">${this.t('panel.side.hide')}</button>
+            </div>
+            <p class="inspector-copy">${this.t('inspector.emptySelectionCopy')}</p>
+          </section>
+
+          <section class="inspector-card">
+            <p class="section-label">${this.t('panel.workspace')}</p>
+            <div class="metric-row">
+              ${workspaceMetrics}
+            </div>
+          </section>
+        `
       return
     }
 
     const relatedRelations = connectedRelations(this.state.document, selectedNode.id)
     const directChildren = childrenOf(this.state.document, selectedNode.id)
     const hiddenChildren = hiddenDescendantCount(this.state.document, selectedNode.id)
-    const selectedCount = this.selectedNodeIds().length
     const singleSelection = selectedCount === 1
     const canDeleteSelection = this.selectedNodeIds().some((nodeId) => this.findNode(nodeId)?.kind !== 'root')
     const relationModeText = this.state.connectSourceNodeId
@@ -1318,15 +1358,7 @@ class MindMapApp {
       : this.t('context.selectionCount', {
           value: selectedCount,
         })
-    const workspaceMetrics = `
-      <span class="metric-chip">${this.t('dock.selected', { value: selectedCount })}</span>
-      <span class="metric-chip">${this.t('dock.nodes', { value: this.state.document.nodes.length })}</span>
-      <span class="metric-chip">${this.t('dock.relations', { value: this.state.document.relations.length })}</span>
-      <span class="metric-chip">${Math.round(this.viewport.scale * 100)}%</span>
-      <span class="metric-chip">${this.t('dock.theme', { value: themeLabel(this.state.preferences.locale, this.state.document.theme) })}</span>
-    `
 
-    this.refs.inspector.classList.toggle('is-collapsed', this.state.inspectorCollapsed)
     this.refs.inspector.innerHTML = this.state.inspectorCollapsed
       ? `
         <section class="inspector-card inspector-card-compact inspector-handle-card">
@@ -1998,7 +2030,11 @@ class MindMapApp {
   }
 
   private selectedNode(): MindNode | undefined {
-    return this.findNode(this.state.selectedNodeId) ?? findRoot(this.state.document)
+    if (!this.state.selectedNodeId) {
+      return undefined
+    }
+
+    return this.findNode(this.state.selectedNodeId)
   }
 
   private selectedNodeIds(): string[] {
@@ -2012,26 +2048,29 @@ class MindMapApp {
       orderedIds.push(nodeId)
     }
 
-    if (orderedIds.length === 0) {
-      const rootId = findRoot(this.state.document).id
-      return [rootId]
-    }
-
     return orderedIds
   }
 
-  private setSelection(nodeIds: string[], primaryNodeId = nodeIds[nodeIds.length - 1] ?? 'root'): void {
+  private setSelection(nodeIds: string[], primaryNodeId: string | null = nodeIds[nodeIds.length - 1] ?? null): void {
     const normalizedIds = nodeIds.filter((nodeId, index) => {
       return nodeIds.indexOf(nodeId) === index && Boolean(this.findNode(nodeId))
     })
-    const fallbackId = findRoot(this.state.document).id
-    const nextIds = normalizedIds.length > 0 ? normalizedIds : [fallbackId]
-    const nextPrimary = nextIds.includes(primaryNodeId) ? primaryNodeId : nextIds[nextIds.length - 1]
+    const nextIds = normalizedIds
+    const nextPrimary = primaryNodeId && nextIds.includes(primaryNodeId) ? primaryNodeId : nextIds[nextIds.length - 1] ?? null
 
     this.state.selectedNodeIds = nextIds
     this.state.selectedNodeId = nextPrimary
     this.state.editingNodeId = null
     this.pendingEditorOptions = null
+  }
+
+  private clearSelection(): void {
+    if (this.state.selectedNodeIds.length === 0 && this.state.selectedNodeId === null) {
+      return
+    }
+
+    this.setSelection([], null)
+    this.render()
   }
 
   private moveSelectionByArrow(key: 'ArrowUp' | 'ArrowDown' | 'ArrowLeft' | 'ArrowRight' | string): void {
