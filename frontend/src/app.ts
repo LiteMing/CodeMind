@@ -402,6 +402,13 @@ class MindMapApp {
         return
       }
 
+      if (!event.shiftKey && !event.ctrlKey && !event.metaKey && event.detail >= 2) {
+        event.preventDefault()
+        this.setSelection([nodeId], nodeId)
+        this.openNodeEditor(nodeId, { selection: 'all' })
+        return
+      }
+
       if (event.shiftKey) {
         this.selectNodeSubtree(nodeId)
         return
@@ -468,6 +475,10 @@ class MindMapApp {
 
     const nodeButton = target.closest<HTMLElement>('[data-node-button]')
     if (!nodeButton?.dataset.nodeButton) {
+      return
+    }
+
+    if (this.state.editingNodeId === nodeButton.dataset.nodeButton) {
       return
     }
 
@@ -566,6 +577,10 @@ class MindMapApp {
     const dragNodeIds = (this.state.selectedNodeIds.includes(nodeId) ? this.state.selectedNodeIds : [nodeId]).filter((candidateId) => {
       return this.findNode(candidateId)?.kind !== 'root'
     })
+
+    if (event.detail >= 2) {
+      return
+    }
 
     if (!node || dragNodeIds.length === 0 || this.state.editingNodeId === nodeId || this.state.connectSourceNodeId !== null) {
       this.tryStartCanvasPan(event, target)
