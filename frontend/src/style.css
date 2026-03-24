@@ -272,9 +272,9 @@ kbd {
 
 .top-chrome {
   position: absolute;
-  top: 16px;
-  left: 16px;
-  right: 16px;
+  top: 12px;
+  left: 12px;
+  right: 12px;
   z-index: 6;
   display: flex;
   justify-content: flex-start;
@@ -335,33 +335,34 @@ kbd {
 .panel-shell {
   display: flex;
   flex-direction: column;
-  gap: 16px;
-  padding: 18px 20px;
+  gap: 10px;
+  padding: 14px 16px;
 }
 
 .top-panel {
-  width: min(100%, 100rem);
+  width: fit-content;
+  max-width: min(100%, 88rem);
 }
 
 .top-panel-header {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
-  gap: 16px;
+  gap: 12px;
 }
 
 .top-panel-copy {
   flex: 1 1 auto;
   min-width: 0;
   display: grid;
-  gap: 10px;
+  gap: 4px;
 }
 
 .top-panel-title-row {
   display: flex;
   flex-wrap: wrap;
-  align-items: flex-start;
-  gap: 12px 18px;
+  align-items: center;
+  gap: 6px 14px;
 }
 
 .project-copy {
@@ -373,24 +374,24 @@ kbd {
   display: flex;
   flex-wrap: wrap;
   justify-content: flex-end;
-  align-items: flex-start;
-  gap: 10px;
+  align-items: center;
+  gap: 8px;
 }
 
 .top-panel-body {
   display: grid;
-  gap: 12px;
+  gap: 8px;
 }
 
 .toolbar-strip {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
 }
 
 .toolbar-strip-secondary {
-  padding-top: 12px;
+  padding-top: 8px;
   border-top: 1px solid color-mix(in srgb, var(--line) 88%, transparent);
 }
 
@@ -428,17 +429,17 @@ kbd {
 }
 
 .project-copy h1 {
-  font-size: clamp(1.15rem, 1.6vw, 1.45rem);
-  line-height: 1.2;
+  font-size: clamp(1.05rem, 1.3vw, 1.28rem);
+  line-height: 1.1;
 }
 
 .status-pill {
   margin: 0;
   min-width: 0;
-  flex: 1 1 18rem;
-  max-width: 34rem;
-  font-size: 0.82rem;
-  line-height: 1.45;
+  flex: 0 1 22rem;
+  max-width: 22rem;
+  font-size: 0.78rem;
+  line-height: 1.35;
   color: var(--muted);
 }
 
@@ -465,6 +466,11 @@ kbd {
   padding: 10px 14px;
   cursor: pointer;
   white-space: nowrap;
+}
+
+.top-panel .action-button {
+  padding: 8px 12px;
+  border-radius: 12px;
 }
 
 .action-button:hover,
