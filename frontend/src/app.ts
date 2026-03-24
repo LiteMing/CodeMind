@@ -3472,7 +3472,7 @@ class MindMapApp {
       this.viewport.scale = 1
       this.viewport.x = scroll.clientWidth / 2 - rootPosition.x * this.viewport.scale
       this.viewport.y = scroll.clientHeight / 2 - rootPosition.y * this.viewport.scale
-      this.applyCanvasMetrics(bounds)
+      this.applyCanvasMetrics(bounds, false)
       this.updateCanvasViewportView()
     })
     this.didInitializeViewport = true
@@ -3486,9 +3486,18 @@ class MindMapApp {
     return this.state.maps.find((item) => item.id === mapId)
   }
 
-  private applyCanvasMetrics(bounds = getWorkspaceBounds(this.state.document)): void {
+  private applyCanvasMetrics(bounds = getWorkspaceBounds(this.state.document), preserveViewportPosition = this.didInitializeViewport): void {
     if (!this.refs) {
       return
+    }
+
+    if (preserveViewportPosition) {
+      const deltaOriginX = bounds.originX - this.workspaceBounds.originX
+      const deltaOriginY = bounds.originY - this.workspaceBounds.originY
+      if (deltaOriginX !== 0 || deltaOriginY !== 0) {
+        this.viewport.x -= deltaOriginX * this.viewport.scale
+        this.viewport.y -= deltaOriginY * this.viewport.scale
+      }
     }
 
     this.workspaceBounds = bounds
