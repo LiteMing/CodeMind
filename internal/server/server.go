@@ -10,6 +10,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -24,6 +25,11 @@ const (
 	defaultRootY       = 320
 	defaultBranchGapX  = 280
 	defaultBranchGapY  = 100
+)
+
+var (
+	aiJSONBulletPrefixPattern  = regexp.MustCompile(`(?m)^(\s*)[*•-]\s+`)
+	aiJSONTrailingCommaPattern = regexp.MustCompile(`,\s*([}\]])`)
 )
 
 type Server struct {
@@ -477,9 +483,11 @@ func (s *Server) suggestAIRelations(req aiRelationsRequest) (aiRelationsResponse
 func (s *Server) generateAIDocument(req aiGenerateRequest) (aiGenerateResponse, error) {
 	systemPrompt := strings.Join([]string{
 		"You create concise but information-dense knowledge-graph style mind maps.",
-		"Return a root topic, meaningful branches, and a few cross-links.",
+		"Return a root topic, meaningful branches, layered sub-branches, and a few cross-links.",
 		"Keep node titles short enough to fit on a mind map.",
-		"Prefer 10 to 22 nodes total unless the user asks for a larger graph.",
+		"Default to a 2 to 3 level hierarchy instead of a flat root-level list.",
+		"Prefer 4 to 7 first-level branches and 14 to 28 nodes total unless the user asks for a smaller graph.",
+		"When the topic allows it, give major branches 2 to 4 supporting child nodes.",
 		"Include a few semantic relation lines between distant branches when they genuinely help understanding.",
 	}, "\n")
 
@@ -489,6 +497,9 @@ func (s *Server) generateAIDocument(req aiGenerateRequest) (aiGenerateResponse, 
 		fmt.Sprintf("Template direction: %s", templatePrompt),
 		"Output rules:",
 		"- Create exactly one root node.",
+		"- Do not place nearly every node directly under the root.",
+		"- At least 2 first-level branches should include second-level children when the topic allows it.",
+		"- At least 1 branch should reach third-level depth when the topic allows it.",
 		"- Each non-root node must either point to a parentId or be marked as floating.",
 		"- Use relation lines only for semantic cross-links, not for tree structure.",
 		"- Keep labels clear and practical.",
@@ -544,6 +555,21 @@ func (s *Server) generateAIDocument(req aiGenerateRequest) (aiGenerateResponse, 
 	model, err := s.runJSONTask(req.Settings, systemPrompt, userPrompt, schema, &payload)
 	if err != nil {
 		return aiGenerateResponse{}, err
+	}
+	if shouldRetryGeneratedHierarchy(payload) {
+		retryPrompt := strings.Join([]string{
+			userPrompt,
+			"Revision rules:",
+			"- The previous draft was too flat.",
+			"- Rebuild it as a layered hierarchy with coherent sibling groups.",
+			"- Keep 4 to 7 first-level branches, but give at least 2 branches meaningful second-level children.",
+			"- Ensure at least 1 branch reaches third-level depth unless the topic truly cannot support it.",
+			"- Preserve only relation lines that connect distant branches semantically.",
+		}, "\n")
+		model, err = s.runJSONTask(req.Settings, systemPrompt, retryPrompt, schema, &payload)
+		if err != nil {
+			return aiGenerateResponse{}, err
+		}
 	}
 
 	document, err := generatedGraphToDocument(strings.TrimSpace(req.Topic), payload)
@@ -603,18 +629,31 @@ func (s *Server) runJSONTask(settings aiSettingsRequest, systemPrompt string, us
 		return "", err
 	}
 
+	fallbackUsed := false
 	raw, responseModel, err := s.chatCompletion(settings, baseURL, model, systemPrompt, userPrompt, schema)
 	if err != nil && schema != nil {
-		fallbackSystemPrompt := systemPrompt + "\nReturn valid JSON only. Do not wrap it in markdown fences."
+		fallbackUsed = true
+		fallbackSystemPrompt := jsonOnlySystemPrompt(systemPrompt)
 		raw, responseModel, err = s.chatCompletion(settings, baseURL, model, fallbackSystemPrompt, userPrompt, nil)
 	}
 	if err != nil {
 		return "", err
 	}
 
-	normalized := extractJSONObject(raw)
-	if err := json.Unmarshal([]byte(normalized), target); err != nil {
-		return "", fmt.Errorf("failed to parse AI response JSON: %w", err)
+	if err := unmarshalAIJSON(raw, target); err != nil {
+		if schema != nil && !fallbackUsed {
+			fallbackUsed = true
+			fallbackSystemPrompt := jsonOnlySystemPrompt(systemPrompt)
+			raw, responseModel, err = s.chatCompletion(settings, baseURL, model, fallbackSystemPrompt, userPrompt, nil)
+			if err != nil {
+				return "", err
+			}
+			if err := unmarshalAIJSON(raw, target); err != nil {
+				return "", fmt.Errorf("failed to parse AI response JSON: %w", err)
+			}
+		} else {
+			return "", fmt.Errorf("failed to parse AI response JSON: %w", err)
+		}
 	}
 
 	if strings.TrimSpace(responseModel) != "" {
@@ -1080,6 +1119,86 @@ func findGeneratedRoot(nodes []aiGeneratedNode) aiGeneratedNode {
 	return aiGeneratedNode{}
 }
 
+func shouldRetryGeneratedHierarchy(payload aiGeneratedGraph) bool {
+	if len(payload.Nodes) < 7 {
+		return false
+	}
+
+	root := findGeneratedRoot(payload.Nodes)
+	if strings.TrimSpace(root.ID) == "" {
+		return false
+	}
+
+	rootChildren := 0
+	for _, node := range payload.Nodes {
+		if strings.TrimSpace(node.ID) == "" || strings.TrimSpace(node.ID) == strings.TrimSpace(root.ID) {
+			continue
+		}
+		if strings.TrimSpace(node.ParentID) == strings.TrimSpace(root.ID) {
+			rootChildren++
+		}
+	}
+
+	maxDepth := generatedGraphMaxDepth(payload)
+	if rootChildren >= 5 && maxDepth < 2 {
+		return true
+	}
+	if len(payload.Nodes) >= 12 && rootChildren >= 6 && maxDepth < 3 {
+		return true
+	}
+
+	return false
+}
+
+func generatedGraphMaxDepth(payload aiGeneratedGraph) int {
+	root := findGeneratedRoot(payload.Nodes)
+	if strings.TrimSpace(root.ID) == "" {
+		return 0
+	}
+
+	parentByID := make(map[string]string, len(payload.Nodes))
+	for _, node := range payload.Nodes {
+		nodeID := strings.TrimSpace(node.ID)
+		if nodeID == "" {
+			continue
+		}
+		parentByID[nodeID] = strings.TrimSpace(node.ParentID)
+	}
+
+	maxDepth := 0
+	for _, node := range payload.Nodes {
+		nodeID := strings.TrimSpace(node.ID)
+		if nodeID == "" || nodeID == strings.TrimSpace(root.ID) {
+			continue
+		}
+
+		depth := 0
+		current := nodeID
+		visited := map[string]struct{}{}
+		for current != "" && current != strings.TrimSpace(root.ID) {
+			if _, seen := visited[current]; seen {
+				depth = 0
+				break
+			}
+			visited[current] = struct{}{}
+
+			parentID := strings.TrimSpace(parentByID[current])
+			if parentID == "" {
+				depth = 0
+				break
+			}
+			depth++
+			current = parentID
+		}
+
+		if current == strings.TrimSpace(root.ID) && depth > maxDepth {
+			maxDepth = depth
+		}
+	}
+
+	return maxDepth
+}
+
 func parseNodeKind(value string) mindmap.NodeKind {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case string(mindmap.NodeKindFloating):
@@ -1153,19 +1272,108 @@ func isAncestor(parentByID map[string]string, ancestorID string, nodeID string) 
 	return false
 }
 
+func jsonOnlySystemPrompt(systemPrompt string) string {
+	return strings.Join([]string{
+		strings.TrimSpace(systemPrompt),
+		"Return valid JSON only.",
+		"Do not wrap it in markdown fences.",
+		"Do not add commentary, bullet markers, or trailing commas.",
+	}, "\n")
+}
+
+func unmarshalAIJSON(raw string, target any) error {
+	candidates := []string{
+		strings.TrimSpace(raw),
+		extractJSONObject(raw),
+	}
+
+	seen := make(map[string]struct{}, len(candidates))
+	var lastErr error
+	for _, candidate := range candidates {
+		candidate = strings.TrimSpace(candidate)
+		if candidate == "" {
+			continue
+		}
+		if _, exists := seen[candidate]; exists {
+			continue
+		}
+		seen[candidate] = struct{}{}
+
+		if err := json.Unmarshal([]byte(candidate), target); err == nil {
+			return nil
+		} else {
+			lastErr = err
+		}
+	}
+
+	if lastErr == nil {
+		lastErr = errors.New("empty AI response")
+	}
+	return lastErr
+}
+
 func extractJSONObject(raw string) string {
 	trimmed := strings.TrimSpace(raw)
-	trimmed = strings.TrimPrefix(trimmed, "```json")
-	trimmed = strings.TrimPrefix(trimmed, "```")
-	trimmed = strings.TrimSuffix(trimmed, "```")
+	trimmed = strings.NewReplacer(
+		"```json", "",
+		"```JSON", "",
+		"```", "",
+		"“", `"`,
+		"”", `"`,
+		"‘", "'",
+		"’", "'",
+	).Replace(trimmed)
 	trimmed = strings.TrimSpace(trimmed)
 
-	start := strings.Index(trimmed, "{")
-	end := strings.LastIndex(trimmed, "}")
-	if start >= 0 && end > start {
-		return trimmed[start : end+1]
+	if extracted, ok := extractBalancedJSONObject(trimmed); ok {
+		trimmed = extracted
 	}
-	return trimmed
+
+	trimmed = aiJSONBulletPrefixPattern.ReplaceAllString(trimmed, "$1")
+	trimmed = aiJSONTrailingCommaPattern.ReplaceAllString(trimmed, "$1")
+	return strings.TrimSpace(trimmed)
+}
+
+func extractBalancedJSONObject(raw string) (string, bool) {
+	start := strings.Index(raw, "{")
+	if start < 0 {
+		return "", false
+	}
+
+	depth := 0
+	inString := false
+	escaped := false
+	for index := start; index < len(raw); index++ {
+		char := raw[index]
+		if inString {
+			if escaped {
+				escaped = false
+				continue
+			}
+			if char == '\\' {
+				escaped = true
+				continue
+			}
+			if char == '"' {
+				inString = false
+			}
+			continue
+		}
+
+		switch char {
+		case '"':
+			inString = true
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				return raw[start : index+1], true
+			}
+		}
+	}
+
+	return "", false
 }
 
 func fallbackString(value string, fallback string) string {

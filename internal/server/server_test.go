@@ -330,6 +330,168 @@ func TestAIGenerateEndpoint(t *testing.T) {
 	}
 }
 
+func TestAIGenerateEndpointRetriesFlatHierarchy(t *testing.T) {
+	chatCalls := 0
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/models":
+			_, _ = w.Write([]byte(`{"data":[{"id":"qwen-local"}]}`))
+		case "/v1/chat/completions":
+			chatCalls++
+
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				t.Fatalf("failed to read upstream request body: %v", err)
+			}
+			var payload openAIChatRequest
+			if err := json.Unmarshal(body, &payload); err != nil {
+				t.Fatalf("failed to decode upstream chat request: %v", err)
+			}
+
+			switch chatCalls {
+			case 1:
+				if payload.ResponseFormat == nil {
+					t.Fatal("expected first generation call to include schema")
+				}
+				if !strings.Contains(payload.Messages[1].Content, "At least 2 first-level branches should include second-level children") {
+					t.Fatalf("expected hierarchy instruction in initial prompt, got %q", payload.Messages[1].Content)
+				}
+				writeOpenAIChatResponse(t, w, "qwen-local", `{"title":"AI Systems","summary":"Overview","nodes":[{"id":"root-topic","title":"AI Systems","parentId":"","kind":"root","priority":""},{"id":"history","title":"History","parentId":"root-topic","kind":"topic","priority":"P1"},{"id":"models","title":"Models","parentId":"root-topic","kind":"topic","priority":"P1"},{"id":"training","title":"Training","parentId":"root-topic","kind":"topic","priority":""},{"id":"deployment","title":"Deployment","parentId":"root-topic","kind":"topic","priority":""},{"id":"evaluation","title":"Evaluation","parentId":"root-topic","kind":"topic","priority":""},{"id":"safety","title":"Safety","parentId":"root-topic","kind":"topic","priority":""}],"relations":[]}`)
+			case 2:
+				if payload.ResponseFormat == nil {
+					t.Fatal("expected retry generation call to include schema")
+				}
+				if !strings.Contains(payload.Messages[1].Content, "The previous draft was too flat.") {
+					t.Fatalf("expected retry prompt to explain the hierarchy revision, got %q", payload.Messages[1].Content)
+				}
+				writeOpenAIChatResponse(t, w, "qwen-local", `{"title":"AI Systems","summary":"Layered overview","nodes":[{"id":"root-topic","title":"AI Systems","parentId":"","kind":"root","priority":""},{"id":"model-families","title":"Model Families","parentId":"root-topic","kind":"topic","priority":"P1"},{"id":"training","title":"Training","parentId":"root-topic","kind":"topic","priority":"P1"},{"id":"deployment","title":"Deployment","parentId":"root-topic","kind":"topic","priority":""},{"id":"evaluation","title":"Evaluation","parentId":"root-topic","kind":"topic","priority":""},{"id":"transformers","title":"Transformers","parentId":"model-families","kind":"topic","priority":""},{"id":"multimodal","title":"Multimodal","parentId":"model-families","kind":"topic","priority":""},{"id":"pretraining","title":"Pretraining","parentId":"training","kind":"topic","priority":""},{"id":"alignment","title":"Alignment","parentId":"training","kind":"topic","priority":""},{"id":"tokenizers","title":"Tokenizers","parentId":"transformers","kind":"topic","priority":""},{"id":"attention","title":"Attention","parentId":"transformers","kind":"topic","priority":""}],"relations":[{"sourceId":"alignment","targetId":"evaluation","label":"feeds"}]}`)
+			default:
+				t.Fatalf("unexpected extra chat completion call %d", chatCalls)
+			}
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer upstream.Close()
+
+	server := newTestServer(t)
+	server.httpClient = upstream.Client()
+	handler := server.Handler()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/ai/generate", strings.NewReader(`{"settings":{"provider":"openai-compatible","baseUrl":"`+upstream.URL+`","model":"","apiKey":"test-key","maxTokens":4096},"topic":"AI Systems","template":"concept-graph","instructions":"Keep it useful for beginners."}`))
+	req.Header.Set("Content-Type", "application/json")
+	res := httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d with body %s", res.Code, res.Body.String())
+	}
+	if chatCalls != 2 {
+		t.Fatalf("expected hierarchy retry to trigger a second chat call, got %d calls", chatCalls)
+	}
+
+	var payload aiGenerateResponse
+	if err := json.Unmarshal(res.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("failed to decode AI generate response: %v", err)
+	}
+	if depth := documentMaxDepth(payload.Document); depth < 3 {
+		t.Fatalf("expected generated document depth >= 3 after retry, got %d", depth)
+	}
+}
+
+func TestAIGenerateEndpointParsesDirtyJSON(t *testing.T) {
+	dirtyContent := "Here is the JSON:\n```json\n{\n  \"title\": \"Graph Databases\",\n  \"summary\": \"Overview\",\n  \"nodes\": [\n    {\"id\":\"root-topic\",\"title\":\"Graph Databases\",\"parentId\":\"\",\"kind\":\"root\",\"priority\":\"\"},\n    * {\"id\":\"concepts\",\"title\":\"Core Concepts\",\"parentId\":\"root-topic\",\"kind\":\"topic\",\"priority\":\"P1\"},\n    * {\"id\":\"query\",\"title\":\"Query Languages\",\"parentId\":\"concepts\",\"kind\":\"topic\",\"priority\":\"\"},\n  ],\n  \"relations\": [],\n}\n```"
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/models":
+			_, _ = w.Write([]byte(`{"data":[{"id":"gemini-3"}]}`))
+		case "/v1/chat/completions":
+			writeOpenAIChatResponse(t, w, "gemini-3", dirtyContent)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer upstream.Close()
+
+	server := newTestServer(t)
+	server.httpClient = upstream.Client()
+	handler := server.Handler()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/ai/generate", strings.NewReader(`{"settings":{"provider":"openai-compatible","baseUrl":"`+upstream.URL+`","model":"","apiKey":"test-key","maxTokens":4096},"topic":"Graph Databases","template":"concept-graph","instructions":""}`))
+	req.Header.Set("Content-Type", "application/json")
+	res := httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d with body %s", res.Code, res.Body.String())
+	}
+
+	var payload aiGenerateResponse
+	if err := json.Unmarshal(res.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("failed to decode AI generate response: %v", err)
+	}
+	if len(payload.Document.Nodes) != 3 {
+		t.Fatalf("expected dirty JSON response to yield 3 nodes, got %d", len(payload.Document.Nodes))
+	}
+}
+
+func TestAIGenerateEndpointRetriesAfterParseFailure(t *testing.T) {
+	chatCalls := 0
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/models":
+			_, _ = w.Write([]byte(`{"data":[{"id":"gemini-3"}]}`))
+		case "/v1/chat/completions":
+			chatCalls++
+
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				t.Fatalf("failed to read upstream request body: %v", err)
+			}
+			var payload openAIChatRequest
+			if err := json.Unmarshal(body, &payload); err != nil {
+				t.Fatalf("failed to decode upstream chat request: %v", err)
+			}
+
+			if chatCalls == 1 {
+				if payload.ResponseFormat == nil {
+					t.Fatal("expected first chat call to include schema")
+				}
+				writeOpenAIChatResponse(t, w, "gemini-3", "I cannot follow the schema, but here are some bullet ideas:\n* databases\n* queries")
+				return
+			}
+
+			if payload.ResponseFormat != nil {
+				t.Fatal("expected fallback chat call to remove schema")
+			}
+			if !strings.Contains(payload.Messages[0].Content, "Return valid JSON only.") {
+				t.Fatalf("expected fallback system prompt to enforce JSON-only output, got %q", payload.Messages[0].Content)
+			}
+			writeOpenAIChatResponse(t, w, "gemini-3", `{"title":"Graph Databases","summary":"Recovered after fallback","nodes":[{"id":"root-topic","title":"Graph Databases","parentId":"","kind":"root","priority":""},{"id":"concepts","title":"Core Concepts","parentId":"root-topic","kind":"topic","priority":"P1"},{"id":"query","title":"Query Languages","parentId":"concepts","kind":"topic","priority":""}],"relations":[]}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer upstream.Close()
+
+	server := newTestServer(t)
+	server.httpClient = upstream.Client()
+	handler := server.Handler()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/ai/generate", strings.NewReader(`{"settings":{"provider":"openai-compatible","baseUrl":"`+upstream.URL+`","model":"","apiKey":"test-key","maxTokens":4096},"topic":"Graph Databases","template":"concept-graph","instructions":"Return only usable structure."}`))
+	req.Header.Set("Content-Type", "application/json")
+	res := httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d with body %s", res.Code, res.Body.String())
+	}
+	if chatCalls != 2 {
+		t.Fatalf("expected parse failure to trigger fallback call, got %d calls", chatCalls)
+	}
+}
+
 func TestListMapsPreservesLastEditedAt(t *testing.T) {
 	storePath := t.TempDir()
 	handler := New(store.NewFileStore(storePath)).Handler()
@@ -550,4 +712,63 @@ func readStoredDocument(t *testing.T, storePath string, id string) mindmap.Docum
 		t.Fatalf("failed to decode stored document: %v", err)
 	}
 	return doc
+}
+
+func writeOpenAIChatResponse(t *testing.T, w http.ResponseWriter, model string, content string) {
+	t.Helper()
+
+	payload, err := json.Marshal(map[string]any{
+		"model": model,
+		"choices": []map[string]any{
+			{
+				"message": map[string]any{
+					"role":    "assistant",
+					"content": content,
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("failed to marshal chat response: %v", err)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = w.Write(payload)
+}
+
+func documentMaxDepth(doc mindmap.Document) int {
+	maxDepth := 0
+	parentByID := make(map[string]string, len(doc.Nodes))
+	for _, node := range doc.Nodes {
+		parentByID[node.ID] = node.ParentID
+	}
+
+	for _, node := range doc.Nodes {
+		if node.Kind == mindmap.NodeKindRoot {
+			continue
+		}
+
+		depth := 0
+		current := node.ID
+		visited := map[string]struct{}{}
+		for current != "" {
+			parentID := parentByID[current]
+			if parentID == "" {
+				break
+			}
+			if _, seen := visited[current]; seen {
+				depth = 0
+				break
+			}
+			visited[current] = struct{}{}
+			depth++
+			current = parentID
+		}
+
+		if depth > maxDepth {
+			maxDepth = depth
+		}
+	}
+
+	return maxDepth
 }
