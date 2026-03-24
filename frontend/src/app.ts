@@ -3726,8 +3726,34 @@ class MindMapApp {
       context.stroke()
       context.restore()
 
-      context.fillStyle = `rgba(241, 245, 249, ${node.textOpacity})`
       context.font = `${node.fontSize}px "Segoe UI", sans-serif`
+      const labelWidth = context.measureText(node.label).width
+      const labelPlateWidth = Math.max(node.radius * 1.8, labelWidth + 24)
+      const labelPlateHeight = Math.max(node.radius * 0.96, node.fontSize + 12)
+      context.save()
+      context.beginPath()
+      traceRoundedRectPath(
+        context,
+        node.x - labelPlateWidth / 2,
+        node.y - labelPlateHeight / 2,
+        labelPlateWidth,
+        labelPlateHeight,
+        Math.min(labelPlateHeight / 2, 14),
+      )
+      context.fillStyle = node.selected
+        ? 'rgba(79, 70, 229, 0.92)'
+        : node.highlighted
+          ? 'rgba(37, 99, 235, 0.86)'
+          : `rgba(15, 23, 42, ${Math.max(0.84, node.surfaceOpacity)})`
+      context.strokeStyle = node.selected
+        ? 'rgba(199, 210, 254, 0.94)'
+        : `rgba(148, 163, 184, ${Math.max(0.42, node.strokeOpacity * 0.84)})`
+      context.lineWidth = Math.max(1, node.lineWidth * 0.88)
+      context.fill()
+      context.stroke()
+      context.restore()
+
+      context.fillStyle = `rgba(241, 245, 249, ${node.textOpacity})`
       context.fillText(node.label, node.x, node.y)
     }
   }
@@ -4110,11 +4136,12 @@ function buildGraphFrame(
       continue
     }
 
+    const trimmed = trimGraphEdge(source, target)
     edges.push({
-      x1: source.x,
-      y1: source.y,
-      x2: target.x,
-      y2: target.y,
+      x1: trimmed.x1,
+      y1: trimmed.y1,
+      x2: trimmed.x2,
+      y2: trimmed.y2,
       opacity: clamp((source.opacity + target.opacity) / 2 * 0.6, 0.1, 0.76),
       lineWidth: clamp((source.lineWidth + target.lineWidth) / 2 * 0.72, 0.9, 2.2),
       type: 'hierarchy',
@@ -4128,11 +4155,12 @@ function buildGraphFrame(
       continue
     }
 
+    const trimmed = trimGraphEdge(source, target)
     edges.push({
-      x1: source.x,
-      y1: source.y,
-      x2: target.x,
-      y2: target.y,
+      x1: trimmed.x1,
+      y1: trimmed.y1,
+      x2: trimmed.x2,
+      y2: trimmed.y2,
       opacity: clamp((source.opacity + target.opacity) / 2 * 0.7, 0.12, 0.88),
       lineWidth: clamp((source.lineWidth + target.lineWidth) / 2 * 0.9, 1, 2.6),
       type: 'relation',
@@ -4150,6 +4178,55 @@ function buildGraphFrame(
       radius: node.radius,
     })),
   }
+}
+
+function trimGraphEdge(
+  source: { x: number; y: number; radius: number; lineWidth: number },
+  target: { x: number; y: number; radius: number; lineWidth: number },
+): { x1: number; y1: number; x2: number; y2: number } {
+  const dx = target.x - source.x
+  const dy = target.y - source.y
+  const distance = Math.hypot(dx, dy)
+  if (distance < 0.0001) {
+    return {
+      x1: source.x,
+      y1: source.y,
+      x2: target.x,
+      y2: target.y,
+    }
+  }
+
+  const unitX = dx / distance
+  const unitY = dy / distance
+  const sourcePadding = source.radius + Math.max(4.5, source.lineWidth * 1.5)
+  const targetPadding = target.radius + Math.max(4.5, target.lineWidth * 1.5)
+  const safeDistance = Math.max(distance - sourcePadding - targetPadding, 0)
+  return {
+    x1: source.x + unitX * sourcePadding,
+    y1: source.y + unitY * sourcePadding,
+    x2: source.x + unitX * (sourcePadding + safeDistance),
+    y2: source.y + unitY * (sourcePadding + safeDistance),
+  }
+}
+
+function traceRoundedRectPath(
+  context: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  radius: number,
+): void {
+  const safeRadius = Math.min(radius, width / 2, height / 2)
+  context.moveTo(x + safeRadius, y)
+  context.lineTo(x + width - safeRadius, y)
+  context.quadraticCurveTo(x + width, y, x + width, y + safeRadius)
+  context.lineTo(x + width, y + height - safeRadius)
+  context.quadraticCurveTo(x + width, y + height, x + width - safeRadius, y + height)
+  context.lineTo(x + safeRadius, y + height)
+  context.quadraticCurveTo(x, y + height, x, y + height - safeRadius)
+  context.lineTo(x, y + safeRadius)
+  context.quadraticCurveTo(x, y, x + safeRadius, y)
 }
 
 function graphNodeDepth(document: MindMapDocument, node: MindNode): number {
