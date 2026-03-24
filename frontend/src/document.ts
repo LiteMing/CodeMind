@@ -3,6 +3,13 @@ import type { MindMapDocument, MindNode, Position, RelationEdge } from './types'
 const ROOT_POSITION: Position = { x: 820, y: 320 }
 const NODE_GAP_X = 280
 const NODE_GAP_Y = 96
+const DEFAULT_ROOT_WIDTH = 220
+const DEFAULT_NODE_WIDTH = 196
+const DEFAULT_ROOT_HEIGHT = 74
+const DEFAULT_NODE_HEIGHT = 62
+const PLACEMENT_PADDING_X = 34
+const PLACEMENT_PADDING_Y = 18
+const PLACEMENT_SEARCH_STEPS = 24
 
 export function createDefaultDocument(): MindMapDocument {
   const now = new Date().toISOString()
@@ -138,12 +145,10 @@ export function nextChildPosition(document: MindMapDocument, parentId: string): 
   }
 
   const children = childrenOf(document, parentId)
-  if (children.length === 0) {
-    return { x: parent.position.x + NODE_GAP_X, y: parent.position.y }
-  }
-
-  const lastChild = children[children.length - 1]
-  return { x: parent.position.x + NODE_GAP_X, y: lastChild.position.y + NODE_GAP_Y }
+  const direction = branchDirection(document, parent)
+  const targetX = resolveChildColumn(parent, children, direction)
+  const targetY = children.length === 0 ? parent.position.y : children[children.length - 1].position.y + NODE_GAP_Y
+  return findAvailablePosition(document, { x: targetX, y: targetY }, 'topic')
 }
 
 export function nextSiblingPosition(document: MindMapDocument, node: MindNode): Position {
@@ -153,7 +158,11 @@ export function nextSiblingPosition(document: MindMapDocument, node: MindNode): 
 
   const siblings = childrenOf(document, node.parentId)
   const lastSibling = siblings[siblings.length - 1]
-  return { x: node.position.x, y: lastSibling.position.y + NODE_GAP_Y }
+  return findAvailablePosition(
+    document,
+    { x: lastSibling.position.x, y: lastSibling.position.y + NODE_GAP_Y },
+    node.kind === 'floating' ? 'floating' : 'topic',
+  )
 }
 
 export function nextFloatingPosition(document: MindMapDocument): Position {
@@ -163,11 +172,100 @@ export function nextFloatingPosition(document: MindMapDocument): Position {
 
   if (floatingNodes.length === 0) {
     const root = findRoot(document)
-    return { x: root.position.x - 140, y: root.position.y + 180 }
+    return findAvailablePosition(document, { x: root.position.x - 140, y: root.position.y + 180 }, 'floating')
   }
 
   const lastFloatingNode = floatingNodes[floatingNodes.length - 1]
-  return { x: lastFloatingNode.position.x + 36, y: lastFloatingNode.position.y + NODE_GAP_Y }
+  return findAvailablePosition(document, { x: lastFloatingNode.position.x + 36, y: lastFloatingNode.position.y + NODE_GAP_Y }, 'floating')
+}
+
+function branchDirection(document: MindMapDocument, node: MindNode): -1 | 1 {
+  if (node.parentId) {
+    const parent = findNode(document, node.parentId)
+    if (parent) {
+      return node.position.x < parent.position.x ? -1 : 1
+    }
+  }
+
+  const root = findRoot(document)
+  return node.position.x < root.position.x ? -1 : 1
+}
+
+function resolveChildColumn(parent: MindNode, children: MindNode[], direction: -1 | 1): number {
+  if (children.length === 0) {
+    return parent.position.x + direction * NODE_GAP_X
+  }
+
+  return direction === -1
+    ? Math.min(parent.position.x - NODE_GAP_X, ...children.map((child) => child.position.x))
+    : Math.max(parent.position.x + NODE_GAP_X, ...children.map((child) => child.position.x))
+}
+
+function findAvailablePosition(document: MindMapDocument, preferred: Position, kind: MindNode['kind']): Position {
+  for (let step = 0; step <= PLACEMENT_SEARCH_STEPS; step += 1) {
+    const candidate = {
+      x: preferred.x,
+      y: preferred.y + step * NODE_GAP_Y,
+    }
+    if (!positionCollides(document, candidate, kind)) {
+      return candidate
+    }
+  }
+
+  return {
+    x: preferred.x,
+    y: preferred.y + (PLACEMENT_SEARCH_STEPS + 1) * NODE_GAP_Y,
+  }
+}
+
+function positionCollides(document: MindMapDocument, position: Position, kind: MindNode['kind']): boolean {
+  const candidateBounds = nodeBounds({
+    kind,
+    width: defaultNodeWidth(kind),
+    height: defaultNodeHeight(kind),
+    position,
+  })
+
+  return document.nodes.some((node) => {
+    const existingBounds = nodeBounds({
+      kind: node.kind,
+      width: node.width ?? defaultNodeWidth(node.kind),
+      height: node.height ?? defaultNodeHeight(node.kind),
+      position: node.position,
+    })
+
+    return !(
+      candidateBounds.right < existingBounds.left ||
+      candidateBounds.left > existingBounds.right ||
+      candidateBounds.bottom < existingBounds.top ||
+      candidateBounds.top > existingBounds.bottom
+    )
+  })
+}
+
+function nodeBounds(input: { kind: MindNode['kind']; width: number; height: number; position: Position }): {
+  left: number
+  right: number
+  top: number
+  bottom: number
+} {
+  const width = Math.max(input.width, defaultNodeWidth(input.kind))
+  const height = Math.max(input.height, defaultNodeHeight(input.kind))
+
+  return {
+    left: input.position.x - width / 2 - PLACEMENT_PADDING_X,
+    right: input.position.x + width / 2 + PLACEMENT_PADDING_X,
+    top: input.position.y - height / 2 - PLACEMENT_PADDING_Y,
+    bottom: input.position.y + height / 2 + PLACEMENT_PADDING_Y,
+  }
+}
+
+function defaultNodeWidth(kind: MindNode['kind']): number {
+  return kind === 'root' ? DEFAULT_ROOT_WIDTH : DEFAULT_NODE_WIDTH
+}
+
+function defaultNodeHeight(kind: MindNode['kind']): number {
+  return kind === 'root' ? DEFAULT_ROOT_HEIGHT : DEFAULT_NODE_HEIGHT
 }
 
 export function touchDocument(document: MindMapDocument): void {
