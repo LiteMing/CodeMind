@@ -34,6 +34,7 @@ export function createNode(input: {
   position: Position
   kind: MindNode['kind']
   parentId?: string
+  color?: MindNode['color']
 }): MindNode {
   const now = new Date().toISOString()
   return {
@@ -41,6 +42,7 @@ export function createNode(input: {
     title: input.title,
     kind: input.kind,
     parentId: input.parentId,
+    color: input.color,
     position: input.position,
     createdAt: now,
     updatedAt: now,

@@ -36,6 +36,8 @@ const (
 	Priority3    Priority = "P3"
 )
 
+type NodeColor string
+
 type Position struct {
 	X float64 `json:"x"`
 	Y float64 `json:"y"`
@@ -47,6 +49,7 @@ type Node struct {
 	Kind      NodeKind  `json:"kind"`
 	Title     string    `json:"title"`
 	Priority  Priority  `json:"priority,omitempty"`
+	Color     NodeColor `json:"color,omitempty"`
 	Collapsed bool      `json:"collapsed,omitempty"`
 	Width     float64   `json:"width,omitempty"`
 	Height    float64   `json:"height,omitempty"`

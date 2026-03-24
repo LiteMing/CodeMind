@@ -1,4 +1,4 @@
-import type { Locale, Theme } from './types'
+import type { Locale, NodeColor, Theme } from './types'
 
 const messages = {
   en: {
@@ -51,6 +51,7 @@ const messages = {
     'inspector.relationsCount': 'Relations: {{value}}',
     'inspector.hidden': 'Hidden: {{value}}',
     'inspector.position': 'Position: {{x}}, {{y}}',
+    'inspector.color': 'Node Color',
     'inspector.noneSelected': 'No node selected',
     'inspector.emptySelectionCopy': 'Click a node to inspect it, or double-click to rename it.',
     'inspector.emptyRelations': 'No relation lines yet. Start relation mode and click another node.',
@@ -67,6 +68,14 @@ const messages = {
     'action.delete': 'Delete',
     'action.remove': 'Remove',
     'priority.clear': 'Clear',
+    'color.clear': 'Clear',
+    'color.slate': 'Slate',
+    'color.blue': 'Blue',
+    'color.teal': 'Teal',
+    'color.green': 'Green',
+    'color.amber': 'Amber',
+    'color.rose': 'Rose',
+    'color.violet': 'Violet',
     'interaction.addChild': 'Add child node',
     'interaction.addSibling': 'Add sibling or floating node',
     'interaction.deleteSubtree': 'Delete the selected node subtree',
@@ -116,6 +125,8 @@ const messages = {
     'status.deletedSummary': 'Deleted {{nodes}} node(s) and {{relations}} relation(s).',
     'status.priorityApplied': '{{priority}} badge applied.',
     'status.priorityCleared': 'Priority badge cleared.',
+    'status.colorApplied': '{{color}} color applied.',
+    'status.colorCleared': 'Node color cleared.',
     'status.nodeTitleUpdated': 'Node title updated.',
     'status.relationLabelUpdated': 'Relation label updated.',
     'status.noBranchToCollapse': 'This node has no branch to collapse.',
@@ -150,6 +161,7 @@ const messages = {
     'status.themeSaveScheduled': 'Theme change scheduled for save.',
     'status.layoutSaveScheduled': 'Layout update scheduled for save.',
     'status.prioritySaveScheduled': 'Priority change scheduled for save.',
+    'status.colorSaveScheduled': 'Node color change scheduled for save.',
     'status.deletionSaveScheduled': 'Deletion scheduled for save.',
     'status.relationSaveScheduled': 'Relation line scheduled for save.',
     'status.relationRemovalSaveScheduled': 'Relation removal scheduled for save.',
@@ -277,6 +289,7 @@ const messages = {
     'inspector.relationsCount': '关系：{{value}}',
     'inspector.hidden': '隐藏：{{value}}',
     'inspector.position': '位置：{{x}}, {{y}}',
+    'inspector.color': '\u8282\u70b9\u989c\u8272',
     'inspector.emptyRelations': '还没有关系线。先开启关系模式，再点击另一个节点。',
     'inspector.relationIdle': '手动关系模式当前未启用。',
     'inspector.relationConnecting': '正在从“{{title}}”建立关系。点击另一个节点完成，或按 Esc 取消。',
@@ -291,6 +304,14 @@ const messages = {
     'action.delete': '删除',
     'action.remove': '移除',
     'priority.clear': '清除',
+    'color.clear': '\u6e05\u9664',
+    'color.slate': '\u94c1\u7070',
+    'color.blue': '\u84dd\u8272',
+    'color.teal': '\u84dd\u7eff',
+    'color.green': '\u7eff\u8272',
+    'color.amber': '\u7425\u73c0',
+    'color.rose': '\u73ab\u7470',
+    'color.violet': '\u7d2b\u7f57\u5170',
     'interaction.addChild': '新增子节点',
     'interaction.addSibling': '新增同级或自由节点',
     'interaction.deleteSubtree': '删除当前节点及其子树',
@@ -340,6 +361,8 @@ const messages = {
     'status.deletedSummary': '已删除 {{nodes}} 个节点和 {{relations}} 条关系线。',
     'status.priorityApplied': '已设置 {{priority}} 标记。',
     'status.priorityCleared': '已清除优先级标记。',
+    'status.colorApplied': '\u5df2\u8bbe\u7f6e {{color}} \u989c\u8272\u3002',
+    'status.colorCleared': '\u5df2\u6e05\u9664\u8282\u70b9\u989c\u8272\u3002',
     'status.nodeTitleUpdated': '节点标题已更新。',
     'status.relationLabelUpdated': '关系说明已更新。',
     'status.noBranchToCollapse': '当前节点没有可折叠分支。',
@@ -374,6 +397,7 @@ const messages = {
     'status.themeSaveScheduled': '主题变更已加入待保存队列。',
     'status.layoutSaveScheduled': '布局变更已加入待保存队列。',
     'status.prioritySaveScheduled': '优先级变更已加入待保存队列。',
+    'status.colorSaveScheduled': '\u8282\u70b9\u989c\u8272\u53d8\u66f4\u5df2\u52a0\u5165\u5f85\u4fdd\u5b58\u961f\u5217\u3002',
     'status.deletionSaveScheduled': '删除操作已加入待保存队列。',
     'status.relationSaveScheduled': '关系线已加入待保存队列。',
     'status.relationRemovalSaveScheduled': '关系线移除已加入待保存队列。',
@@ -466,6 +490,27 @@ export function translate(locale: Locale, key: TranslationKey, values?: Record<s
 
 export function themeLabel(locale: Locale, theme: Theme): string {
   return translate(locale, theme === 'dark' ? 'settings.theme.dark' : 'settings.theme.light')
+}
+
+export function nodeColorLabel(locale: Locale, color: NodeColor): string {
+  switch (color) {
+    case 'slate':
+      return translate(locale, 'color.slate')
+    case 'blue':
+      return translate(locale, 'color.blue')
+    case 'teal':
+      return translate(locale, 'color.teal')
+    case 'green':
+      return translate(locale, 'color.green')
+    case 'amber':
+      return translate(locale, 'color.amber')
+    case 'rose':
+      return translate(locale, 'color.rose')
+    case 'violet':
+      return translate(locale, 'color.violet')
+    default:
+      return translate(locale, 'color.clear')
+  }
 }
 
 export function kindLabel(locale: Locale, kind: string): string {

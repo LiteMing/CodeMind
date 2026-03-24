@@ -6,6 +6,7 @@ export type AITemplateId = 'concept-graph' | 'project-planning' | 'character-net
 export type NodeKind = 'root' | 'topic' | 'floating'
 
 export type Priority = '' | 'P0' | 'P1' | 'P2' | 'P3'
+export type NodeColor = '' | 'slate' | 'blue' | 'teal' | 'green' | 'amber' | 'rose' | 'violet'
 
 export interface Position {
   x: number
@@ -18,6 +19,7 @@ export interface MindNode {
   kind: NodeKind
   title: string
   priority?: Priority
+  color?: NodeColor
   collapsed?: boolean
   width?: number
   height?: number

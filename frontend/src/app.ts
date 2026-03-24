@@ -19,7 +19,7 @@ import {
   updateRelationLabel,
   visibleNodeIds,
 } from './document'
-import { type TranslationKey, kindLabel, themeLabel, translate } from './i18n'
+import { type TranslationKey, kindLabel, nodeColorLabel, themeLabel, translate } from './i18n'
 import { DEFAULT_AI_MAX_TOKENS, DEFAULT_LM_STUDIO_URL, loadPreferences, normalizeAIMaxTokens, savePreferences } from './preferences'
 import type {
   AppPreferences,
@@ -28,6 +28,7 @@ import type {
   MindMapDocument,
   MindMapSummary,
   MindNode,
+  NodeColor,
   Position,
   Priority,
   RelationEdge,
@@ -197,6 +198,7 @@ interface CopiedSubtreeNode {
   kind: MindNode['kind']
   title: string
   priority?: Priority
+  color?: NodeColor
   collapsed?: boolean
   width?: number
   height?: number
@@ -218,11 +220,90 @@ const MIN_NODE_WIDTH = 170
 const MIN_NODE_HEIGHT = 52
 const HISTORY_LIMIT = 120
 const PRIORITY_VALUES: Priority[] = ['', 'P0', 'P1', 'P2', 'P3']
+const NODE_COLOR_VALUES: NodeColor[] = ['', 'slate', 'blue', 'teal', 'green', 'amber', 'rose', 'violet']
 const AI_TEMPLATES: Array<{ id: AITemplateId }> = [
   { id: 'concept-graph' },
   { id: 'project-planning' },
   { id: 'character-network' },
 ]
+
+type NodeColorChoice = Exclude<NodeColor, ''>
+
+interface NodeColorPalette {
+  accent: string
+  accentRgb: [number, number, number]
+  surfaceRgb: [number, number, number]
+  plateRgb: [number, number, number]
+  glowRgb: [number, number, number]
+  text: string
+  labelKey: TranslationKey
+}
+
+const NODE_COLOR_PALETTES: Record<NodeColorChoice, NodeColorPalette> = {
+  slate: {
+    accent: '#94a3b8',
+    accentRgb: [148, 163, 184],
+    surfaceRgb: [71, 85, 105],
+    plateRgb: [51, 65, 85],
+    glowRgb: [148, 163, 184],
+    text: '#f8fafc',
+    labelKey: 'color.slate',
+  },
+  blue: {
+    accent: '#60a5fa',
+    accentRgb: [96, 165, 250],
+    surfaceRgb: [37, 99, 235],
+    plateRgb: [29, 78, 216],
+    glowRgb: [96, 165, 250],
+    text: '#eff6ff',
+    labelKey: 'color.blue',
+  },
+  teal: {
+    accent: '#2dd4bf',
+    accentRgb: [45, 212, 191],
+    surfaceRgb: [13, 148, 136],
+    plateRgb: [15, 118, 110],
+    glowRgb: [45, 212, 191],
+    text: '#ecfeff',
+    labelKey: 'color.teal',
+  },
+  green: {
+    accent: '#4ade80',
+    accentRgb: [74, 222, 128],
+    surfaceRgb: [22, 163, 74],
+    plateRgb: [21, 128, 61],
+    glowRgb: [74, 222, 128],
+    text: '#f0fdf4',
+    labelKey: 'color.green',
+  },
+  amber: {
+    accent: '#f59e0b',
+    accentRgb: [245, 158, 11],
+    surfaceRgb: [217, 119, 6],
+    plateRgb: [180, 83, 9],
+    glowRgb: [245, 158, 11],
+    text: '#fffbeb',
+    labelKey: 'color.amber',
+  },
+  rose: {
+    accent: '#fb7185',
+    accentRgb: [251, 113, 133],
+    surfaceRgb: [225, 29, 72],
+    plateRgb: [190, 24, 93],
+    glowRgb: [251, 113, 133],
+    text: '#fff1f2',
+    labelKey: 'color.rose',
+  },
+  violet: {
+    accent: '#a78bfa',
+    accentRgb: [167, 139, 250],
+    surfaceRgb: [109, 40, 217],
+    plateRgb: [91, 33, 182],
+    glowRgb: [167, 139, 250],
+    text: '#f5f3ff',
+    labelKey: 'color.violet',
+  },
+}
 
 export async function createApp(rootEl: HTMLElement): Promise<void> {
   const app = new MindMapApp(rootEl)
@@ -374,6 +455,12 @@ class MindMapApp {
     const priority = target.closest<HTMLElement>('[data-priority]')?.dataset.priority as Priority | undefined
     if (priority !== undefined) {
       this.setPriority(priority)
+      return
+    }
+
+    const nodeColor = target.closest<HTMLElement>('[data-node-color]')?.dataset.nodeColor as NodeColor | undefined
+    if (nodeColor !== undefined) {
+      this.setNodeColor(normalizeNodeColor(nodeColor))
       return
     }
 
@@ -1390,6 +1477,12 @@ class MindMapApp {
           <div class="priority-row">
             ${PRIORITY_VALUES.map((priority) => this.renderPriorityButton(priority, selectedNode.priority ?? '')).join('')}
           </div>
+          <div class="inspector-color-group">
+            <p class="section-label">${this.t('inspector.color')}</p>
+            <div class="color-row">
+              ${NODE_COLOR_VALUES.map((color) => this.renderNodeColorButton(color, selectedNode.color ?? '')).join('')}
+            </div>
+          </div>
           <div class="action-grid">
             <button type="button" class="chip-button" data-command="new-child" ${singleSelection ? '' : 'disabled'}>${this.t('action.newChild')}</button>
             <button type="button" class="chip-button" data-command="new-sibling" ${singleSelection ? '' : 'disabled'}>${this.t('action.newSibling')}</button>
@@ -1873,9 +1966,11 @@ class MindMapApp {
     return this.state.document.nodes
       .filter((node) => visibleIds.has(node.id))
       .map((node) => {
+        const nodeColor = normalizeNodeColor(node.color)
         const classes = [
           'node-card',
           `node-${node.kind}`,
+          nodeColor ? 'has-color' : '',
           node.id === this.state.selectedNodeId ? 'is-selected' : '',
           selectedIds.has(node.id) && node.id !== this.state.selectedNodeId ? 'is-selected-secondary' : '',
           node.id === this.state.connectSourceNodeId ? 'is-connect-source' : '',
@@ -1894,6 +1989,7 @@ class MindMapApp {
           : ''
 
         const nodeDimensions = buildNodeDimensionStyle(node)
+        const nodePresentationStyle = buildNodeColorStyle(nodeColor)
 
         const content = this.state.editingNodeId === node.id
           ? `<input class="node-editor" type="text" style="${nodeDimensions}" data-node-editor="${node.id}" value="${escapeAttribute(node.title)}" maxlength="120" />`
@@ -1911,7 +2007,7 @@ class MindMapApp {
           <article
             class="${classes}"
             data-node-id="${node.id}"
-            style="left: ${node.position.x}px; top: ${node.position.y}px;"
+            style="left: ${node.position.x}px; top: ${node.position.y}px; ${nodePresentationStyle}"
           >
             ${content}
             ${resizeHandle}
@@ -1925,6 +2021,28 @@ class MindMapApp {
     const label = priority === '' ? this.t('priority.clear') : priority
     const active = selectedPriority === priority
     return `<button type="button" class="chip-button ${active ? 'is-active' : ''}" data-priority="${priority}">${label}</button>`
+  }
+
+  private renderNodeColorButton(color: NodeColor, selectedColor: NodeColor): string {
+    const active = selectedColor === color
+    if (color === '') {
+      return `<button type="button" class="color-button color-button-clear ${active ? 'is-active' : ''}" data-node-color="" title="${escapeAttribute(this.t('color.clear'))}" aria-label="${escapeAttribute(this.t('color.clear'))}">${this.t('color.clear')}</button>`
+    }
+
+    const palette = NODE_COLOR_PALETTES[color]
+    const label = this.t(palette.labelKey)
+    return `
+      <button
+        type="button"
+        class="color-button ${active ? 'is-active' : ''}"
+        data-node-color="${color}"
+        title="${escapeAttribute(label)}"
+        aria-label="${escapeAttribute(label)}"
+        style="--color-swatch: ${palette.accent};"
+      >
+        <span class="color-button-swatch"></span>
+      </button>
+    `
   }
 
   private renderRelationList(nodeId: string): string {
@@ -2154,6 +2272,7 @@ class MindMapApp {
           kind: node.kind,
           title: node.title,
           priority: node.priority,
+          color: normalizeNodeColor(node.color) || undefined,
           collapsed: node.collapsed,
           width: node.width,
           height: node.height,
@@ -2225,6 +2344,7 @@ class MindMapApp {
         kind: nodeKind,
         title: snapshot.title,
         priority: snapshot.priority,
+        color: snapshot.color,
         collapsed: snapshot.collapsed,
         width: snapshot.width,
         height: snapshot.height,
@@ -2308,6 +2428,7 @@ class MindMapApp {
       kind: 'topic',
       position: nextChildPosition(this.state.document, parentId),
       title: this.t('node.newChild'),
+      color: normalizeNodeColor(parent.color) || undefined,
     })
 
     this.state.document.nodes.push(newNode)
@@ -2331,6 +2452,7 @@ class MindMapApp {
         kind: 'floating',
         position: nextFloatingPosition(this.state.document),
         title: this.t('node.newFloating'),
+        color: normalizeNodeColor(node.color) || undefined,
       })
     } else if (node.parentId) {
       newNode = createNode({
@@ -2338,12 +2460,14 @@ class MindMapApp {
         kind: 'topic',
         position: nextSiblingPosition(this.state.document, node),
         title: this.t('node.newSibling'),
+        color: normalizeNodeColor(node.color) || undefined,
       })
     } else {
       newNode = createNode({
         kind: 'floating',
         position: nextFloatingPosition(this.state.document),
         title: this.t('node.newFloating'),
+        color: normalizeNodeColor(node.color) || undefined,
       })
     }
 
@@ -2465,6 +2589,36 @@ class MindMapApp {
     this.setStatus(priority ? 'status.priorityApplied' : 'status.priorityCleared', priority ? { priority } : undefined)
     this.render()
     this.scheduleAutosave('status.prioritySaveScheduled')
+  }
+
+  private setNodeColor(color: NodeColor): void {
+    const targetIds = this.selectedNodeIds().filter((nodeId) => Boolean(this.findNode(nodeId)))
+    if (targetIds.length === 0) {
+      return
+    }
+
+    const nextColor = normalizeNodeColor(color) || undefined
+    const targetNodes = targetIds
+      .map((nodeId) => this.findNode(nodeId))
+      .filter((node): node is MindNode => Boolean(node))
+
+    if (targetNodes.every((node) => (normalizeNodeColor(node.color) || undefined) === nextColor)) {
+      return
+    }
+
+    this.captureHistory()
+    for (const node of targetNodes) {
+      this.updateNode(node.id, (draft) => {
+        draft.color = nextColor
+      })
+    }
+    touchDocument(this.state.document)
+    this.setStatus(
+      color ? 'status.colorApplied' : 'status.colorCleared',
+      color ? { color: nodeColorLabel(this.state.preferences.locale, color) } : undefined,
+    )
+    this.render()
+    this.scheduleAutosave('status.colorSaveScheduled')
   }
 
   private updateNode(nodeId: string, updater: (node: MindNode) => void): void {
@@ -3696,10 +3850,11 @@ class MindMapApp {
     context.textAlign = 'center'
     context.textBaseline = 'middle'
     for (const node of frame.nodes) {
+      const nodePalette = resolveNodeColorPalette(node.color)
       const occlusionRadius = node.radius + Math.max(3.2, node.lineWidth * 1.25)
       context.save()
       context.beginPath()
-      context.fillStyle = `rgba(9, 14, 24, ${node.occlusionOpacity})`
+      context.fillStyle = nodePalette ? rgbaFromRgb(nodePalette.plateRgb, node.occlusionOpacity) : `rgba(9, 14, 24, ${node.occlusionOpacity})`
       context.arc(node.x, node.y, occlusionRadius, 0, Math.PI * 2)
       context.fill()
       context.restore()
@@ -3710,16 +3865,22 @@ class MindMapApp {
         ? 'rgba(129, 140, 248, 0.48)'
         : node.highlighted
           ? 'rgba(96, 165, 250, 0.34)'
-          : `rgba(56, 189, 248, ${Math.min(0.22, node.opacity * 0.22)})`
+          : nodePalette
+            ? rgbaFromRgb(nodePalette.glowRgb, Math.min(0.34, node.opacity * 0.3))
+            : `rgba(56, 189, 248, ${Math.min(0.22, node.opacity * 0.22)})`
       context.shadowBlur = node.glow
       context.fillStyle = node.selected
         ? 'rgba(129, 140, 248, 0.95)'
         : node.highlighted
           ? 'rgba(96, 165, 250, 0.92)'
-          : `rgba(30, 41, 59, ${node.surfaceOpacity})`
+          : nodePalette
+            ? rgbaFromRgb(nodePalette.surfaceRgb, node.surfaceOpacity)
+            : `rgba(30, 41, 59, ${node.surfaceOpacity})`
       context.strokeStyle = node.selected
         ? 'rgba(199, 210, 254, 0.95)'
-        : `rgba(148, 163, 184, ${node.strokeOpacity})`
+        : nodePalette
+          ? rgbaFromRgb(nodePalette.accentRgb, Math.max(0.42, node.strokeOpacity))
+          : `rgba(148, 163, 184, ${node.strokeOpacity})`
       context.lineWidth = node.lineWidth
       context.arc(node.x, node.y, node.radius, 0, Math.PI * 2)
       context.fill()
@@ -3744,16 +3905,22 @@ class MindMapApp {
         ? 'rgba(79, 70, 229, 0.92)'
         : node.highlighted
           ? 'rgba(37, 99, 235, 0.86)'
-          : `rgba(15, 23, 42, ${Math.max(0.84, node.surfaceOpacity)})`
+          : nodePalette
+            ? rgbaFromRgb(nodePalette.plateRgb, Math.max(0.9, node.surfaceOpacity))
+            : `rgba(15, 23, 42, ${Math.max(0.84, node.surfaceOpacity)})`
       context.strokeStyle = node.selected
         ? 'rgba(199, 210, 254, 0.94)'
-        : `rgba(148, 163, 184, ${Math.max(0.42, node.strokeOpacity * 0.84)})`
+        : nodePalette
+          ? rgbaFromRgb(nodePalette.accentRgb, Math.max(0.52, node.strokeOpacity * 0.88))
+          : `rgba(148, 163, 184, ${Math.max(0.42, node.strokeOpacity * 0.84)})`
       context.lineWidth = Math.max(1, node.lineWidth * 0.88)
       context.fill()
       context.stroke()
       context.restore()
 
-      context.fillStyle = `rgba(241, 245, 249, ${node.textOpacity})`
+      context.fillStyle = nodePalette
+        ? applyAlphaToHex(nodePalette.text, node.textOpacity)
+        : `rgba(241, 245, 249, ${node.textOpacity})`
       context.fillText(node.label, node.x, node.y)
     }
   }
@@ -4032,6 +4199,7 @@ function buildGraphFrame(
     y: number
     radius: number
     label: string
+    color: NodeColor
     opacity: number
     occlusionOpacity: number
     surfaceOpacity: number
@@ -4063,6 +4231,7 @@ function buildGraphFrame(
       depth: number
       z: number
       scale: number
+      color: NodeColor
       opacity: number
       occlusionOpacity: number
       surfaceOpacity: number
@@ -4112,6 +4281,7 @@ function buildGraphFrame(
       depth,
       z: pitchZ,
       scale,
+      color: normalizeNodeColor(node.color),
       opacity: clamp(0.2 + depthProgress * 0.78 + emphasisBoost, 0.2, 1),
       occlusionOpacity: clamp(0.9 + depthProgress * 0.08, 0.9, 0.98),
       surfaceOpacity: clamp(0.72 + depthProgress * 0.24 + emphasisBoost * 0.08, 0.72, 0.98),
@@ -4254,6 +4424,51 @@ function buildNodeDimensionStyle(node: MindNode): string {
     styles.push(`height: ${Math.max(node.height, MIN_NODE_HEIGHT)}px;`)
   }
   return styles.join(' ')
+}
+
+function buildNodeColorStyle(color: NodeColor): string {
+  const palette = resolveNodeColorPalette(color)
+  if (!palette) {
+    return ''
+  }
+
+  return `--node-color: ${palette.accent}; --node-color-text-override: ${palette.text};`
+}
+
+function normalizeNodeColor(value: string | null | undefined): NodeColor {
+  return NODE_COLOR_VALUES.includes(value as NodeColor) ? (value as NodeColor) : ''
+}
+
+function resolveNodeColorPalette(color: NodeColor): NodeColorPalette | null {
+  return color ? NODE_COLOR_PALETTES[color] : null
+}
+
+function rgbaFromRgb(rgb: [number, number, number], alpha: number): string {
+  return `rgba(${rgb[0]}, ${rgb[1]}, ${rgb[2]}, ${clamp(alpha, 0, 1)})`
+}
+
+function applyAlphaToHex(hex: string, alpha: number): string {
+  const rgb = hexToRgb(hex)
+  return rgbaFromRgb(rgb ?? [241, 245, 249], alpha)
+}
+
+function hexToRgb(hex: string): [number, number, number] | null {
+  const normalized = hex.trim().replace('#', '')
+  const expanded = normalized.length === 3 ? normalized.split('').map((value) => `${value}${value}`).join('') : normalized
+  if (expanded.length !== 6) {
+    return null
+  }
+
+  const value = Number.parseInt(expanded, 16)
+  if (Number.isNaN(value)) {
+    return null
+  }
+
+  return [
+    (value >> 16) & 0xff,
+    (value >> 8) & 0xff,
+    value & 0xff,
+  ]
 }
 
 function formatRelativeTime(value: string, locale: Locale): string {

@@ -620,6 +620,63 @@ kbd {
   margin-top: 12px;
 }
 
+.inspector-color-group {
+  margin-top: 14px;
+}
+
+.color-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.color-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--line) 42%, transparent);
+  cursor: pointer;
+  transition:
+    transform var(--ease),
+    border-color var(--ease),
+    box-shadow var(--ease);
+}
+
+.color-button:hover {
+  transform: translateY(-1px);
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--line));
+}
+
+.color-button.is-active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.color-button-swatch {
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  background: var(--color-swatch);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.2);
+}
+
+.color-button-clear {
+  width: auto;
+  padding: 0 12px;
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 600;
+}
+
 .metric-chip,
 .dock-chip {
   display: inline-flex;
@@ -1125,6 +1182,29 @@ kbd {
   background:
     linear-gradient(135deg, rgba(241, 183, 103, 0.1), transparent 70%),
     var(--node);
+}
+
+.node-card.has-color .node-shell,
+.node-card.has-color .node-editor {
+  border-color: color-mix(in srgb, var(--node-color) 42%, var(--node-border));
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--node-color) 30%, transparent), transparent 72%),
+    color-mix(in srgb, var(--node-color) 18%, var(--node));
+  color: var(--node-color-text-override, var(--node-text));
+}
+
+.node-root.has-color .node-shell,
+.node-root.has-color .node-editor {
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--node-color) 34%, transparent), transparent 68%),
+    color-mix(in srgb, var(--node-color) 28%, var(--root-bg));
+  color: var(--node-color-text-override, var(--root-text));
+  border-color: color-mix(in srgb, var(--node-color) 58%, transparent);
+}
+
+.node-floating.has-color .node-shell,
+.node-floating.has-color .node-editor {
+  border-style: dashed;
 }
 
 .node-card.is-selected .node-shell,
