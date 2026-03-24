@@ -3661,6 +3661,13 @@ class MindMapApp {
     context.fillStyle = background
     context.fillRect(0, 0, width, height)
 
+    const atmosphere = context.createRadialGradient(width / 2, height * 0.56, 0, width / 2, height * 0.56, Math.max(width, height) * 0.58)
+    atmosphere.addColorStop(0, 'rgba(99, 102, 241, 0.12)')
+    atmosphere.addColorStop(0.52, 'rgba(56, 189, 248, 0.05)')
+    atmosphere.addColorStop(1, 'rgba(15, 23, 42, 0)')
+    context.fillStyle = atmosphere
+    context.fillRect(0, 0, width, height)
+
     context.strokeStyle = 'rgba(148, 163, 184, 0.08)'
     for (let index = 0; index < width; index += 48) {
       context.beginPath()
@@ -3675,10 +3682,12 @@ class MindMapApp {
       context.stroke()
     }
 
+    context.lineCap = 'round'
+    context.lineJoin = 'round'
     for (const edge of frame.edges) {
       context.beginPath()
       context.strokeStyle = edge.type === 'relation' ? `rgba(253, 186, 116, ${edge.opacity})` : `rgba(147, 197, 253, ${edge.opacity})`
-      context.lineWidth = edge.type === 'relation' ? 1.4 : 1
+      context.lineWidth = edge.lineWidth
       context.moveTo(edge.x1, edge.y1)
       context.lineTo(edge.x2, edge.y2)
       context.stroke()
@@ -3687,16 +3696,30 @@ class MindMapApp {
     context.textAlign = 'center'
     context.textBaseline = 'middle'
     for (const node of frame.nodes) {
+      context.save()
       context.beginPath()
-      context.fillStyle = node.selected ? 'rgba(129, 140, 248, 0.95)' : node.highlighted ? 'rgba(96, 165, 250, 0.92)' : `rgba(30, 41, 59, ${node.opacity})`
-      context.strokeStyle = node.selected ? 'rgba(199, 210, 254, 0.95)' : `rgba(148, 163, 184, ${Math.max(0.22, node.opacity)})`
-      context.lineWidth = node.selected ? 2.4 : 1.3
+      context.shadowColor = node.selected
+        ? 'rgba(129, 140, 248, 0.48)'
+        : node.highlighted
+          ? 'rgba(96, 165, 250, 0.34)'
+          : `rgba(56, 189, 248, ${Math.min(0.22, node.opacity * 0.22)})`
+      context.shadowBlur = node.glow
+      context.fillStyle = node.selected
+        ? 'rgba(129, 140, 248, 0.95)'
+        : node.highlighted
+          ? 'rgba(96, 165, 250, 0.92)'
+          : `rgba(30, 41, 59, ${node.surfaceOpacity})`
+      context.strokeStyle = node.selected
+        ? 'rgba(199, 210, 254, 0.95)'
+        : `rgba(148, 163, 184, ${node.strokeOpacity})`
+      context.lineWidth = node.lineWidth
       context.arc(node.x, node.y, node.radius, 0, Math.PI * 2)
       context.fill()
       context.stroke()
+      context.restore()
 
-      context.fillStyle = 'rgba(241, 245, 249, 0.96)'
-      context.font = `${node.selected ? 14 : 12}px "Segoe UI", sans-serif`
+      context.fillStyle = `rgba(241, 245, 249, ${node.textOpacity})`
+      context.font = `${node.fontSize}px "Segoe UI", sans-serif`
       context.fillText(node.label, node.x, node.y)
     }
   }
@@ -3969,12 +3992,32 @@ function buildGraphFrame(
   searchQuery: string,
   selectedNodeId: string | null,
 ): {
-  nodes: Array<{ id: string; x: number; y: number; radius: number; label: string; opacity: number; selected: boolean; highlighted: boolean }>
-  edges: Array<{ x1: number; y1: number; x2: number; y2: number; opacity: number; type: 'hierarchy' | 'relation' }>
+  nodes: Array<{
+    id: string
+    x: number
+    y: number
+    radius: number
+    label: string
+    opacity: number
+    surfaceOpacity: number
+    strokeOpacity: number
+    textOpacity: number
+    lineWidth: number
+    fontSize: number
+    glow: number
+    selected: boolean
+    highlighted: boolean
+  }>
+  edges: Array<{ x1: number; y1: number; x2: number; y2: number; opacity: number; lineWidth: number; type: 'hierarchy' | 'relation' }>
   hitNodes: GraphHitNode[]
 } {
   const root = findRoot(document)
   const query = searchQuery.trim().toLowerCase()
+  const centerX = width / 2
+  const centerY = height / 2 + height * 0.04
+  const cameraDistance = Math.max(880, Math.min(width, height) * 1.68)
+  const minScale = 0.58
+  const maxScale = 1.74
   const projected = new Map<
     string,
     {
@@ -3985,6 +4028,12 @@ function buildGraphFrame(
       depth: number
       z: number
       opacity: number
+      surfaceOpacity: number
+      strokeOpacity: number
+      textOpacity: number
+      lineWidth: number
+      fontSize: number
+      glow: number
       selected: boolean
       highlighted: boolean
       label: string
@@ -3996,22 +4045,28 @@ function buildGraphFrame(
     const relationCount = connectedRelations(document, node.id).length
     const offsetX = node.position.x - root.position.x
     const offsetY = node.position.y - root.position.y
-    const orbit = index * 0.27 + depth * 0.18
-    const baseX = offsetX * 0.58 + Math.cos(orbit) * (54 + depth * 18)
-    const baseY = offsetY * 0.42 + Math.sin(orbit * 1.2) * (22 + depth * 10)
-    const baseZ = Math.sin(orbit * 0.9) * 190 + Math.cos(orbit * 0.45) * 54 + relationCount * 16 - depth * 10
+    const orbit = index * 0.31 + depth * 0.24
+    const radialSpan = 84 + depth * 28 + relationCount * 8
+    const waveX = Math.cos(orbit) * radialSpan
+    const waveY = Math.sin(orbit * 1.14) * (42 + depth * 18)
+    const waveZ = Math.sin(orbit * 0.88) * (280 + depth * 36) + Math.cos(orbit * 0.52) * (92 + relationCount * 14)
+    const baseX = offsetX * 0.34 + waveX + offsetY * 0.07
+    const baseY = offsetY * 0.24 + waveY - depth * 18
+    const baseZ = waveZ + offsetX * 0.16 - offsetY * 0.1 + relationCount * 24 - depth * 22
 
     const yawX = baseX * Math.cos(rotation) - baseZ * Math.sin(rotation)
     const yawZ = baseX * Math.sin(rotation) + baseZ * Math.cos(rotation)
     const pitchY = baseY * Math.cos(tilt) - yawZ * Math.sin(tilt)
     const pitchZ = baseY * Math.sin(tilt) + yawZ * Math.cos(tilt)
-
-    const perspective = 720 / (720 + pitchZ + 360)
-    const x = width / 2 + yawX * perspective
-    const y = height / 2 + pitchY * perspective
-    const radius = clamp(10 + relationCount * 1.2 + (node.kind === 'root' ? 8 : 0), 10, 24) * Math.max(0.78, perspective)
+    const scale = clamp(cameraDistance / (cameraDistance - pitchZ), minScale, maxScale)
+    const depthProgress = clamp((scale - minScale) / (maxScale - minScale), 0, 1)
+    const x = centerX + yawX * scale
+    const y = centerY + pitchY * scale - pitchZ * 0.08
+    const radiusBase = clamp(11 + relationCount * 1.4 + (node.kind === 'root' ? 10 : 0), 11, 28)
+    const radius = radiusBase * clamp(0.74 + depthProgress * 0.72, 0.74, 1.46)
     const selected = node.id === selectedNodeId
     const highlighted = selected || (query !== '' && node.title.toLowerCase().includes(query))
+    const emphasisBoost = selected ? 0.2 : highlighted ? 0.1 : 0
     projected.set(node.id, {
       id: node.id,
       x,
@@ -4019,14 +4074,20 @@ function buildGraphFrame(
       radius,
       depth,
       z: pitchZ,
-      opacity: clamp(0.24 + perspective * 0.84, 0.24, 1),
+      opacity: clamp(0.2 + depthProgress * 0.78 + emphasisBoost, 0.2, 1),
+      surfaceOpacity: clamp(0.34 + depthProgress * 0.46 + emphasisBoost * 0.2, 0.34, 0.94),
+      strokeOpacity: clamp(0.28 + depthProgress * 0.48 + emphasisBoost * 0.18, 0.28, 0.96),
+      textOpacity: clamp(0.56 + depthProgress * 0.36 + emphasisBoost * 0.12, 0.56, 1),
+      lineWidth: clamp(1 + depthProgress * 1.6 + (selected ? 0.45 : 0), 1, 3.05),
+      fontSize: clamp((selected ? 15 : highlighted ? 13 : 12) + depthProgress * 3, 12, 18),
+      glow: clamp(8 + depthProgress * 14 + (selected ? 8 : highlighted ? 4 : 0), 8, 30),
       selected,
       highlighted,
-      label: shorten(node.title, selected ? 18 : highlighted ? 10 : 4),
+      label: shorten(node.title, selected ? 18 : highlighted ? 12 : 6),
     })
   })
 
-  const edges: Array<{ x1: number; y1: number; x2: number; y2: number; opacity: number; type: 'hierarchy' | 'relation' }> = []
+  const edges: Array<{ x1: number; y1: number; x2: number; y2: number; opacity: number; lineWidth: number; type: 'hierarchy' | 'relation' }> = []
   for (const node of document.nodes) {
     if (!node.parentId) {
       continue
@@ -4043,7 +4104,8 @@ function buildGraphFrame(
       y1: source.y,
       x2: target.x,
       y2: target.y,
-      opacity: clamp((source.opacity + target.opacity) / 2 * 0.62, 0.12, 0.72),
+      opacity: clamp((source.opacity + target.opacity) / 2 * 0.6, 0.1, 0.76),
+      lineWidth: clamp((source.lineWidth + target.lineWidth) / 2 * 0.72, 0.9, 2.2),
       type: 'hierarchy',
     })
   }
@@ -4060,7 +4122,8 @@ function buildGraphFrame(
       y1: source.y,
       x2: target.x,
       y2: target.y,
-      opacity: clamp((source.opacity + target.opacity) / 2 * 0.74, 0.14, 0.82),
+      opacity: clamp((source.opacity + target.opacity) / 2 * 0.7, 0.12, 0.88),
+      lineWidth: clamp((source.lineWidth + target.lineWidth) / 2 * 0.9, 1, 2.6),
       type: 'relation',
     })
   }
@@ -4069,7 +4132,7 @@ function buildGraphFrame(
   return {
     nodes,
     edges,
-    hitNodes: nodes.map((node) => ({
+    hitNodes: [...nodes].reverse().map((node) => ({
       id: node.id,
       x: node.x,
       y: node.y,
