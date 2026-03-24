@@ -624,6 +624,32 @@ kbd {
   margin-top: 14px;
 }
 
+.inspector-note-group {
+  margin-top: 14px;
+}
+
+.inspector-note-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.inspector-note-header .section-label {
+  margin-bottom: 0;
+}
+
+.inspector-note-input {
+  min-height: 124px;
+  margin-top: 8px;
+  resize: vertical;
+  line-height: 1.5;
+}
+
+.inspector-note-input[readonly] {
+  color: var(--muted);
+}
+
 .color-row {
   display: flex;
   flex-wrap: wrap;

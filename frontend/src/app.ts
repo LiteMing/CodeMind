@@ -207,6 +207,7 @@ interface CopiedSubtreeNode {
   parentId?: string
   kind: MindNode['kind']
   title: string
+  note?: string
   priority?: Priority
   color?: NodeColor
   collapsed?: boolean
@@ -1082,17 +1083,22 @@ class MindMapApp {
 
   private readonly handleFocusOut = (event: FocusEvent): void => {
     const target = event.target
-    if (!(target instanceof HTMLInputElement)) {
+    if (!(target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement)) {
       return
     }
 
-    if (target.dataset.nodeEditor) {
+    if (target instanceof HTMLInputElement && target.dataset.nodeEditor) {
       this.commitNodeEditor(target.dataset.nodeEditor, target.value)
       return
     }
 
-    if (target.dataset.relationLabel) {
+    if (target instanceof HTMLInputElement && target.dataset.relationLabel) {
       this.commitRelationLabel(target.dataset.relationLabel, target.value)
+      return
+    }
+
+    if (target instanceof HTMLTextAreaElement && target.dataset.nodeNote) {
+      this.commitNodeNote(target.dataset.nodeNote, target.value)
     }
   }
 
@@ -1159,6 +1165,11 @@ class MindMapApp {
     const field = target.dataset.settingField
     if (field) {
       this.commitSettingField(field, target.value)
+      return
+    }
+
+    if (target instanceof HTMLTextAreaElement && target.dataset.nodeNote) {
+      this.commitNodeNote(target.dataset.nodeNote, target.value)
       return
     }
 
@@ -1480,6 +1491,7 @@ class MindMapApp {
       : this.t('context.selectionCount', {
           value: selectedCount,
         })
+    const selectedNote = normalizeNodeNote(selectedNode.note) ?? ''
 
     this.refs.inspector.innerHTML = this.state.inspectorCollapsed
       ? `
@@ -1509,6 +1521,15 @@ class MindMapApp {
             x: Math.round(selectedNode.position.x),
             y: Math.round(selectedNode.position.y),
           })}</p>
+          <div class="inspector-note-group">
+            <div class="inspector-note-header">
+              <p class="section-label">${this.t('inspector.note')}</p>
+              ${singleSelection && selectedNote ? `<span class="metric-chip">${this.t('inspector.noteSaved')}</span>` : ''}
+            </div>
+            <textarea class="settings-input inspector-note-input" data-node-note="${selectedNode.id}" placeholder="${escapeAttribute(
+              singleSelection ? this.t('inspector.notePlaceholder') : this.t('inspector.noteDisabledPlaceholder'),
+            )}" ${singleSelection ? '' : 'readonly'}>${escapeHtml(singleSelection ? selectedNote : '')}</textarea>
+          </div>
           <div class="priority-row">
             ${PRIORITY_VALUES.map((priority) => this.renderPriorityButton(priority, selectedNode.priority ?? '')).join('')}
           </div>
@@ -2315,6 +2336,7 @@ class MindMapApp {
           parentId: node.parentId,
           kind: node.kind,
           title: node.title,
+          note: normalizeNodeNote(node.note),
           priority: node.priority,
           color: normalizeNodeColor(node.color) || undefined,
           collapsed: node.collapsed,
@@ -2387,6 +2409,7 @@ class MindMapApp {
         parentId,
         kind: nodeKind,
         title: snapshot.title,
+        note: snapshot.note,
         priority: snapshot.priority,
         color: snapshot.color,
         collapsed: snapshot.collapsed,
@@ -2720,6 +2743,28 @@ class MindMapApp {
     this.setStatus('status.nodeTitleUpdated')
     this.render()
     this.scheduleAutosave('status.titleSaveScheduled')
+  }
+
+  private commitNodeNote(nodeId: string, rawNote: string): void {
+    const existingNode = this.findNode(nodeId)
+    if (!existingNode) {
+      return
+    }
+
+    const nextNote = normalizeNodeNote(rawNote)
+    const currentNote = normalizeNodeNote(existingNode.note)
+    if (currentNote === nextNote) {
+      return
+    }
+
+    this.captureHistory()
+    this.updateNode(nodeId, (node) => {
+      node.note = nextNote
+    })
+    touchDocument(this.state.document)
+    this.setStatus('status.noteUpdated')
+    this.render()
+    this.scheduleAutosave('status.noteSaveScheduled')
   }
 
   private commitRelationLabel(relationId: string, rawLabel: string): void {
@@ -4617,6 +4662,15 @@ function buildNodeColorStyle(color: NodeColor): string {
 
 function normalizeNodeColor(value: string | null | undefined): NodeColor {
   return NODE_COLOR_VALUES.includes(value as NodeColor) ? (value as NodeColor) : ''
+}
+
+function normalizeNodeNote(value: string | null | undefined): string | undefined {
+  if (typeof value !== 'string') {
+    return undefined
+  }
+
+  const normalized = value.replace(/\r\n/g, '\n').trim()
+  return normalized ? normalized : undefined
 }
 
 function resolveNodeColorPalette(color: NodeColor): NodeColorPalette | null {

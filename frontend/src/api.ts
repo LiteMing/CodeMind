@@ -179,6 +179,7 @@ function normalizeDocument(document: MindMapDocument): MindMapDocument {
     ...document,
     nodes: (document.nodes ?? []).map((node) => ({
       ...node,
+      note: node.note?.trim() ? node.note : undefined,
       width: node.width || undefined,
       height: node.height || undefined,
     })),

@@ -18,6 +18,7 @@ export interface MindNode {
   parentId?: string
   kind: NodeKind
   title: string
+  note?: string
   priority?: Priority
   color?: NodeColor
   collapsed?: boolean

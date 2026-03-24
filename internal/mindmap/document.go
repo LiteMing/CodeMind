@@ -48,6 +48,7 @@ type Node struct {
 	ParentID  string    `json:"parentId,omitempty"`
 	Kind      NodeKind  `json:"kind"`
 	Title     string    `json:"title"`
+	Note      string    `json:"note,omitempty"`
 	Priority  Priority  `json:"priority,omitempty"`
 	Color     NodeColor `json:"color,omitempty"`
 	Collapsed bool      `json:"collapsed,omitempty"`

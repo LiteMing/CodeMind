@@ -650,6 +650,55 @@ func TestSaveMapPersistsNodeColor(t *testing.T) {
 	}
 }
 
+func TestSaveMapPersistsNodeNote(t *testing.T) {
+	storePath := t.TempDir()
+	handler := New(store.NewFileStore(storePath)).Handler()
+
+	lastEditedAt := time.Date(2026, time.March, 1, 9, 30, 0, 0, time.UTC)
+	lastOpenedAt := time.Date(2026, time.March, 2, 10, 0, 0, 0, time.UTC)
+	doc := newStoredDocument("roadmap", "Roadmap", lastEditedAt, lastOpenedAt)
+	doc.Nodes = append(doc.Nodes, mindmap.Node{
+		ID:        "scope",
+		ParentID:  "root",
+		Kind:      mindmap.NodeKindTopic,
+		Title:     "Scope",
+		Note:      "Clarify what is in and out of scope.\nTrack open assumptions here.",
+		Position:  mindmap.Position{X: 1100, Y: 320},
+		CreatedAt: lastEditedAt,
+		UpdatedAt: lastEditedAt,
+	})
+	writeTestDocument(t, storePath, doc)
+
+	body, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatalf("failed to marshal document: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPut, "/api/maps/roadmap", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	res := httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d with body %s", res.Code, res.Body.String())
+	}
+
+	stored := readStoredDocument(t, storePath, "roadmap")
+	var matched mindmap.Node
+	for _, node := range stored.Nodes {
+		if node.ID == "scope" {
+			matched = node
+			break
+		}
+	}
+	if matched.ID == "" {
+		t.Fatal("expected saved document to contain scope node")
+	}
+	if matched.Note != "Clarify what is in and out of scope.\nTrack open assumptions here." {
+		t.Fatalf("expected node note to persist, got %q", matched.Note)
+	}
+}
+
 func newTestHandler(t *testing.T) http.Handler {
 	t.Helper()
 	return newTestServer(t).Handler()
