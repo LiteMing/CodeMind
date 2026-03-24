@@ -126,6 +126,7 @@ interface GraphOverlayState {
   autoRotate: boolean
   rotation: number
   tilt: number
+  zoom: number
 }
 
 interface AppState {
@@ -228,6 +229,10 @@ const ZOOM_SENSITIVITY = 0.0018
 const MIN_NODE_WIDTH = 170
 const MIN_NODE_HEIGHT = 52
 const HISTORY_LIMIT = 120
+const GRAPH_DEFAULT_ZOOM = 1.16
+const GRAPH_MIN_ZOOM = 0.68
+const GRAPH_MAX_ZOOM = 1.92
+const GRAPH_ZOOM_SENSITIVITY = 0.0012
 const PRIORITY_VALUES: Priority[] = ['', 'P0', 'P1', 'P2', 'P3']
 const NODE_COLOR_VALUES: NodeColor[] = ['', 'slate', 'blue', 'teal', 'green', 'amber', 'rose', 'violet']
 const AI_TEMPLATES: Array<{ id: AITemplateId }> = [
@@ -388,6 +393,7 @@ class MindMapApp {
         autoRotate: false,
         rotation: 0.72,
         tilt: 0.18,
+        zoom: GRAPH_DEFAULT_ZOOM,
       },
     }
 
@@ -884,11 +890,21 @@ class MindMapApp {
   }
 
   private readonly handleWheel = (event: WheelEvent): void => {
+    const target = event.target
+    if (this.state.graph.open && target instanceof HTMLElement) {
+      const graphCanvas = target.closest<HTMLCanvasElement>('[data-graph-canvas]')
+      if (graphCanvas) {
+        event.preventDefault()
+        const zoomFactor = Math.exp(-event.deltaY * GRAPH_ZOOM_SENSITIVITY)
+        this.setGraphZoom(this.state.graph.zoom * zoomFactor)
+        return
+      }
+    }
+
     if (this.state.view !== 'map' || this.overlayBlocksCanvas()) {
       return
     }
 
-    const target = event.target
     const scroll = this.refs?.scroll
     if (!(target instanceof HTMLElement) || !target.closest('[data-workspace-scroll]') || !scroll) {
       return
@@ -1882,6 +1898,10 @@ class MindMapApp {
               placeholder="${escapeAttribute(this.t('graph.searchPlaceholder'))}"
             />
             <span class="metric-chip">${this.t('graph.dragHint')}</span>
+            <span class="metric-chip">${this.t('graph.zoomHint')}</span>
+            <button type="button" class="chip-button" data-command="graph-zoom-out">${this.t('graph.zoomOut')}</button>
+            <span class="metric-chip" data-graph-zoom-value>${this.t('graph.zoomValue', { value: Math.round(this.state.graph.zoom * 100) })}</span>
+            <button type="button" class="chip-button" data-command="graph-zoom-in">${this.t('graph.zoomIn')}</button>
             <span class="metric-chip">${this.t('dock.nodes', { value: this.state.document.nodes.length })}</span>
             <span class="metric-chip">${this.t('dock.relations', { value: this.state.document.relations.length })}</span>
           </div>
@@ -2808,6 +2828,12 @@ class MindMapApp {
         case 'reset-graph-view':
           this.resetGraphView()
           return
+        case 'graph-zoom-in':
+          this.nudgeGraphZoom(1)
+          return
+        case 'graph-zoom-out':
+          this.nudgeGraphZoom(-1)
+          return
         case 'close-settings':
           this.closeSettings()
           return
@@ -3113,9 +3139,25 @@ class MindMapApp {
   private resetGraphView(): void {
     this.state.graph.rotation = 0.72
     this.state.graph.tilt = 0.18
+    this.state.graph.zoom = GRAPH_DEFAULT_ZOOM
     this.drawGraphScene()
     this.setStatus('status.graphViewReset')
     this.renderHeader()
+  }
+
+  private nudgeGraphZoom(direction: -1 | 1): void {
+    const factor = direction > 0 ? 1.14 : 1 / 1.14
+    this.setGraphZoom(this.state.graph.zoom * factor)
+  }
+
+  private setGraphZoom(nextZoom: number): void {
+    const clampedZoom = Math.round(clamp(nextZoom, GRAPH_MIN_ZOOM, GRAPH_MAX_ZOOM) * 100) / 100
+    if (Math.abs(clampedZoom - this.state.graph.zoom) < 0.001) {
+      return
+    }
+
+    this.state.graph.zoom = clampedZoom
+    this.drawGraphScene()
   }
 
   private async testAIConnection(): Promise<void> {
@@ -3829,6 +3871,7 @@ class MindMapApp {
       return
     }
 
+    this.updateGraphZoomIndicator()
     const canvas = this.rootEl.querySelector<HTMLCanvasElement>('[data-graph-canvas]')
     if (!canvas) {
       return
@@ -3855,6 +3898,7 @@ class MindMapApp {
       height,
       this.state.graph.rotation,
       this.state.graph.tilt,
+      this.state.graph.zoom,
       this.state.graph.search,
       this.state.graph.selectedNodeId,
     )
@@ -4023,6 +4067,13 @@ class MindMapApp {
 
   private overlayBlocksCanvas(): boolean {
     return this.onboardingOpen() || this.state.settingsOpen || this.state.ai.open || this.state.graph.open
+  }
+
+  private updateGraphZoomIndicator(): void {
+    const indicator = this.rootEl.querySelector<HTMLElement>('[data-graph-zoom-value]')
+    if (indicator) {
+      indicator.textContent = this.t('graph.zoomValue', { value: Math.round(this.state.graph.zoom * 100) })
+    }
   }
 
   private applyTheme(): void {
@@ -4241,6 +4292,7 @@ function buildGraphFrame(
   height: number,
   rotation: number,
   tilt: number,
+  graphZoom: number,
   searchQuery: string,
   selectedNodeId: string | null,
 ): {
@@ -4307,7 +4359,8 @@ function buildGraphFrame(
     Math.min((width * 0.34) / maxAbsOffsetX, (height * 0.28) / maxAbsOffsetY),
     0.12,
     0.72,
-  )
+  ) * graphZoom
+  const depthSpread = clamp(0.9 + (graphZoom - 1) * 0.38, 0.72, 1.34)
   const base3dById = new Map<string, { x: number; y: number; z: number }>()
   const projected = new Map<
     string,
@@ -4353,7 +4406,7 @@ function buildGraphFrame(
     let baseZ = 0
 
     if (node.id === root.id) {
-      baseZ = -26
+      baseZ = -26 * depthSpread
     } else {
       const parent = node.parentId ? nodeById.get(node.parentId) : undefined
       if (parent) {
@@ -4368,7 +4421,7 @@ function buildGraphFrame(
 
         baseX = parentBase.x + rawDx + crossX * siblingOffset * lateralSpacing * 0.28
         baseY = parentBase.y + rawDy + crossY * siblingOffset * lateralSpacing * 0.22
-        baseZ = parentBase.z + clamp(branchDistance * 0.22 + depth * 3.5, 18, 52) + siblingOffset * 8 + relationCount * 4
+        baseZ = parentBase.z + (clamp(branchDistance * 0.22 + depth * 3.5, 18, 52) + siblingOffset * 8 + relationCount * 4) * depthSpread
       } else {
         const rawDx = (node.position.x - root.position.x) * planeScale
         const rawDy = (node.position.y - root.position.y) * planeScale
@@ -4377,7 +4430,7 @@ function buildGraphFrame(
 
         baseX = rawDx
         baseY = rawDy
-        baseZ = clamp(radialDistance * 0.18 + depth * 18, 12, 72) + Math.sin(branchAngle) * 8
+        baseZ = (clamp(radialDistance * 0.18 + depth * 18, 12, 72) + Math.sin(branchAngle) * 8) * depthSpread
       }
     }
 
