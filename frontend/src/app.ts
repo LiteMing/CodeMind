@@ -4062,6 +4062,7 @@ function buildGraphFrame(
       radius: number
       depth: number
       z: number
+      scale: number
       opacity: number
       occlusionOpacity: number
       surfaceOpacity: number
@@ -4110,6 +4111,7 @@ function buildGraphFrame(
       radius,
       depth,
       z: pitchZ,
+      scale,
       opacity: clamp(0.2 + depthProgress * 0.78 + emphasisBoost, 0.2, 1),
       occlusionOpacity: clamp(0.9 + depthProgress * 0.08, 0.9, 0.98),
       surfaceOpacity: clamp(0.72 + depthProgress * 0.24 + emphasisBoost * 0.08, 0.72, 0.98),
@@ -4167,7 +4169,7 @@ function buildGraphFrame(
     })
   }
 
-  const nodes = [...projected.values()].sort((left, right) => left.z - right.z || left.depth - right.depth)
+  const nodes = [...projected.values()].sort((left, right) => left.scale - right.scale || left.depth - right.depth)
   return {
     nodes,
     edges,
