@@ -792,7 +792,8 @@ class MindMapApp {
       return
     }
 
-    if (this.state.view !== 'map' || this.onboardingOpen() || this.state.settingsOpen || isTypingTarget(event.target)) {
+    const activeTypingTarget = isTypingTarget(document.activeElement)
+    if (this.state.view !== 'map' || this.onboardingOpen() || this.state.settingsOpen || isTypingTarget(event.target) || activeTypingTarget) {
       return
     }
 
@@ -887,11 +888,6 @@ class MindMapApp {
       this.startEditingSelected({ selection: 'end' })
       return
     }
-
-    if (isDirectTypingKey(event)) {
-      event.preventDefault()
-      this.startEditingSelected({ value: event.key, selection: 'end' })
-    }
   }
 
   private readonly handleEditorKeyDown = (event: KeyboardEvent): void => {
@@ -961,6 +957,11 @@ class MindMapApp {
   private readonly handleInput = (event: Event): void => {
     const target = event.target
     if (!(target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement)) {
+      return
+    }
+
+    if (target instanceof HTMLInputElement && target.dataset.nodeEditor) {
+      target.classList.remove('is-all-selected')
       return
     }
 
@@ -1948,6 +1949,7 @@ class MindMapApp {
     }
 
     const selectionMode = options?.selection ?? 'all'
+    editor.classList.toggle('is-all-selected', selectionMode === 'all')
     if (selectionMode === 'end') {
       const cursor = editor.value.length
       editor.setSelectionRange(cursor, cursor)
@@ -4146,14 +4148,6 @@ function slugify(value: string): string {
     .replaceAll(/^-+|-+$/g, '')
 
   return normalized || 'code-mind'
-}
-
-function isDirectTypingKey(event: KeyboardEvent): boolean {
-  if (event.ctrlKey || event.metaKey || event.altKey || event.key === ' ') {
-    return false
-  }
-
-  return event.key.length === 1
 }
 
 function isTypingTarget(target: EventTarget | null): boolean {

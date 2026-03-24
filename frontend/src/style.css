@@ -1059,6 +1059,17 @@ kbd {
   outline: none;
 }
 
+.node-editor.is-all-selected {
+  border-color: color-mix(in srgb, var(--accent) 78%, transparent);
+  background: color-mix(in srgb, var(--accent-soft) 70%, var(--node));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-soft) 82%, transparent), var(--shadow-card);
+}
+
+.node-editor::selection {
+  background: color-mix(in srgb, var(--accent) 78%, #3b82f6);
+  color: #ffffff;
+}
+
 .node-resizer {
   position: absolute;
   right: -8px;
