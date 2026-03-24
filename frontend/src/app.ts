@@ -4272,6 +4272,43 @@ function buildGraphFrame(
   const cameraDistance = Math.max(880, Math.min(width, height) * 1.68)
   const minScale = 0.58
   const maxScale = 1.74
+  const nodeById = new Map(document.nodes.map((node) => [node.id, node] as const))
+  const childrenByParent = new Map<string, MindNode[]>()
+  const siblingPlacement = new Map<string, { centeredIndex: number; count: number }>()
+  let maxAbsOffsetX = 1
+  let maxAbsOffsetY = 1
+
+  for (const node of document.nodes) {
+    maxAbsOffsetX = Math.max(maxAbsOffsetX, Math.abs(node.position.x - root.position.x))
+    maxAbsOffsetY = Math.max(maxAbsOffsetY, Math.abs(node.position.y - root.position.y))
+    if (!node.parentId) {
+      continue
+    }
+
+    const siblings = childrenByParent.get(node.parentId) ?? []
+    siblings.push(node)
+    childrenByParent.set(node.parentId, siblings)
+  }
+
+  for (const siblings of childrenByParent.values()) {
+    const orderedSiblings = [...siblings].sort((left, right) => {
+      return left.position.y - right.position.y || left.position.x - right.position.x || left.title.localeCompare(right.title)
+    })
+    const midpoint = (orderedSiblings.length - 1) / 2
+    orderedSiblings.forEach((sibling, index) => {
+      siblingPlacement.set(sibling.id, {
+        centeredIndex: index - midpoint,
+        count: orderedSiblings.length,
+      })
+    })
+  }
+
+  const planeScale = clamp(
+    Math.min((width * 0.34) / maxAbsOffsetX, (height * 0.28) / maxAbsOffsetY),
+    0.12,
+    0.72,
+  )
+  const base3dById = new Map<string, { x: number; y: number; z: number }>()
   const projected = new Map<
     string,
     {
@@ -4297,19 +4334,58 @@ function buildGraphFrame(
     }
   >()
 
-  document.nodes.forEach((node, index) => {
+  const nodesByDepth = [...document.nodes].sort((left, right) => {
+    return (
+      graphNodeDepth(document, left) - graphNodeDepth(document, right) ||
+      left.position.y - right.position.y ||
+      left.position.x - right.position.x ||
+      left.title.localeCompare(right.title)
+    )
+  })
+
+  nodesByDepth.forEach((node) => {
     const depth = graphNodeDepth(document, node)
     const relationCount = connectedRelations(document, node.id).length
-    const offsetX = node.position.x - root.position.x
-    const offsetY = node.position.y - root.position.y
-    const orbit = index * 0.31 + depth * 0.24
-    const radialSpan = 84 + depth * 28 + relationCount * 8
-    const waveX = Math.cos(orbit) * radialSpan
-    const waveY = Math.sin(orbit * 1.14) * (42 + depth * 18)
-    const waveZ = Math.sin(orbit * 0.88) * (280 + depth * 36) + Math.cos(orbit * 0.52) * (92 + relationCount * 14)
-    const baseX = offsetX * 0.34 + waveX + offsetY * 0.07
-    const baseY = offsetY * 0.24 + waveY - depth * 18
-    const baseZ = waveZ + offsetX * 0.16 - offsetY * 0.1 + relationCount * 24 - depth * 22
+    const siblingMeta = siblingPlacement.get(node.id)
+    const siblingOffset = siblingMeta?.centeredIndex ?? 0
+    let baseX = 0
+    let baseY = 0
+    let baseZ = 0
+
+    if (node.id === root.id) {
+      baseZ = -26
+    } else {
+      const parent = node.parentId ? nodeById.get(node.parentId) : undefined
+      if (parent) {
+        const parentBase = base3dById.get(parent.id) ?? { x: 0, y: 0, z: 0 }
+        const rawDx = (node.position.x - parent.position.x) * planeScale
+        const rawDy = (node.position.y - parent.position.y) * planeScale
+        const branchDistance = Math.hypot(rawDx, rawDy)
+        const branchAngle = Math.atan2(rawDy || 0.001, rawDx || 1)
+        const lateralSpacing = clamp(branchDistance * 0.16, 10, 26)
+        const crossX = -Math.sin(branchAngle)
+        const crossY = Math.cos(branchAngle)
+
+        baseX = parentBase.x + rawDx + crossX * siblingOffset * lateralSpacing * 0.28
+        baseY = parentBase.y + rawDy + crossY * siblingOffset * lateralSpacing * 0.22
+        baseZ = parentBase.z + clamp(branchDistance * 0.22 + depth * 3.5, 18, 52) + siblingOffset * 8 + relationCount * 4
+      } else {
+        const rawDx = (node.position.x - root.position.x) * planeScale
+        const rawDy = (node.position.y - root.position.y) * planeScale
+        const radialDistance = Math.hypot(rawDx, rawDy)
+        const branchAngle = Math.atan2(rawDy || 0.001, rawDx || 1)
+
+        baseX = rawDx
+        baseY = rawDy
+        baseZ = clamp(radialDistance * 0.18 + depth * 18, 12, 72) + Math.sin(branchAngle) * 8
+      }
+    }
+
+    base3dById.set(node.id, {
+      x: baseX,
+      y: baseY,
+      z: baseZ,
+    })
 
     const yawX = baseX * Math.cos(rotation) - baseZ * Math.sin(rotation)
     const yawZ = baseX * Math.sin(rotation) + baseZ * Math.cos(rotation)
