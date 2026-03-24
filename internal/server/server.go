@@ -21,6 +21,7 @@ import (
 const (
 	defaultAIBaseURL   = "http://127.0.0.1:1234/v1"
 	defaultAIMaxTokens = 4800
+	defaultAITimeout   = 45
 	defaultRootX       = 820
 	defaultRootY       = 320
 	defaultBranchGapX  = 280
@@ -55,11 +56,12 @@ type markdownResponse struct {
 }
 
 type aiSettingsRequest struct {
-	Provider  string `json:"provider"`
-	BaseURL   string `json:"baseUrl"`
-	Model     string `json:"model"`
-	APIKey    string `json:"apiKey"`
-	MaxTokens int    `json:"maxTokens"`
+	Provider       string `json:"provider"`
+	BaseURL        string `json:"baseUrl"`
+	Model          string `json:"model"`
+	APIKey         string `json:"apiKey"`
+	MaxTokens      int    `json:"maxTokens"`
+	TimeoutSeconds int    `json:"timeoutSeconds"`
 }
 
 type aiDebugRequest struct {
@@ -231,7 +233,7 @@ func New(fileStore *store.FileStore) *Server {
 	return &Server{
 		store: fileStore,
 		httpClient: &http.Client{
-			Timeout: 45 * time.Second,
+			Timeout: 0,
 		},
 	}
 }
@@ -958,7 +960,7 @@ func (s *Server) listAIModels(settings aiSettingsRequest, baseURL string) ([]str
 		request.Header.Set("Authorization", "Bearer "+token)
 	}
 
-	response, err := s.httpClient.Do(request)
+	response, err := s.aiHTTPClient(settings).Do(request)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list models: %w", err)
 	}
@@ -1072,7 +1074,7 @@ func (s *Server) chatCompletion(
 		request.Header.Set("Authorization", "Bearer "+token)
 	}
 
-	response, err := s.httpClient.Do(request)
+	response, err := s.aiHTTPClient(settings).Do(request)
 	if err != nil {
 		return aiChatCompletionResult{}, &aiDebugError{
 			Err: fmt.Errorf("failed to call AI model: %w", err),
@@ -1149,6 +1151,25 @@ func normalizeAIMaxTokens(value int) int {
 		return 32768
 	}
 	return value
+}
+
+func normalizeAITimeoutSeconds(value int) int {
+	if value <= 0 {
+		return defaultAITimeout
+	}
+	if value < 1 {
+		return 1
+	}
+	if value > 600 {
+		return 600
+	}
+	return value
+}
+
+func (s *Server) aiHTTPClient(settings aiSettingsRequest) *http.Client {
+	clientCopy := *s.httpClient
+	clientCopy.Timeout = time.Duration(normalizeAITimeoutSeconds(settings.TimeoutSeconds)) * time.Second
+	return &clientCopy
 }
 
 func marshalMindMapForPrompt(doc mindmap.Document) (string, error) {

@@ -671,6 +671,35 @@ func TestAIGenerateEndpointParsesWrappedAlternateJSON(t *testing.T) {
 	}
 }
 
+func TestAITestEndpointHonorsConfiguredTimeout(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/models":
+			time.Sleep(1500 * time.Millisecond)
+			_, _ = w.Write([]byte(`{"data":[{"id":"slow-model"}]}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer upstream.Close()
+
+	server := newTestServer(t)
+	server.httpClient = upstream.Client()
+	handler := server.Handler()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/ai/test", strings.NewReader(`{"settings":{"provider":"openai-compatible","baseUrl":"`+upstream.URL+`","model":"","apiKey":"test-key","maxTokens":4096,"timeoutSeconds":1}}`))
+	req.Header.Set("Content-Type", "application/json")
+	res := httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+
+	if res.Code != http.StatusBadGateway {
+		t.Fatalf("expected 502 on timeout, got %d with body %s", res.Code, res.Body.String())
+	}
+	if !strings.Contains(res.Body.String(), "Client.Timeout exceeded") && !strings.Contains(res.Body.String(), "context deadline exceeded") {
+		t.Fatalf("expected timeout error, got %s", res.Body.String())
+	}
+}
+
 func TestAIGenerateEndpointExpandsCurrentDocument(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {

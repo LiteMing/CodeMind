@@ -66,6 +66,7 @@ export interface AISettings {
   model: string
   apiKey: string
   maxTokens: number
+  timeoutSeconds: number
 }
 
 export interface AIDebugRequest {

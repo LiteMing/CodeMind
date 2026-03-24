@@ -3,8 +3,11 @@ import type { AppPreferences, Locale } from './types'
 const STORAGE_KEY = 'code-mind.preferences'
 export const DEFAULT_LM_STUDIO_URL = 'http://127.0.0.1:1234/v1'
 export const DEFAULT_AI_MAX_TOKENS = 4800
+export const DEFAULT_AI_TIMEOUT_SECONDS = 45
 const MIN_AI_MAX_TOKENS = 256
 const MAX_AI_MAX_TOKENS = 32768
+const MIN_AI_TIMEOUT_SECONDS = 1
+const MAX_AI_TIMEOUT_SECONDS = 600
 
 export function createDefaultPreferences(): AppPreferences {
   return {
@@ -16,6 +19,7 @@ export function createDefaultPreferences(): AppPreferences {
       model: '',
       apiKey: '',
       maxTokens: DEFAULT_AI_MAX_TOKENS,
+      timeoutSeconds: DEFAULT_AI_TIMEOUT_SECONDS,
     },
   }
 }
@@ -38,6 +42,7 @@ export function loadPreferences(): AppPreferences {
         model: (parsed.ai?.model ?? '').trim(),
         apiKey: (parsed.ai?.apiKey ?? '').trim(),
         maxTokens: normalizeAIMaxTokens(parsed.ai?.maxTokens),
+        timeoutSeconds: normalizeAITimeoutSeconds(parsed.ai?.timeoutSeconds),
       },
     }
   } catch {
@@ -68,6 +73,15 @@ export function normalizeAIMaxTokens(value: unknown): number {
   }
 
   return clamp(Math.round(parsed), MIN_AI_MAX_TOKENS, MAX_AI_MAX_TOKENS)
+}
+
+export function normalizeAITimeoutSeconds(value: unknown): number {
+  const parsed = typeof value === 'number' ? value : Number.parseInt(String(value ?? '').trim(), 10)
+  if (!Number.isFinite(parsed)) {
+    return DEFAULT_AI_TIMEOUT_SECONDS
+  }
+
+  return clamp(Math.round(parsed), MIN_AI_TIMEOUT_SECONDS, MAX_AI_TIMEOUT_SECONDS)
 }
 
 function clamp(value: number, min: number, max: number): number {

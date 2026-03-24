@@ -20,7 +20,15 @@ import {
   visibleNodeIds,
 } from './document'
 import { type TranslationKey, kindLabel, nodeColorLabel, themeLabel, translate } from './i18n'
-import { DEFAULT_AI_MAX_TOKENS, DEFAULT_LM_STUDIO_URL, loadPreferences, normalizeAIMaxTokens, savePreferences } from './preferences'
+import {
+  DEFAULT_AI_MAX_TOKENS,
+  DEFAULT_AI_TIMEOUT_SECONDS,
+  DEFAULT_LM_STUDIO_URL,
+  loadPreferences,
+  normalizeAIMaxTokens,
+  normalizeAITimeoutSeconds,
+  savePreferences,
+} from './preferences'
 import type {
   AIDebugInfo,
   AIDebugRequest,
@@ -1802,6 +1810,20 @@ class MindMapApp {
               />
             </label>
             <p class="inspector-copy">${this.t('settings.aiMaxTokensHint')}</p>
+            <label class="field-stack">
+              <span>${this.t('settings.aiTimeout')}</span>
+              <input
+                class="settings-input"
+                type="number"
+                min="1"
+                max="600"
+                step="1"
+                inputmode="numeric"
+                data-setting-field="ai.timeoutSeconds"
+                value="${escapeAttribute(String(this.state.preferences.ai.timeoutSeconds || DEFAULT_AI_TIMEOUT_SECONDS))}"
+              />
+            </label>
+            <p class="inspector-copy">${this.t('settings.aiTimeoutHint')}</p>
             <p class="inspector-copy">${this.t('settings.aiHint')}</p>
           </section>
         </section>
@@ -3973,6 +3995,14 @@ class MindMapApp {
         this.updatePreferences((preferences) => {
           preferences.ai.maxTokens = normalizeAIMaxTokens(value)
         })
+        this.setStatus('status.aiSettingsSaved')
+        this.render()
+        return
+      case 'ai.timeoutSeconds':
+        this.updatePreferences((preferences) => {
+          preferences.ai.timeoutSeconds = normalizeAITimeoutSeconds(value)
+        })
+        this.resetAIConnectionFeedback()
         this.setStatus('status.aiSettingsSaved')
         this.render()
         return
