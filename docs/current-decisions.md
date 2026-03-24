@@ -42,6 +42,7 @@
 - AI defaults are currently local-only settings and default to LM Studio with `http://127.0.0.1:1234/v1`.
 - AI generation and AI relation suggestions currently use a local OpenAI-compatible endpoint from the Go backend.
 - The AI workspace now includes a lightweight connection test that checks `/models` before running generation or relation analysis.
+- The AI workspace now captures upstream request/response debug data and supports RAW request editing for generation, note completion, and relation analysis.
 - Mind-map theme remains a document-level setting so the same map keeps its appearance across reloads.
 
 ## Deferred Risks

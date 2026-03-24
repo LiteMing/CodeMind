@@ -68,6 +68,18 @@ export interface AISettings {
   maxTokens: number
 }
 
+export interface AIDebugRequest {
+  rawMode: boolean
+  rawRequest: string
+}
+
+export interface AIDebugInfo {
+  rawMode: boolean
+  upstreamRequest: string
+  upstreamResponse: string
+  assistantContent: string
+}
+
 export interface AIRelationSuggestion {
   sourceId: string
   targetId: string
@@ -80,6 +92,7 @@ export interface AIRelationResponse {
   relations: AIRelationSuggestion[]
   summary: string
   model: string
+  debug?: AIDebugInfo
 }
 
 export interface AINodeNoteSuggestion {
@@ -91,6 +104,7 @@ export interface AINodeNotesResponse {
   notes: AINodeNoteSuggestion[]
   summary: string
   model: string
+  debug?: AIDebugInfo
 }
 
 export interface AIGenerateResponse {
@@ -99,6 +113,7 @@ export interface AIGenerateResponse {
   prompt: string
   template: AITemplateId
   model: string
+  debug?: AIDebugInfo
 }
 
 export interface AITestResponse {

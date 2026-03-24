@@ -857,11 +857,47 @@ kbd {
   resize: vertical;
 }
 
+.ai-raw-textarea,
+.ai-debug-pre {
+  font-family: 'Cascadia Code', 'Consolas', 'SFMono-Regular', monospace;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.ai-raw-textarea {
+  min-height: 156px;
+}
+
 .ai-action-row {
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
   margin-top: 14px;
+}
+
+.ai-debug-toggle-row {
+  margin-top: 0;
+}
+
+.ai-debug-grid {
+  display: grid;
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.ai-debug-block {
+  padding: 12px 14px;
+  border-radius: 16px;
+  border: 1px solid var(--line);
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
+}
+
+.ai-debug-pre {
+  margin: 8px 0 0;
+  max-height: 240px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .ai-status-note {

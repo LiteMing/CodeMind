@@ -334,6 +334,140 @@ func TestAIGenerateEndpoint(t *testing.T) {
 	if strings.TrimSpace(payload.Document.Nodes[0].Note) == "" {
 		t.Fatal("expected generated document nodes to include notes")
 	}
+	if payload.Debug.RawMode {
+		t.Fatal("expected normal generate flow to report rawMode false")
+	}
+	if !strings.Contains(payload.Debug.UpstreamRequest, `"model":"qwen-local"`) {
+		t.Fatalf("expected debug upstream request to include resolved model, got %q", payload.Debug.UpstreamRequest)
+	}
+	if !strings.Contains(payload.Debug.UpstreamResponse, `"model":"qwen-local"`) {
+		t.Fatalf("expected debug upstream response to keep raw response body, got %q", payload.Debug.UpstreamResponse)
+	}
+	if !strings.Contains(payload.Debug.AssistantContent, `"title":"Graph Databases"`) {
+		t.Fatalf("expected assistant content in debug payload, got %q", payload.Debug.AssistantContent)
+	}
+}
+
+func TestAIGenerateEndpointSupportsRawRequest(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/chat/completions":
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				t.Fatalf("failed to read upstream request body: %v", err)
+			}
+
+			var payload map[string]any
+			if err := json.Unmarshal(body, &payload); err != nil {
+				t.Fatalf("failed to decode raw upstream request body: %v", err)
+			}
+			if payload["model"] != "qwen-local" {
+				t.Fatalf("expected RAW mode to backfill model qwen-local, got %#v", payload["model"])
+			}
+			if payload["stream"] != false {
+				t.Fatalf("expected RAW mode to default stream to false, got %#v", payload["stream"])
+			}
+			if payload["temperature"] != 0.77 {
+				t.Fatalf("expected RAW request to preserve custom temperature, got %#v", payload["temperature"])
+			}
+
+			messages, ok := payload["messages"].([]any)
+			if !ok || len(messages) != 2 {
+				t.Fatalf("expected RAW request messages to be forwarded, got %#v", payload["messages"])
+			}
+
+			systemMessage, _ := messages[0].(map[string]any)
+			userMessage, _ := messages[1].(map[string]any)
+			if systemMessage["content"] != "raw system" || userMessage["content"] != "raw user" {
+				t.Fatalf("expected RAW request message content to stay unchanged, got %#v", payload["messages"])
+			}
+
+			writeOpenAIChatResponse(t, w, "qwen-local", `{"title":"Raw Mode","summary":"Uses the hand-edited upstream payload.","nodes":[{"id":"raw-root","title":"Raw Mode","note":"Root note","parentId":"","kind":"root","priority":""},{"id":"raw-child","title":"Forwarded Messages","note":"Generated from the raw request body.","parentId":"raw-root","kind":"topic","priority":"P1"}],"relations":[]}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer upstream.Close()
+
+	server := newTestServer(t)
+	server.httpClient = upstream.Client()
+	handler := server.Handler()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/ai/generate", strings.NewReader(`{"settings":{"provider":"openai-compatible","baseUrl":"`+upstream.URL+`","model":"qwen-local","apiKey":"test-key","maxTokens":4096},"topic":"Raw Mode","template":"concept-graph","instructions":"Ignore this and use raw mode.","debug":{"rawMode":true,"rawRequest":"{\"messages\":[{\"role\":\"system\",\"content\":\"raw system\"},{\"role\":\"user\",\"content\":\"raw user\"}],\"temperature\":0.77}"}}`))
+	req.Header.Set("Content-Type", "application/json")
+	res := httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d with body %s", res.Code, res.Body.String())
+	}
+
+	var payload aiGenerateResponse
+	if err := json.Unmarshal(res.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("failed to decode AI generate response: %v", err)
+	}
+	if !payload.Debug.RawMode {
+		t.Fatal("expected rawMode debug flag to be true")
+	}
+	if !strings.Contains(payload.Debug.UpstreamRequest, `"temperature":0.77`) {
+		t.Fatalf("expected debug request to keep custom RAW payload, got %q", payload.Debug.UpstreamRequest)
+	}
+	if !strings.Contains(payload.Debug.UpstreamRequest, `"content":"raw user"`) {
+		t.Fatalf("expected debug request to keep RAW messages, got %q", payload.Debug.UpstreamRequest)
+	}
+}
+
+func TestAIGenerateEndpointReturnsDebugOnRawRequestError(t *testing.T) {
+	handler := newTestHandler(t)
+	rawRequest := `{"messages":[}`
+	requestBody, err := json.Marshal(map[string]any{
+		"settings": map[string]any{
+			"provider":  "openai-compatible",
+			"baseUrl":   "http://127.0.0.1:65535/v1",
+			"model":     "qwen-local",
+			"apiKey":    "test-key",
+			"maxTokens": 4096,
+		},
+		"topic":        "Broken Raw",
+		"template":     "concept-graph",
+		"instructions": "",
+		"debug": map[string]any{
+			"rawMode":    true,
+			"rawRequest": rawRequest,
+		},
+	})
+	if err != nil {
+		t.Fatalf("failed to marshal request body: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/ai/generate", bytes.NewReader(requestBody))
+	req.Header.Set("Content-Type", "application/json")
+	res := httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+
+	if res.Code != http.StatusBadGateway {
+		t.Fatalf("expected 502, got %d with body %s", res.Code, res.Body.String())
+	}
+
+	var payload struct {
+		Error string      `json:"error"`
+		Debug aiDebugInfo `json:"debug"`
+	}
+	if err := json.Unmarshal(res.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("failed to decode AI error response: %v", err)
+	}
+	if !strings.Contains(payload.Error, "invalid RAW AI request JSON") {
+		t.Fatalf("expected RAW JSON parse error, got %q", payload.Error)
+	}
+	if !payload.Debug.RawMode {
+		t.Fatal("expected debug payload to keep rawMode true")
+	}
+	if payload.Debug.UpstreamRequest != rawRequest {
+		t.Fatalf("expected raw request to be echoed for debugging, got %q", payload.Debug.UpstreamRequest)
+	}
+	if payload.Debug.UpstreamResponse != "" {
+		t.Fatalf("expected no upstream response for local RAW parse failure, got %q", payload.Debug.UpstreamResponse)
+	}
 }
 
 func TestAINodeNotesEndpoint(t *testing.T) {

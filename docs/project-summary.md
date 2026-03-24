@@ -58,6 +58,7 @@ This document is a compact handoff summary for the next conversation.
 - AI connection test.
 - AI relation suggestion.
 - AI topic-based graph generation.
+- AI upstream request/response debug capture with per-action RAW request editing.
 - Built-in template maps and prompt directions.
 - Local AI settings now include:
   - provider

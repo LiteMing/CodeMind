@@ -22,6 +22,8 @@ import {
 import { type TranslationKey, kindLabel, nodeColorLabel, themeLabel, translate } from './i18n'
 import { DEFAULT_AI_MAX_TOKENS, DEFAULT_LM_STUDIO_URL, loadPreferences, normalizeAIMaxTokens, savePreferences } from './preferences'
 import type {
+  AIDebugInfo,
+  AIDebugRequest,
   AppPreferences,
   AITemplateId,
   Locale,
@@ -36,6 +38,7 @@ import type {
 } from './types'
 
 type AppView = 'home' | 'map'
+type AIDebugAction = 'generate' | 'notes' | 'relations' | ''
 
 interface DragState {
   nodeId: string
@@ -108,13 +111,21 @@ interface AIWorkspaceState {
   open: boolean
   busy: boolean
   testing: boolean
+  debugOpen: boolean
+  rawMode: boolean
   template: AITemplateId
   topic: string
   generationInstructions: string
   noteInstructions: string
   relationInstructions: string
+  generateRawRequest: string
+  noteRawRequest: string
+  relationRawRequest: string
   lastSummary: string
   lastModel: string
+  lastDebugAction: AIDebugAction
+  lastDebugInfo: AIDebugInfo | null
+  lastDebugError: string
   connectionMessage: string
   connectionModel: string
   connectionOK: boolean | null
@@ -383,13 +394,21 @@ class MindMapApp {
         open: false,
         busy: false,
         testing: false,
+        debugOpen: false,
+        rawMode: false,
         template: 'concept-graph',
         topic: '',
         generationInstructions: '',
         noteInstructions: '',
         relationInstructions: '',
+        generateRawRequest: '',
+        noteRawRequest: '',
+        relationRawRequest: '',
         lastSummary: '',
         lastModel: '',
+        lastDebugAction: '',
+        lastDebugInfo: null,
+        lastDebugError: '',
         connectionMessage: '',
         connectionModel: '',
         connectionOK: null,
@@ -1138,6 +1157,15 @@ class MindMapApp {
         case 'relationInstructions':
           this.state.ai.relationInstructions = target.value
           break
+        case 'generateRawRequest':
+          this.state.ai.generateRawRequest = target.value
+          break
+        case 'noteRawRequest':
+          this.state.ai.noteRawRequest = target.value
+          break
+        case 'relationRawRequest':
+          this.state.ai.relationRawRequest = target.value
+          break
         default:
           break
       }
@@ -1783,6 +1811,7 @@ class MindMapApp {
     const examplePrompt = promptTemplateCopy(this.state.ai.template, this.state.preferences.locale)
     const aiStatusNotice = this.renderAIStatusNotice()
     const noteTargets = this.resolveAINoteTargets()
+    const rawModeLabel = `${this.aiDebugText('rawMode')}: ${this.t(this.state.ai.rawMode ? 'common.on' : 'common.off')}`
     this.refs.aiLayer.className = 'ai-layer is-visible'
     this.refs.aiLayer.innerHTML = `
       <div class="ai-scrim" data-ai-scrim>
@@ -1797,6 +1826,18 @@ class MindMapApp {
           </header>
 
           ${aiStatusNotice}
+
+          <section class="settings-card">
+            <div class="ai-action-row ai-debug-toggle-row">
+              <button type="button" class="chip-button ${this.state.ai.debugOpen ? 'is-active' : ''}" data-command="toggle-ai-debug">
+                ${this.state.ai.debugOpen ? this.aiDebugText('hide') : this.aiDebugText('show')}
+              </button>
+              <button type="button" class="chip-button ${this.state.ai.rawMode ? 'is-active' : ''}" data-command="toggle-ai-raw-mode">
+                ${rawModeLabel}
+              </button>
+            </div>
+            <p class="inspector-copy">${this.aiDebugText('hint')}</p>
+          </section>
 
           <section class="settings-card">
             <p class="section-label">${this.t('ai.generate')}</p>
@@ -1825,6 +1866,7 @@ class MindMapApp {
               <button type="button" class="action-button primary-action" data-command="ai-generate-map" ${this.state.ai.busy ? 'disabled' : ''}>${this.t('ai.generateAction')}</button>
               <button type="button" class="chip-button" data-command="create-template-map:${this.state.ai.template}" ${this.state.ai.busy ? 'disabled' : ''}>${this.t('ai.templateAction')}</button>
             </div>
+            ${this.renderAIRawEditor('generateRawRequest', this.state.ai.generateRawRequest)}
             <p class="inspector-copy">${escapeHtml(examplePrompt)}</p>
           </section>
 
@@ -1840,6 +1882,7 @@ class MindMapApp {
             <div class="ai-action-row">
               <button type="button" class="action-button" data-command="ai-complete-node-notes" ${this.state.ai.busy ? 'disabled' : ''}>${this.t('ai.notesAction')}</button>
             </div>
+            ${this.renderAIRawEditor('noteRawRequest', this.state.ai.noteRawRequest)}
           </section>
 
           <section class="settings-card">
@@ -1856,6 +1899,7 @@ class MindMapApp {
               <button type="button" class="chip-button" data-command="test-ai-connection" ${this.state.ai.busy || this.state.ai.testing ? 'disabled' : ''}>${this.state.ai.testing ? `${this.t('ai.testConnection')}...` : this.t('ai.testConnection')}</button>
               <button type="button" class="action-button" data-command="ai-connect-relations" ${this.state.ai.busy ? 'disabled' : ''}>${this.t('ai.connectAction')}</button>
             </div>
+            ${this.renderAIRawEditor('relationRawRequest', this.state.ai.relationRawRequest)}
             ${
               this.state.ai.connectionMessage
                 ? `<p class="ai-connection-note ${this.state.ai.connectionOK === true ? 'is-ok' : this.state.ai.connectionOK === false ? 'is-error' : ''}">${
@@ -1877,9 +1921,153 @@ class MindMapApp {
               `
               : ''
           }
+
+          ${this.renderAIDebugPanel()}
         </section>
       </div>
     `
+  }
+
+  private renderAIRawEditor(field: 'generateRawRequest' | 'noteRawRequest' | 'relationRawRequest', value: string): string {
+    if (!this.state.ai.debugOpen && !this.state.ai.rawMode) {
+      return ''
+    }
+
+    return `
+      <label class="field-stack">
+        <span>${this.aiDebugText('rawRequest')}</span>
+        <textarea class="settings-input ai-textarea ai-raw-textarea" data-ai-field="${field}" spellcheck="false">${escapeHtml(value)}</textarea>
+      </label>
+    `
+  }
+
+  private renderAIDebugPanel(): string {
+    if (!this.state.ai.debugOpen) {
+      return ''
+    }
+
+    const debug = this.state.ai.lastDebugInfo
+    const actionLabel = this.aiDebugActionLabel(this.state.ai.lastDebugAction)
+    return `
+      <section class="settings-card">
+        <p class="section-label">${this.aiDebugText('title')}</p>
+        ${
+          actionLabel
+            ? `<p class="inspector-copy">${escapeHtml(this.aiDebugText('lastAction', actionLabel))}</p>`
+            : `<p class="inspector-copy">${this.aiDebugText('empty')}</p>`
+        }
+        ${
+          this.state.ai.lastDebugError
+            ? `<p class="ai-connection-note is-error"><strong>${escapeHtml(this.aiDebugText('lastError'))}</strong><br />${escapeHtml(this.state.ai.lastDebugError)}</p>`
+            : ''
+        }
+        ${
+          debug
+            ? `
+              <div class="ai-debug-grid">
+                <section class="ai-debug-block">
+                  <p class="section-label">${this.aiDebugText('rawRequest')}</p>
+                  <pre class="ai-debug-pre">${escapeHtml(debug.upstreamRequest || '')}</pre>
+                </section>
+                <section class="ai-debug-block">
+                  <p class="section-label">${this.aiDebugText('rawResponse')}</p>
+                  <pre class="ai-debug-pre">${escapeHtml(debug.upstreamResponse || '')}</pre>
+                </section>
+                <section class="ai-debug-block">
+                  <p class="section-label">${this.aiDebugText('assistantContent')}</p>
+                  <pre class="ai-debug-pre">${escapeHtml(debug.assistantContent || '')}</pre>
+                </section>
+              </div>
+            `
+            : ''
+        }
+      </section>
+    `
+  }
+
+  private aiDebugActionLabel(action: AIDebugAction): string {
+    switch (action) {
+      case 'generate':
+        return this.t('ai.generate')
+      case 'notes':
+        return this.t('ai.notes')
+      case 'relations':
+        return this.t('ai.connect')
+      default:
+        return ''
+    }
+  }
+
+  private aiDebugText(
+    key:
+      | 'title'
+      | 'show'
+      | 'hide'
+      | 'hint'
+      | 'empty'
+      | 'lastAction'
+      | 'lastError'
+      | 'rawMode'
+      | 'rawRequest'
+      | 'rawResponse'
+      | 'assistantContent',
+    value = '',
+  ): string {
+    if (this.state.preferences.locale === 'zh-CN') {
+      switch (key) {
+        case 'title':
+          return 'AI 调试'
+        case 'show':
+          return '显示调试'
+        case 'hide':
+          return '隐藏调试'
+        case 'hint':
+          return '开启 RAW 模式后，编辑区中的 JSON 会被直接发送到上游 AI 接口；关闭 RAW 模式时，这里会保留最近一次自动生成并捕获到的请求，方便复制和修改。'
+        case 'empty':
+          return '先执行一次 AI 操作，才能捕获上游请求和完整响应。'
+        case 'lastAction':
+          return `最近调试动作：${value}`
+        case 'lastError':
+          return '最近错误'
+        case 'rawMode':
+          return 'RAW 模式'
+        case 'rawRequest':
+          return 'RAW 请求'
+        case 'rawResponse':
+          return '原始响应'
+        case 'assistantContent':
+          return '助手内容'
+        default:
+          return ''
+      }
+    }
+
+    switch (key) {
+      case 'title':
+        return 'AI Debug'
+      case 'show':
+        return 'Show Debug'
+      case 'hide':
+        return 'Hide Debug'
+      case 'hint':
+        return 'RAW mode sends the edited JSON directly to the upstream AI endpoint. When RAW mode is off, this area keeps the last captured request for reference.'
+      case 'empty':
+        return 'Run an AI action to capture the upstream request and full response.'
+      case 'lastAction':
+        return `Last action: ${value}`
+      case 'lastError':
+        return 'Last error'
+      case 'rawMode':
+        return 'RAW Mode'
+      case 'rawRequest':
+        return 'RAW Request'
+      case 'rawResponse':
+        return 'Raw Response'
+      case 'assistantContent':
+        return 'Assistant Content'
+      default:
+        return ''
+    }
   }
 
   private renderAIStatusNotice(): string {
@@ -2895,6 +3083,12 @@ class MindMapApp {
         case 'close-ai-workspace':
           this.closeAIWorkspace()
           return
+        case 'toggle-ai-debug':
+          this.toggleAIDebug()
+          return
+        case 'toggle-ai-raw-mode':
+          this.toggleAIRawMode()
+          return
         case 'open-graph-overlay':
           this.openGraphOverlay()
           return
@@ -3192,6 +3386,19 @@ class MindMapApp {
     this.render()
   }
 
+  private toggleAIDebug(): void {
+    this.state.ai.debugOpen = !this.state.ai.debugOpen
+    this.render()
+  }
+
+  private toggleAIRawMode(): void {
+    this.state.ai.rawMode = !this.state.ai.rawMode
+    if (this.state.ai.rawMode) {
+      this.state.ai.debugOpen = true
+    }
+    this.render()
+  }
+
   private openGraphOverlay(): void {
     this.state.graph.open = true
     this.state.graph.selectedNodeId = this.state.graph.selectedNodeId ?? this.state.selectedNodeId
@@ -3290,6 +3497,47 @@ class MindMapApp {
     return root.id ? { mode: 'all', nodes: [root] } : { mode: 'all', nodes: [] }
   }
 
+  private buildAIDebugRequest(rawRequest: string): AIDebugRequest {
+    return {
+      rawMode: this.state.ai.rawMode,
+      rawRequest: this.state.ai.rawMode ? rawRequest : '',
+    }
+  }
+
+  private captureAIDebug(action: AIDebugAction, debug?: AIDebugInfo, errorMessage = ''): void {
+    this.state.ai.lastDebugAction = action
+    this.state.ai.lastDebugInfo = debug ?? null
+    this.state.ai.lastDebugError = errorMessage
+
+    if (errorMessage && debug) {
+      this.state.ai.debugOpen = true
+    }
+    if (!debug) {
+      return
+    }
+
+    const request = debug.upstreamRequest.trim()
+    if (request) {
+      this.storeCapturedRawRequest(action, debug.upstreamRequest)
+    }
+  }
+
+  private storeCapturedRawRequest(action: AIDebugAction, rawRequest: string): void {
+    switch (action) {
+      case 'generate':
+        this.state.ai.generateRawRequest = rawRequest
+        break
+      case 'notes':
+        this.state.ai.noteRawRequest = rawRequest
+        break
+      case 'relations':
+        this.state.ai.relationRawRequest = rawRequest
+        break
+      default:
+        break
+    }
+  }
+
   private async applyAINodeNotes(): Promise<void> {
     if (this.state.ai.busy) {
       return
@@ -3313,9 +3561,11 @@ class MindMapApp {
         settings: this.state.preferences.ai,
         targetNodeIds: targets.nodes.map((node) => node.id),
         instructions: this.state.ai.noteInstructions,
+        debug: this.buildAIDebugRequest(this.state.ai.noteRawRequest),
       })
       this.state.ai.lastSummary = result.summary
       this.state.ai.lastModel = result.model
+      this.captureAIDebug('notes', result.debug)
 
       const nextNotes = result.notes.filter((item) => Boolean(this.findNode(item.id)) && item.note.trim() !== '')
       if (nextNotes.length === 0) {
@@ -3341,7 +3591,9 @@ class MindMapApp {
       this.render()
       this.scheduleAutosave('status.noteSaveScheduled')
     } catch (error) {
-      this.setStatus('status.aiFailed', { reason: getErrorMessage(error) })
+      const reason = getErrorMessage(error)
+      this.captureAIDebug('notes', getAIDebugInfo(error), reason)
+      this.setStatus('status.aiFailed', { reason })
     } finally {
       this.state.ai.busy = false
       this.render()
@@ -3359,9 +3611,15 @@ class MindMapApp {
     this.renderAIWorkspace()
 
     try {
-      const result = await api.suggestRelations(this.state.document, this.state.preferences.ai, this.state.ai.relationInstructions)
+      const result = await api.suggestRelations(
+        this.state.document,
+        this.state.preferences.ai,
+        this.state.ai.relationInstructions,
+        this.buildAIDebugRequest(this.state.ai.relationRawRequest),
+      )
       this.state.ai.lastSummary = result.summary
       this.state.ai.lastModel = result.model
+      this.captureAIDebug('relations', result.debug)
 
       const nextRelations = result.relations.filter((relation) => {
         return Boolean(this.findNode(relation.sourceId) && this.findNode(relation.targetId))
@@ -3402,7 +3660,9 @@ class MindMapApp {
       this.render()
       this.scheduleAutosave('status.relationSaveScheduled')
     } catch (error) {
-      this.setStatus('status.aiFailed', { reason: getErrorMessage(error) })
+      const reason = getErrorMessage(error)
+      this.captureAIDebug('relations', getAIDebugInfo(error), reason)
+      this.setStatus('status.aiFailed', { reason })
     } finally {
       this.state.ai.busy = false
       this.render()
@@ -3430,15 +3690,19 @@ class MindMapApp {
         template: this.state.ai.template,
         instructions: this.state.ai.generationInstructions,
         settings: this.state.preferences.ai,
+        debug: this.buildAIDebugRequest(this.state.ai.generateRawRequest),
       })
 
       this.state.ai.lastSummary = result.summary
       this.state.ai.lastModel = result.model
+      this.captureAIDebug('generate', result.debug)
       await this.persistGeneratedDocument(result.document)
       this.state.ai.open = false
       this.setStatus('status.aiMapGenerated', { count: result.document.nodes.length })
     } catch (error) {
-      this.setStatus('status.aiFailed', { reason: getErrorMessage(error) })
+      const reason = getErrorMessage(error)
+      this.captureAIDebug('generate', getAIDebugInfo(error), reason)
+      this.setStatus('status.aiFailed', { reason })
     } finally {
       this.state.ai.busy = false
       this.render()
@@ -4951,6 +5215,24 @@ function directionalCrossDelta(direction: string, deltaX: number, deltaY: number
     return deltaX
   }
   return deltaY
+}
+
+function getAIDebugInfo(error: unknown): AIDebugInfo | undefined {
+  if (!error || typeof error !== 'object' || !('debug' in error)) {
+    return undefined
+  }
+
+  const candidate = (error as { debug?: Partial<AIDebugInfo> }).debug
+  if (!candidate) {
+    return undefined
+  }
+
+  return {
+    rawMode: Boolean(candidate.rawMode),
+    upstreamRequest: typeof candidate.upstreamRequest === 'string' ? candidate.upstreamRequest : '',
+    upstreamResponse: typeof candidate.upstreamResponse === 'string' ? candidate.upstreamResponse : '',
+    assistantContent: typeof candidate.assistantContent === 'string' ? candidate.assistantContent : '',
+  }
 }
 
 function getErrorMessage(error: unknown): string {

@@ -1,4 +1,6 @@
 import type {
+  AIDebugInfo,
+  AIDebugRequest,
   AIGenerateResponse,
   AINodeNotesResponse,
   AIRelationResponse,
@@ -16,13 +18,13 @@ const JSON_HEADERS = {
 const DESKTOP_API_BASE = 'http://127.0.0.1:34117/api'
 const API_BASE = resolveApiBase()
 const DEV_BACKEND_HINT =
-  '当前 AI 测试会先访问本地 Go API，再由 Go API 转发到 LM Studio。开发模式请在项目根目录运行 `npm run dev`，或至少同时运行 `go run ./cmd/server` 和 `cd frontend && npm run dev`。'
+  '当前 AI 请求会先访问本地 Go API，再由 Go API 转发到模型服务。开发模式请在项目根目录运行 `npm run dev`，或至少同时运行 `go run ./cmd/server` 和 `cd frontend && npm run dev`。'
 
 export const api = {
   async listMaps(): Promise<MindMapSummary[]> {
     const response = await fetch(`${API_BASE}/maps`)
     if (!response.ok) {
-      throw new Error(await readError(response))
+      throw await createAPIError(response)
     }
 
     const payload = await readJSON<MindMapSummary[]>(response, '/api/maps')
@@ -37,7 +39,7 @@ export const api = {
     })
 
     if (!response.ok) {
-      throw new Error(await readError(response))
+      throw await createAPIError(response)
     }
 
     return normalizeDocument(await readJSON<MindMapDocument>(response, '/api/maps'))
@@ -46,7 +48,7 @@ export const api = {
   async loadMap(mapId: string): Promise<MindMapDocument> {
     const response = await fetch(`${API_BASE}/maps/${encodeURIComponent(mapId)}`)
     if (!response.ok) {
-      throw new Error(await readError(response))
+      throw await createAPIError(response)
     }
 
     return normalizeDocument(await readJSON<MindMapDocument>(response, `/api/maps/${encodeURIComponent(mapId)}`))
@@ -60,7 +62,7 @@ export const api = {
     })
 
     if (!response.ok) {
-      throw new Error(await readError(response))
+      throw await createAPIError(response)
     }
 
     return normalizeDocument(await readJSON<MindMapDocument>(response, `/api/maps/${encodeURIComponent(document.id)}`))
@@ -74,7 +76,7 @@ export const api = {
     })
 
     if (!response.ok) {
-      throw new Error(await readError(response))
+      throw await createAPIError(response)
     }
 
     return normalizeDocument(await readJSON<MindMapDocument>(response, `/api/maps/${encodeURIComponent(mapId)}`))
@@ -86,7 +88,7 @@ export const api = {
     })
 
     if (!response.ok) {
-      throw new Error(await readError(response))
+      throw await createAPIError(response)
     }
   },
 
@@ -98,7 +100,7 @@ export const api = {
     })
 
     if (!response.ok) {
-      throw new Error(await readError(response))
+      throw await createAPIError(response)
     }
 
     const payload = await readJSON<{ content: string }>(response, '/api/export/markdown')
@@ -113,13 +115,18 @@ export const api = {
     })
 
     if (!response.ok) {
-      throw new Error(await readError(response))
+      throw await createAPIError(response)
     }
 
     return normalizeDocument(await readJSON<MindMapDocument>(response, '/api/import'))
   },
 
-  async suggestRelations(document: MindMapDocument, settings: AISettings, instructions: string): Promise<AIRelationResponse> {
+  async suggestRelations(
+    document: MindMapDocument,
+    settings: AISettings,
+    instructions: string,
+    debug?: AIDebugRequest,
+  ): Promise<AIRelationResponse> {
     const response = await fetch(`${API_BASE}/ai/relations`, {
       method: 'POST',
       headers: JSON_HEADERS,
@@ -127,11 +134,12 @@ export const api = {
         document,
         settings,
         instructions,
+        debug,
       }),
     })
 
     if (!response.ok) {
-      throw new Error(await readError(response))
+      throw await createAPIError(response)
     }
 
     return await readJSON<AIRelationResponse>(response, '/api/ai/relations')
@@ -142,6 +150,7 @@ export const api = {
     settings: AISettings
     targetNodeIds: string[]
     instructions: string
+    debug?: AIDebugRequest
   }): Promise<AINodeNotesResponse> {
     const response = await fetch(`${API_BASE}/ai/node-notes`, {
       method: 'POST',
@@ -150,7 +159,7 @@ export const api = {
     })
 
     if (!response.ok) {
-      throw new Error(await readError(response))
+      throw await createAPIError(response)
     }
 
     return await readJSON<AINodeNotesResponse>(response, '/api/ai/node-notes')
@@ -161,6 +170,7 @@ export const api = {
     template: AITemplateId
     instructions: string
     settings: AISettings
+    debug?: AIDebugRequest
   }): Promise<AIGenerateResponse> {
     const response = await fetch(`${API_BASE}/ai/generate`, {
       method: 'POST',
@@ -169,7 +179,7 @@ export const api = {
     })
 
     if (!response.ok) {
-      throw new Error(await readError(response))
+      throw await createAPIError(response)
     }
 
     const payload = await readJSON<AIGenerateResponse>(response, '/api/ai/generate')
@@ -187,11 +197,21 @@ export const api = {
     })
 
     if (!response.ok) {
-      throw new Error(await readError(response))
+      throw await createAPIError(response)
     }
 
     return await readJSON<AITestResponse>(response, '/api/ai/test')
   },
+}
+
+class APIError extends Error {
+  debug?: AIDebugInfo
+
+  constructor(message: string, debug?: AIDebugInfo) {
+    super(message)
+    this.name = 'APIError'
+    this.debug = debug
+  }
 }
 
 function normalizeDocument(document: MindMapDocument): MindMapDocument {
@@ -228,15 +248,31 @@ function isWailsDesktopRuntime(): boolean {
   return typeof globalWithRuntime.runtime === 'object' && globalWithRuntime.runtime !== null
 }
 
-async function readError(response: Response): Promise<string> {
+function normalizeDebugInfo(value: unknown): AIDebugInfo | undefined {
+  if (!value || typeof value !== 'object') {
+    return undefined
+  }
+
+  const candidate = value as Partial<AIDebugInfo>
+  return {
+    rawMode: Boolean(candidate.rawMode),
+    upstreamRequest: typeof candidate.upstreamRequest === 'string' ? candidate.upstreamRequest : '',
+    upstreamResponse: typeof candidate.upstreamResponse === 'string' ? candidate.upstreamResponse : '',
+    assistantContent: typeof candidate.assistantContent === 'string' ? candidate.assistantContent : '',
+  }
+}
+
+async function createAPIError(response: Response): Promise<APIError> {
   const contentType = (response.headers.get('content-type') ?? '').toLowerCase()
   const payload = await response.text()
+  let debug: AIDebugInfo | undefined
 
   if (contentType.includes('application/json')) {
     try {
-      const parsed = JSON.parse(payload) as { error?: string }
+      const parsed = JSON.parse(payload) as { error?: string; debug?: unknown }
+      debug = normalizeDebugInfo(parsed.debug)
       if (parsed.error) {
-        return parsed.error
+        return new APIError(parsed.error, debug)
       }
     } catch {
       // Ignore malformed error payloads and fall back to generic messaging below.
@@ -244,10 +280,13 @@ async function readError(response: Response): Promise<string> {
   }
 
   if (payload.trim().startsWith('<')) {
-    return `${response.status} ${response.statusText}: API 返回了 HTML 页面，通常表示你当前只启动了前端，或者 \`http://localhost:7979\` 的 Go API 没有正常运行。${DEV_BACKEND_HINT}`
+    return new APIError(
+      `${response.status} ${response.statusText}: API 返回了 HTML 页面，通常表示你当前只启动了前端，或者 \`http://localhost:7979\` 的 Go API 没有正常运行。${DEV_BACKEND_HINT}`,
+      debug,
+    )
   }
 
-  return payload.trim() || `${response.status} ${response.statusText}`
+  return new APIError(payload.trim() || `${response.status} ${response.statusText}`, debug)
 }
 
 async function readJSON<T>(response: Response, endpoint: string): Promise<T> {

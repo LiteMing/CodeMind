@@ -62,10 +62,16 @@ type aiSettingsRequest struct {
 	MaxTokens int    `json:"maxTokens"`
 }
 
+type aiDebugRequest struct {
+	RawMode    bool   `json:"rawMode"`
+	RawRequest string `json:"rawRequest"`
+}
+
 type aiRelationsRequest struct {
 	Settings     aiSettingsRequest `json:"settings"`
 	Document     mindmap.Document  `json:"document"`
 	Instructions string            `json:"instructions"`
+	Debug        aiDebugRequest    `json:"debug"`
 }
 
 type aiNodeNotesRequest struct {
@@ -73,6 +79,7 @@ type aiNodeNotesRequest struct {
 	Document      mindmap.Document  `json:"document"`
 	TargetNodeIDs []string          `json:"targetNodeIds"`
 	Instructions  string            `json:"instructions"`
+	Debug         aiDebugRequest    `json:"debug"`
 }
 
 type aiTestRequest struct {
@@ -87,10 +94,18 @@ type aiRelationSuggestion struct {
 	Confidence float64 `json:"confidence"`
 }
 
+type aiDebugInfo struct {
+	RawMode          bool   `json:"rawMode"`
+	UpstreamRequest  string `json:"upstreamRequest"`
+	UpstreamResponse string `json:"upstreamResponse"`
+	AssistantContent string `json:"assistantContent"`
+}
+
 type aiRelationsResponse struct {
 	Relations []aiRelationSuggestion `json:"relations"`
 	Summary   string                 `json:"summary"`
 	Model     string                 `json:"model"`
+	Debug     aiDebugInfo            `json:"debug"`
 }
 
 type aiNodeNoteSuggestion struct {
@@ -102,6 +117,7 @@ type aiNodeNotesResponse struct {
 	Notes   []aiNodeNoteSuggestion `json:"notes"`
 	Summary string                 `json:"summary"`
 	Model   string                 `json:"model"`
+	Debug   aiDebugInfo            `json:"debug"`
 }
 
 type aiGenerateRequest struct {
@@ -109,6 +125,7 @@ type aiGenerateRequest struct {
 	Topic        string            `json:"topic"`
 	Template     string            `json:"template"`
 	Instructions string            `json:"instructions"`
+	Debug        aiDebugRequest    `json:"debug"`
 }
 
 type aiGenerateResponse struct {
@@ -117,6 +134,7 @@ type aiGenerateResponse struct {
 	Prompt   string           `json:"prompt"`
 	Template string           `json:"template"`
 	Model    string           `json:"model"`
+	Debug    aiDebugInfo      `json:"debug"`
 }
 
 type aiTestResponse struct {
@@ -178,6 +196,31 @@ type openAIModelsResponse struct {
 	Error *struct {
 		Message string `json:"message"`
 	} `json:"error,omitempty"`
+}
+
+type aiTaskResult struct {
+	Model string
+	Debug aiDebugInfo
+}
+
+type aiChatCompletionResult struct {
+	Content          string
+	Model            string
+	UpstreamRequest  string
+	UpstreamResponse string
+}
+
+type aiDebugError struct {
+	Err   error
+	Debug aiDebugInfo
+}
+
+func (e *aiDebugError) Error() string {
+	return e.Err.Error()
+}
+
+func (e *aiDebugError) Unwrap() error {
+	return e.Err
 }
 
 func New(fileStore *store.FileStore) *Server {
@@ -369,7 +412,7 @@ func (s *Server) handleAIRelations(w http.ResponseWriter, r *http.Request) {
 
 	result, err := s.suggestAIRelations(req)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, err)
+		writeAIError(w, http.StatusBadGateway, err)
 		return
 	}
 
@@ -395,7 +438,7 @@ func (s *Server) handleAINodeNotes(w http.ResponseWriter, r *http.Request) {
 
 	result, err := s.completeAINodeNotes(req)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, err)
+		writeAIError(w, http.StatusBadGateway, err)
 		return
 	}
 
@@ -443,7 +486,7 @@ func (s *Server) handleAIGenerate(w http.ResponseWriter, r *http.Request) {
 
 	result, err := s.generateAIDocument(req)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, err)
+		writeAIError(w, http.StatusBadGateway, err)
 		return
 	}
 
@@ -513,7 +556,7 @@ func (s *Server) suggestAIRelations(req aiRelationsRequest) (aiRelationsResponse
 	}
 
 	var payload relationPayload
-	model, err := s.runJSONTask(req.Settings, systemPrompt, userPrompt, schema, &payload)
+	taskResult, err := s.runJSONTask(req.Settings, systemPrompt, userPrompt, schema, req.Debug, &payload)
 	if err != nil {
 		return aiRelationsResponse{}, err
 	}
@@ -522,7 +565,8 @@ func (s *Server) suggestAIRelations(req aiRelationsRequest) (aiRelationsResponse
 	return aiRelationsResponse{
 		Relations: filtered,
 		Summary:   strings.TrimSpace(payload.Summary),
-		Model:     model,
+		Model:     taskResult.Model,
+		Debug:     taskResult.Debug,
 	}, nil
 }
 
@@ -600,7 +644,7 @@ func (s *Server) completeAINodeNotes(req aiNodeNotesRequest) (aiNodeNotesRespons
 	}
 
 	var payload notePayload
-	model, err := s.runJSONTask(req.Settings, systemPrompt, userPrompt, schema, &payload)
+	taskResult, err := s.runJSONTask(req.Settings, systemPrompt, userPrompt, schema, req.Debug, &payload)
 	if err != nil {
 		return aiNodeNotesResponse{}, err
 	}
@@ -608,7 +652,8 @@ func (s *Server) completeAINodeNotes(req aiNodeNotesRequest) (aiNodeNotesRespons
 	return aiNodeNotesResponse{
 		Notes:   filterCompletedNodeNotes(req.Document, req.TargetNodeIDs, payload.Notes),
 		Summary: strings.TrimSpace(payload.Summary),
-		Model:   model,
+		Model:   taskResult.Model,
+		Debug:   taskResult.Debug,
 	}, nil
 }
 
@@ -690,7 +735,7 @@ func (s *Server) generateAIDocument(req aiGenerateRequest) (aiGenerateResponse, 
 	}
 
 	var payload aiGeneratedGraph
-	model, err := s.runJSONTask(req.Settings, systemPrompt, userPrompt, schema, &payload)
+	taskResult, err := s.runJSONTask(req.Settings, systemPrompt, userPrompt, schema, req.Debug, &payload)
 	if err != nil {
 		return aiGenerateResponse{}, err
 	}
@@ -705,7 +750,7 @@ func (s *Server) generateAIDocument(req aiGenerateRequest) (aiGenerateResponse, 
 			"- Preserve detailed notes for every node while revising the hierarchy.",
 			"- Preserve only relation lines that connect distant branches semantically.",
 		}, "\n")
-		model, err = s.runJSONTask(req.Settings, systemPrompt, retryPrompt, schema, &payload)
+		taskResult, err = s.runJSONTask(req.Settings, systemPrompt, retryPrompt, schema, req.Debug, &payload)
 		if err != nil {
 			return aiGenerateResponse{}, err
 		}
@@ -721,7 +766,8 @@ func (s *Server) generateAIDocument(req aiGenerateRequest) (aiGenerateResponse, 
 		Summary:  strings.TrimSpace(payload.Summary),
 		Prompt:   userPrompt,
 		Template: strings.TrimSpace(req.Template),
-		Model:    model,
+		Model:    taskResult.Model,
+		Debug:    taskResult.Debug,
 	}, nil
 }
 
@@ -761,44 +807,61 @@ func (s *Server) testAIConnection(settings aiSettingsRequest) (aiTestResponse, e
 	}, nil
 }
 
-func (s *Server) runJSONTask(settings aiSettingsRequest, systemPrompt string, userPrompt string, schema map[string]any, target any) (string, error) {
+func (s *Server) runJSONTask(settings aiSettingsRequest, systemPrompt string, userPrompt string, schema map[string]any, debugRequest aiDebugRequest, target any) (aiTaskResult, error) {
 	baseURL := normalizeAIBaseURL(settings.BaseURL)
 	model, err := s.resolveAIModel(settings, baseURL, strings.TrimSpace(settings.Model))
 	if err != nil {
-		return "", err
+		return aiTaskResult{}, err
 	}
 
+	rawModeActive := isAIRawModeActive(debugRequest)
 	fallbackUsed := false
-	raw, responseModel, err := s.chatCompletion(settings, baseURL, model, systemPrompt, userPrompt, schema)
-	if err != nil && schema != nil {
+	chatResult, err := s.chatCompletion(settings, baseURL, model, systemPrompt, userPrompt, schema, debugRequest)
+	if err != nil && schema != nil && !rawModeActive {
 		fallbackUsed = true
 		fallbackSystemPrompt := jsonOnlySystemPrompt(systemPrompt)
-		raw, responseModel, err = s.chatCompletion(settings, baseURL, model, fallbackSystemPrompt, userPrompt, nil)
+		chatResult, err = s.chatCompletion(settings, baseURL, model, fallbackSystemPrompt, userPrompt, nil, debugRequest)
 	}
 	if err != nil {
-		return "", err
+		return aiTaskResult{}, err
 	}
 
-	if err := unmarshalAIJSON(raw, target); err != nil {
-		if schema != nil && !fallbackUsed {
+	debugInfo := aiDebugInfo{
+		RawMode:          rawModeActive,
+		UpstreamRequest:  chatResult.UpstreamRequest,
+		UpstreamResponse: chatResult.UpstreamResponse,
+		AssistantContent: chatResult.Content,
+	}
+
+	if err := unmarshalAIJSON(chatResult.Content, target); err != nil {
+		if schema != nil && !fallbackUsed && !rawModeActive {
 			fallbackUsed = true
 			fallbackSystemPrompt := jsonOnlySystemPrompt(systemPrompt)
-			raw, responseModel, err = s.chatCompletion(settings, baseURL, model, fallbackSystemPrompt, userPrompt, nil)
+			chatResult, err = s.chatCompletion(settings, baseURL, model, fallbackSystemPrompt, userPrompt, nil, debugRequest)
 			if err != nil {
-				return "", err
+				return aiTaskResult{}, err
 			}
-			if err := unmarshalAIJSON(raw, target); err != nil {
-				return "", fmt.Errorf("failed to parse AI response JSON: %w", err)
+			debugInfo = aiDebugInfo{
+				RawMode:          rawModeActive,
+				UpstreamRequest:  chatResult.UpstreamRequest,
+				UpstreamResponse: chatResult.UpstreamResponse,
+				AssistantContent: chatResult.Content,
+			}
+			if err := unmarshalAIJSON(chatResult.Content, target); err != nil {
+				return aiTaskResult{}, &aiDebugError{Err: fmt.Errorf("failed to parse AI response JSON: %w", err), Debug: debugInfo}
 			}
 		} else {
-			return "", fmt.Errorf("failed to parse AI response JSON: %w", err)
+			return aiTaskResult{}, &aiDebugError{Err: fmt.Errorf("failed to parse AI response JSON: %w", err), Debug: debugInfo}
 		}
 	}
 
-	if strings.TrimSpace(responseModel) != "" {
-		model = responseModel
+	if strings.TrimSpace(chatResult.Model) != "" {
+		model = chatResult.Model
 	}
-	return model, nil
+	return aiTaskResult{
+		Model: model,
+		Debug: debugInfo,
+	}, nil
 }
 
 func (s *Server) resolveAIModel(settings aiSettingsRequest, baseURL string, configuredModel string) (string, error) {
@@ -856,7 +919,47 @@ func (s *Server) listAIModels(settings aiSettingsRequest, baseURL string) ([]str
 	return models, nil
 }
 
-func (s *Server) chatCompletion(settings aiSettingsRequest, baseURL string, model string, systemPrompt string, userPrompt string, schema any) (string, string, error) {
+func buildAIChatPayload(
+	settings aiSettingsRequest,
+	model string,
+	systemPrompt string,
+	userPrompt string,
+	schema any,
+	debugRequest aiDebugRequest,
+) ([]byte, error) {
+	if isAIRawModeActive(debugRequest) {
+		rawRequest := strings.TrimSpace(debugRequest.RawRequest)
+		var rawPayload map[string]any
+		if err := json.Unmarshal([]byte(rawRequest), &rawPayload); err != nil {
+			return nil, &aiDebugError{
+				Err: fmt.Errorf("invalid RAW AI request JSON: %w", err),
+				Debug: aiDebugInfo{
+					RawMode:         true,
+					UpstreamRequest: rawRequest,
+				},
+			}
+		}
+
+		if rawModel, ok := rawPayload["model"].(string); !ok || strings.TrimSpace(rawModel) == "" {
+			rawPayload["model"] = model
+		}
+		if _, ok := rawPayload["stream"]; !ok {
+			rawPayload["stream"] = false
+		}
+
+		payload, err := json.Marshal(rawPayload)
+		if err != nil {
+			return nil, &aiDebugError{
+				Err: fmt.Errorf("failed to encode RAW AI request JSON: %w", err),
+				Debug: aiDebugInfo{
+					RawMode:         true,
+					UpstreamRequest: rawRequest,
+				},
+			}
+		}
+		return payload, nil
+	}
+
 	requestBody := openAIChatRequest{
 		Model:       model,
 		Messages:    []openAIChatMessage{{Role: "system", Content: systemPrompt}, {Role: "user", Content: userPrompt}},
@@ -870,12 +973,30 @@ func (s *Server) chatCompletion(settings aiSettingsRequest, baseURL string, mode
 
 	payload, err := json.Marshal(requestBody)
 	if err != nil {
-		return "", "", err
+		return nil, err
 	}
+	return payload, nil
+}
+
+func (s *Server) chatCompletion(
+	settings aiSettingsRequest,
+	baseURL string,
+	model string,
+	systemPrompt string,
+	userPrompt string,
+	schema any,
+	debugRequest aiDebugRequest,
+) (aiChatCompletionResult, error) {
+	payload, err := buildAIChatPayload(settings, model, systemPrompt, userPrompt, schema, debugRequest)
+	if err != nil {
+		return aiChatCompletionResult{}, err
+	}
+	requestJSON := string(payload)
+	rawModeActive := isAIRawModeActive(debugRequest)
 
 	request, err := http.NewRequest(http.MethodPost, baseURL+"/chat/completions", bytes.NewReader(payload))
 	if err != nil {
-		return "", "", err
+		return aiChatCompletionResult{}, err
 	}
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Accept", "application/json")
@@ -885,27 +1006,57 @@ func (s *Server) chatCompletion(settings aiSettingsRequest, baseURL string, mode
 
 	response, err := s.httpClient.Do(request)
 	if err != nil {
-		return "", "", fmt.Errorf("failed to call AI model: %w", err)
+		return aiChatCompletionResult{}, &aiDebugError{
+			Err: fmt.Errorf("failed to call AI model: %w", err),
+			Debug: aiDebugInfo{
+				RawMode:         rawModeActive,
+				UpstreamRequest: requestJSON,
+			},
+		}
 	}
 	defer response.Body.Close()
 
 	body, _ := io.ReadAll(response.Body)
+	rawResponse := string(body)
+	debugInfo := aiDebugInfo{
+		RawMode:          rawModeActive,
+		UpstreamRequest:  requestJSON,
+		UpstreamResponse: rawResponse,
+	}
 	if response.StatusCode >= http.StatusBadRequest {
-		return "", "", fmt.Errorf("AI endpoint returned %d: %s", response.StatusCode, strings.TrimSpace(string(body)))
+		return aiChatCompletionResult{}, &aiDebugError{
+			Err:   fmt.Errorf("AI endpoint returned %d: %s", response.StatusCode, strings.TrimSpace(rawResponse)),
+			Debug: debugInfo,
+		}
 	}
 
 	var payloadResponse openAIChatResponse
 	if err := json.Unmarshal(body, &payloadResponse); err != nil {
-		return "", "", fmt.Errorf("failed to decode AI response: %w", err)
+		return aiChatCompletionResult{}, &aiDebugError{
+			Err:   fmt.Errorf("failed to decode AI response: %w", err),
+			Debug: debugInfo,
+		}
 	}
 	if payloadResponse.Error != nil && strings.TrimSpace(payloadResponse.Error.Message) != "" {
-		return "", "", errors.New(strings.TrimSpace(payloadResponse.Error.Message))
+		return aiChatCompletionResult{}, &aiDebugError{
+			Err:   errors.New(strings.TrimSpace(payloadResponse.Error.Message)),
+			Debug: debugInfo,
+		}
 	}
 	if len(payloadResponse.Choices) == 0 {
-		return "", "", errors.New("AI response did not include any choices")
+		return aiChatCompletionResult{}, &aiDebugError{
+			Err:   errors.New("AI response did not include any choices"),
+			Debug: debugInfo,
+		}
 	}
 
-	return payloadResponse.Choices[0].Message.Content, payloadResponse.Model, nil
+	debugInfo.AssistantContent = payloadResponse.Choices[0].Message.Content
+	return aiChatCompletionResult{
+		Content:          payloadResponse.Choices[0].Message.Content,
+		Model:            payloadResponse.Model,
+		UpstreamRequest:  requestJSON,
+		UpstreamResponse: rawResponse,
+	}, nil
 }
 
 func authorizationToken(settings aiSettingsRequest) string {
@@ -1672,6 +1823,23 @@ func writeError(w http.ResponseWriter, statusCode int, err error) {
 	writeJSON(w, statusCode, map[string]string{
 		"error": err.Error(),
 	})
+}
+
+func writeAIError(w http.ResponseWriter, statusCode int, err error) {
+	var debugErr *aiDebugError
+	if errors.As(err, &debugErr) {
+		writeJSON(w, statusCode, map[string]any{
+			"error": debugErr.Error(),
+			"debug": debugErr.Debug,
+		})
+		return
+	}
+
+	writeError(w, statusCode, err)
+}
+
+func isAIRawModeActive(debugRequest aiDebugRequest) bool {
+	return debugRequest.RawMode && strings.TrimSpace(debugRequest.RawRequest) != ""
 }
 
 func loggingMiddleware(next http.Handler) http.Handler {
