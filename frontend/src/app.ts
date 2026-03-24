@@ -3696,6 +3696,14 @@ class MindMapApp {
     context.textAlign = 'center'
     context.textBaseline = 'middle'
     for (const node of frame.nodes) {
+      const occlusionRadius = node.radius + Math.max(3.2, node.lineWidth * 1.25)
+      context.save()
+      context.beginPath()
+      context.fillStyle = `rgba(9, 14, 24, ${node.occlusionOpacity})`
+      context.arc(node.x, node.y, occlusionRadius, 0, Math.PI * 2)
+      context.fill()
+      context.restore()
+
       context.save()
       context.beginPath()
       context.shadowColor = node.selected
@@ -3999,6 +4007,7 @@ function buildGraphFrame(
     radius: number
     label: string
     opacity: number
+    occlusionOpacity: number
     surfaceOpacity: number
     strokeOpacity: number
     textOpacity: number
@@ -4028,6 +4037,7 @@ function buildGraphFrame(
       depth: number
       z: number
       opacity: number
+      occlusionOpacity: number
       surfaceOpacity: number
       strokeOpacity: number
       textOpacity: number
@@ -4075,7 +4085,8 @@ function buildGraphFrame(
       depth,
       z: pitchZ,
       opacity: clamp(0.2 + depthProgress * 0.78 + emphasisBoost, 0.2, 1),
-      surfaceOpacity: clamp(0.34 + depthProgress * 0.46 + emphasisBoost * 0.2, 0.34, 0.94),
+      occlusionOpacity: clamp(0.9 + depthProgress * 0.08, 0.9, 0.98),
+      surfaceOpacity: clamp(0.72 + depthProgress * 0.24 + emphasisBoost * 0.08, 0.72, 0.98),
       strokeOpacity: clamp(0.28 + depthProgress * 0.48 + emphasisBoost * 0.18, 0.28, 0.96),
       textOpacity: clamp(0.56 + depthProgress * 0.36 + emphasisBoost * 0.12, 0.56, 1),
       lineWidth: clamp(1 + depthProgress * 1.6 + (selected ? 0.45 : 0), 1, 3.05),
