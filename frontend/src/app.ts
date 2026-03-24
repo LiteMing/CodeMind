@@ -1876,6 +1876,7 @@ class MindMapApp {
             </label>
             <div class="ai-action-row">
               <button type="button" class="action-button primary-action" data-command="ai-generate-map" ${this.state.ai.busy ? 'disabled' : ''}>${this.t('ai.generateAction')}</button>
+              <button type="button" class="chip-button" data-command="ai-expand-map" ${this.state.ai.busy ? 'disabled' : ''}>${this.t('ai.expandAction')}</button>
               <button type="button" class="chip-button" data-command="create-template-map:${this.state.ai.template}" ${this.state.ai.busy ? 'disabled' : ''}>${this.t('ai.templateAction')}</button>
             </div>
             ${this.renderAIRawEditor('generateRawRequest', this.state.ai.generateRawRequest)}
@@ -3166,6 +3167,9 @@ class MindMapApp {
         case 'ai-generate-map':
           await this.generateAIMap()
           return
+        case 'ai-expand-map':
+          await this.expandAIMap()
+          return
         case 'create-template-map':
           await this.createTemplateMap(normalizeAITemplateId(argument))
           return
@@ -3752,6 +3756,7 @@ class MindMapApp {
         template: this.state.ai.template,
         instructions: this.state.ai.generationInstructions,
         settings: this.state.preferences.ai,
+        mode: 'new',
         debug: this.buildAIDebugRequest(this.state.ai.generateRawRequest),
       })
 
@@ -3761,6 +3766,49 @@ class MindMapApp {
       await this.persistGeneratedDocument(result.document)
       this.state.ai.open = false
       this.setStatus('status.aiMapGenerated', { count: result.document.nodes.length })
+    } catch (error) {
+      const reason = getErrorMessage(error)
+      this.captureAIDebug('generate', getAIDebugInfo(error), reason)
+      this.setStatus('status.aiFailed', { reason })
+    } finally {
+      this.state.ai.busy = false
+      this.render()
+    }
+  }
+
+  private async expandAIMap(): Promise<void> {
+    const previousNodeCount = this.state.document.nodes.length
+    const topic = this.state.ai.topic.trim() || this.state.document.title.trim() || findRoot(this.state.document).title.trim()
+    if (!topic) {
+      this.setStatus('status.aiTopicRequired')
+      this.render()
+      return
+    }
+    if (this.state.ai.busy) {
+      return
+    }
+
+    this.state.ai.busy = true
+    this.setStatus('status.aiRunning')
+    this.render()
+
+    try {
+      const result = await api.generateKnowledgeMap({
+        topic,
+        template: this.state.ai.template,
+        instructions: this.state.ai.generationInstructions,
+        settings: this.state.preferences.ai,
+        mode: 'expand',
+        document: this.state.document,
+        debug: this.buildAIDebugRequest(this.state.ai.generateRawRequest),
+      })
+
+      this.state.ai.lastSummary = result.summary
+      this.state.ai.lastModel = result.model
+      this.captureAIDebug('generate', result.debug)
+      await this.persistExpandedDocument(result.document)
+      this.state.ai.open = false
+      this.setStatus('status.aiMapExpanded', { count: Math.max(result.document.nodes.length - previousNodeCount, 0) })
     } catch (error) {
       const reason = getErrorMessage(error)
       this.captureAIDebug('generate', getAIDebugInfo(error), reason)
@@ -3786,6 +3834,18 @@ class MindMapApp {
       ...document,
       id: created.id,
       meta: created.meta,
+    }
+    const saved = await api.saveMap(nextDocument)
+    await this.refreshMaps()
+    this.openLoadedDocument(saved, 'status.loaded')
+  }
+
+  private async persistExpandedDocument(document: MindMapDocument): Promise<void> {
+    const baseDocument = this.state.document
+    const nextDocument: MindMapDocument = {
+      ...document,
+      id: baseDocument.id,
+      meta: baseDocument.meta,
     }
     const saved = await api.saveMap(nextDocument)
     await this.refreshMaps()

@@ -170,6 +170,8 @@ export const api = {
     template: AITemplateId
     instructions: string
     settings: AISettings
+    mode?: 'new' | 'expand'
+    document?: MindMapDocument
     debug?: AIDebugRequest
   }): Promise<AIGenerateResponse> {
     const response = await fetch(`${API_BASE}/ai/generate`, {

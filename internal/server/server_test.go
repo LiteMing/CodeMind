@@ -294,8 +294,8 @@ func TestAIGenerateEndpoint(t *testing.T) {
 			if payload.MaxTokens != 4096 {
 				t.Fatalf("expected max_tokens 4096, got %d", payload.MaxTokens)
 			}
-			if !strings.Contains(payload.Messages[1].Content, "Every node must include a note field.") {
-				t.Fatalf("expected generation prompt to require node notes, got %q", payload.Messages[1].Content)
+			if !strings.Contains(payload.Messages[1].Content, "Every node must include id, title, note, parentId, kind, priority.") {
+				t.Fatalf("expected generation prompt to require full node schema, got %q", payload.Messages[1].Content)
 			}
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"model":"qwen-local","choices":[{"message":{"role":"assistant","content":"{\"title\":\"Graph Databases\",\"summary\":\"覆盖概念、建模、查询与场景。\",\"nodes\":[{\"id\":\"root-topic\",\"title\":\"Graph Databases\",\"note\":\"图数据库用图结构表达实体与关系，适合关联密集型问题。\",\"parentId\":\"\",\"kind\":\"root\",\"priority\":\"\"},{\"id\":\"concepts\",\"title\":\"Core Concepts\",\"note\":\"核心概念包括节点、边、属性，以及如何保持关系可遍历。\",\"parentId\":\"root-topic\",\"kind\":\"topic\",\"priority\":\"P1\"},{\"id\":\"query\",\"title\":\"Query Languages\",\"note\":\"查询语言决定如何高效遍历邻接关系并提取模式。\",\"parentId\":\"root-topic\",\"kind\":\"topic\",\"priority\":\"\"},{\"id\":\"use-cases\",\"title\":\"Use Cases\",\"note\":\"典型场景集中在推荐、风控、知识图谱和网络分析。\",\"parentId\":\"root-topic\",\"kind\":\"topic\",\"priority\":\"\"},{\"id\":\"rdf\",\"title\":\"RDF vs Property Graph\",\"note\":\"两种模型分别强调三元组标准化和属性图工程灵活性。\",\"parentId\":\"concepts\",\"kind\":\"topic\",\"priority\":\"\"},{\"id\":\"cypher\",\"title\":\"Cypher\",\"note\":\"Cypher 用模式匹配表达关系查询，适合业务分析与探索。\",\"parentId\":\"query\",\"kind\":\"topic\",\"priority\":\"\"},{\"id\":\"recommendation\",\"title\":\"Recommendation\",\"note\":\"推荐系统常用图数据库建模用户、物品与交互关系。\",\"parentId\":\"use-cases\",\"kind\":\"topic\",\"priority\":\"\"}],\"relations\":[{\"sourceId\":\"cypher\",\"targetId\":\"rdf\",\"label\":\"对比\"},{\"sourceId\":\"recommendation\",\"targetId\":\"concepts\",\"label\":\"依赖建模\"}]}"}}]}`))
@@ -625,6 +625,94 @@ func TestAIGenerateEndpointParsesDirtyJSON(t *testing.T) {
 	}
 	if len(payload.Document.Nodes) != 3 {
 		t.Fatalf("expected dirty JSON response to yield 3 nodes, got %d", len(payload.Document.Nodes))
+	}
+}
+
+func TestAIGenerateEndpointParsesWrappedAlternateJSON(t *testing.T) {
+	alternateContent := `{"content":"{\n  \"root\": {\n    \"title\": \"水浒传主要人物关系图谱\",\n    \"description\": \"基于《水浒传》核心人物的社交网络与互动模式构建的知识图谱。\",\n    \"children\": [\n      {\n        \"title\": \"核心角色\",\n        \"note\": \"梁山泊的核心成员。\",\n        \"links\": []\n      },\n      {\n        \"title\": \"关键配角\",\n        \"note\": \"负责推动剧情发展。\",\n        \"links\": []\n      }\n    ],\n    \"crossLinks\": [\n      {\n        \"source\": \"宋江\",\n        \"target\": \"李逵\",\n        \"type\": \"emotional_connection\",\n        \"note\": \"兄弟情义。\"\n      }\n    ]\n  },\n  \"nodes\": [\n    {\n      \"title\": \"梁山泊\",\n      \"description\": \"故事发生的地点。\",\n      \"links\": []\n    },\n    {\n      \"title\": \"人物关系网络\",\n      \"description\": \"人物之间复杂的互动模式。\",\n      \"links\": [\n        {\n          \"source\": \"鲁智深\",\n          \"target\": \"武松\",\n          \"type\": \"mentorship_and_conflict\"\n        }\n      ]\n    }\n  ],\n  \"edges\": [\n    {\n      \"title\": \"吴用 - 林冲\",\n      \"source\": \"吴用\",\n      \"target\": \"林冲\",\n      \"type\": \"intellectual_cooperation\"\n    }\n  ]\n}"}`
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/models":
+			_, _ = w.Write([]byte(`{"data":[{"id":"gemini-3"}]}`))
+		case "/v1/chat/completions":
+			writeOpenAIChatResponse(t, w, "gemini-3", alternateContent)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer upstream.Close()
+
+	server := newTestServer(t)
+	server.httpClient = upstream.Client()
+	handler := server.Handler()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/ai/generate", strings.NewReader(`{"settings":{"provider":"openai-compatible","baseUrl":"`+upstream.URL+`","model":"","apiKey":"test-key","maxTokens":4096},"topic":"水浒传","template":"character-network","instructions":""}`))
+	req.Header.Set("Content-Type", "application/json")
+	res := httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d with body %s", res.Code, res.Body.String())
+	}
+
+	var payload aiGenerateResponse
+	if err := json.Unmarshal(res.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("failed to decode AI generate response: %v", err)
+	}
+	if payload.Document.Root().Title != "水浒传主要人物关系图谱" {
+		t.Fatalf("expected salvaged root title, got %q", payload.Document.Root().Title)
+	}
+	if len(payload.Document.Nodes) < 6 {
+		t.Fatalf("expected salvaged alternate payload to yield at least 6 nodes, got %d", len(payload.Document.Nodes))
+	}
+	if len(payload.Document.Relations) < 2 {
+		t.Fatalf("expected salvaged alternate payload to yield relations, got %d", len(payload.Document.Relations))
+	}
+}
+
+func TestAIGenerateEndpointExpandsCurrentDocument(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/models":
+			_, _ = w.Write([]byte(`{"data":[{"id":"qwen-local"}]}`))
+		case "/v1/chat/completions":
+			writeOpenAIChatResponse(t, w, "qwen-local", `{"title":"Roadmap","summary":"Expand execution details","nodes":[{"id":"scope-details","title":"Scope Details","note":"Clarify delivery boundaries and exclusions.","parentId":"scope","kind":"topic","priority":"P1"},{"id":"scope-api","title":"API Surface","note":"List the interfaces that will be touched.","parentId":"scope-details","kind":"topic","priority":""},{"id":"timeline-risks","title":"Timeline Risks","note":"Track schedule risk drivers and mitigations.","parentId":"timeline","kind":"topic","priority":""}],"relations":[{"sourceId":"timeline-risks","targetId":"scope-details","label":"constrains"}]}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer upstream.Close()
+
+	server := newTestServer(t)
+	server.httpClient = upstream.Client()
+	handler := server.Handler()
+
+	reqBody := `{"settings":{"provider":"openai-compatible","baseUrl":"` + upstream.URL + `","model":"","apiKey":"test-key","maxTokens":4096},"topic":"Roadmap","template":"project-planning","mode":"expand","document":{"id":"roadmap","title":"Roadmap","theme":"dark","nodes":[{"id":"root","kind":"root","title":"Roadmap","position":{"x":820,"y":320},"createdAt":"2026-03-01T09:30:00Z","updatedAt":"2026-03-01T09:30:00Z"},{"id":"scope","parentId":"root","kind":"topic","title":"Scope","position":{"x":1100,"y":320},"createdAt":"2026-03-01T09:30:00Z","updatedAt":"2026-03-01T09:30:00Z"},{"id":"timeline","parentId":"root","kind":"topic","title":"Timeline","position":{"x":1100,"y":420},"createdAt":"2026-03-01T09:30:00Z","updatedAt":"2026-03-01T09:30:00Z"}],"relations":[],"meta":{"version":1,"lastEditedAt":"2026-03-01T09:30:00Z","lastOpenedAt":"2026-03-01T09:30:00Z"}},"instructions":"Deepen weak branches."}`
+	req := httptest.NewRequest(http.MethodPost, "/api/ai/generate", strings.NewReader(reqBody))
+	req.Header.Set("Content-Type", "application/json")
+	res := httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d with body %s", res.Code, res.Body.String())
+	}
+
+	var payload aiGenerateResponse
+	if err := json.Unmarshal(res.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("failed to decode AI expand response: %v", err)
+	}
+	if payload.Mode != "expand" {
+		t.Fatalf("expected mode expand, got %q", payload.Mode)
+	}
+	if len(payload.Document.Nodes) != 6 {
+		t.Fatalf("expected expanded document to have 6 nodes, got %d", len(payload.Document.Nodes))
+	}
+	if depth := documentMaxDepth(payload.Document); depth < 2 {
+		t.Fatalf("expected expanded document depth >= 2, got %d", depth)
+	}
+	if len(payload.Document.Relations) != 1 {
+		t.Fatalf("expected 1 relation after expansion, got %d", len(payload.Document.Relations))
 	}
 }
 

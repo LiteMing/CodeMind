@@ -112,6 +112,7 @@ export interface AIGenerateResponse {
   summary: string
   prompt: string
   template: AITemplateId
+  mode?: 'new' | 'expand'
   model: string
   debug?: AIDebugInfo
 }

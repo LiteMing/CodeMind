@@ -124,6 +124,8 @@ type aiGenerateRequest struct {
 	Settings     aiSettingsRequest `json:"settings"`
 	Topic        string            `json:"topic"`
 	Template     string            `json:"template"`
+	Mode         string            `json:"mode"`
+	Document     *mindmap.Document `json:"document,omitempty"`
 	Instructions string            `json:"instructions"`
 	Debug        aiDebugRequest    `json:"debug"`
 }
@@ -133,6 +135,7 @@ type aiGenerateResponse struct {
 	Summary  string           `json:"summary"`
 	Prompt   string           `json:"prompt"`
 	Template string           `json:"template"`
+	Mode     string           `json:"mode,omitempty"`
 	Model    string           `json:"model"`
 	Debug    aiDebugInfo      `json:"debug"`
 }
@@ -199,8 +202,9 @@ type openAIModelsResponse struct {
 }
 
 type aiTaskResult struct {
-	Model string
-	Debug aiDebugInfo
+	Model   string
+	Content string
+	Debug   aiDebugInfo
 }
 
 type aiChatCompletionResult struct {
@@ -480,8 +484,25 @@ func (s *Server) handleAIGenerate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if strings.TrimSpace(req.Topic) == "" {
-		writeError(w, http.StatusBadRequest, errors.New("topic is required"))
-		return
+		if normalizeAIGenerateMode(req.Mode) != "expand" || req.Document == nil || strings.TrimSpace(req.Document.Title) == "" {
+			writeError(w, http.StatusBadRequest, errors.New("topic is required"))
+			return
+		}
+	}
+	if normalizeAIGenerateMode(req.Mode) == "expand" {
+		if req.Document == nil {
+			writeError(w, http.StatusBadRequest, errors.New("document is required for expand mode"))
+			return
+		}
+		if err := req.Document.Validate(); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+	} else if req.Document != nil {
+		if err := req.Document.Validate(); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
 	}
 
 	result, err := s.generateAIDocument(req)
@@ -658,35 +679,64 @@ func (s *Server) completeAINodeNotes(req aiNodeNotesRequest) (aiNodeNotesRespons
 }
 
 func (s *Server) generateAIDocument(req aiGenerateRequest) (aiGenerateResponse, error) {
+	mode := normalizeAIGenerateMode(req.Mode)
 	systemPrompt := strings.Join([]string{
 		"You create concise but information-dense knowledge-graph style mind maps.",
-		"Return a root topic, meaningful branches, layered sub-branches, and a few cross-links.",
 		"Keep node titles short enough to fit on a mind map.",
 		"Every node must also include a useful explanatory note in plain text.",
 		"Default to a 2 to 3 level hierarchy instead of a flat root-level list.",
-		"Prefer 4 to 7 first-level branches and 14 to 28 nodes total unless the user asks for a smaller graph.",
-		"When the topic allows it, give major branches 2 to 4 supporting child nodes.",
 		"Prefer richer notes over adding many shallow branches with no explanation.",
-		"Include a few semantic relation lines between distant branches when they genuinely help understanding.",
+		"If response_format is ignored, still return strict JSON with the exact top-level keys title, summary, nodes, relations.",
+		"Never wrap the JSON in markdown fences, a content string, or any extra commentary.",
+		"Do not invent alternate top-level shapes like root/children/crossLinks.",
 	}, "\n")
 
 	templatePrompt := promptTemplateForGraph(req.Template)
-	userPrompt := strings.Join([]string{
-		fmt.Sprintf("Topic: %s", strings.TrimSpace(req.Topic)),
+	userPromptLines := []string{
+		fmt.Sprintf("Topic: %s", fallbackString(strings.TrimSpace(req.Topic), strings.TrimSpace(documentTitleOrEmpty(req.Document)))),
 		fmt.Sprintf("Template direction: %s", templatePrompt),
-		"Output rules:",
-		"- Create exactly one root node.",
-		"- Do not place nearly every node directly under the root.",
-		"- At least 2 first-level branches should include second-level children when the topic allows it.",
-		"- At least 1 branch should reach third-level depth when the topic allows it.",
-		"- Every node must include a note field.",
-		"- Root and first-level branches should have especially detailed notes.",
-		"- Notes should be plain text, specific, and as detailed as the token budget allows.",
-		"- Each non-root node must either point to a parentId or be marked as floating.",
-		"- Use relation lines only for semantic cross-links, not for tree structure.",
-		"- Keep labels clear and practical.",
-		optionalInstructionBlock(req.Instructions),
-	}, "\n")
+	}
+	if mode == "expand" && req.Document != nil {
+		documentPayload, err := marshalMindMapForPrompt(*req.Document)
+		if err != nil {
+			return aiGenerateResponse{}, err
+		}
+		userPromptLines = append(userPromptLines,
+			"",
+			"Current mind map document:",
+			documentPayload,
+			"",
+			"Expansion task:",
+			"- Return only NEW nodes and NEW relations to add to the existing map.",
+			"- Do not repeat or rewrite existing nodes from the current map.",
+			"- Prefer deepening thin branches and filling obvious knowledge gaps.",
+			"- parentId may refer to an existing node id from the current map or to another new node id from your additions.",
+			"- If you add a new top-level branch, attach it to the existing root id.",
+			"- Add 6 to 18 new nodes when the topic allows it.",
+			"- At least 2 additions should be second-level or deeper when the current map allows it.",
+			"- Every new node must include id, title, note, parentId, kind, priority.",
+			"- Use relations only for semantic cross-links, not for hierarchy.",
+		)
+	} else {
+		userPromptLines = append(userPromptLines,
+			"Output rules:",
+			"- Create exactly one root node.",
+			"- Do not place nearly every node directly under the root.",
+			"- At least 2 first-level branches should include second-level children when the topic allows it.",
+			"- At least 1 branch should reach third-level depth when the topic allows it.",
+			"- Prefer 4 to 7 first-level branches and 14 to 28 nodes total unless the user asks for a smaller graph.",
+			"- Every node must include id, title, note, parentId, kind, priority.",
+			"- Root and first-level branches should have especially detailed notes.",
+			"- Notes should be plain text, specific, and as detailed as the token budget allows.",
+			"- Each non-root node must either point to a parentId or be marked as floating.",
+			"- Use relation lines only for semantic cross-links, not for tree structure.",
+			"- Keep labels clear and practical.",
+		)
+	}
+	if extra := optionalInstructionBlock(req.Instructions); extra != "" {
+		userPromptLines = append(userPromptLines, extra)
+	}
+	userPrompt := strings.Join(userPromptLines, "\n")
 
 	schema := map[string]any{
 		"type": "json_schema",
@@ -739,7 +789,11 @@ func (s *Server) generateAIDocument(req aiGenerateRequest) (aiGenerateResponse, 
 	if err != nil {
 		return aiGenerateResponse{}, err
 	}
-	if shouldRetryGeneratedHierarchy(payload) {
+	payload, err = normalizeGeneratedGraphPayload(taskResult.Content, payload)
+	if err != nil {
+		return aiGenerateResponse{}, err
+	}
+	if mode == "new" && shouldRetryGeneratedHierarchy(payload) {
 		retryPrompt := strings.Join([]string{
 			userPrompt,
 			"Revision rules:",
@@ -754,11 +808,23 @@ func (s *Server) generateAIDocument(req aiGenerateRequest) (aiGenerateResponse, 
 		if err != nil {
 			return aiGenerateResponse{}, err
 		}
+		payload, err = normalizeGeneratedGraphPayload(taskResult.Content, payload)
+		if err != nil {
+			return aiGenerateResponse{}, err
+		}
 	}
 
-	document, err := generatedGraphToDocument(strings.TrimSpace(req.Topic), payload)
-	if err != nil {
-		return aiGenerateResponse{}, err
+	var document mindmap.Document
+	if mode == "expand" && req.Document != nil {
+		document, err = mergeGeneratedGraphIntoDocument(*req.Document, payload)
+		if err != nil {
+			return aiGenerateResponse{}, err
+		}
+	} else {
+		document, err = generatedGraphToDocument(strings.TrimSpace(req.Topic), payload)
+		if err != nil {
+			return aiGenerateResponse{}, err
+		}
 	}
 
 	return aiGenerateResponse{
@@ -766,6 +832,7 @@ func (s *Server) generateAIDocument(req aiGenerateRequest) (aiGenerateResponse, 
 		Summary:  strings.TrimSpace(payload.Summary),
 		Prompt:   userPrompt,
 		Template: strings.TrimSpace(req.Template),
+		Mode:     mode,
 		Model:    taskResult.Model,
 		Debug:    taskResult.Debug,
 	}, nil
@@ -859,8 +926,9 @@ func (s *Server) runJSONTask(settings aiSettingsRequest, systemPrompt string, us
 		model = chatResult.Model
 	}
 	return aiTaskResult{
-		Model: model,
-		Debug: debugInfo,
+		Model:   model,
+		Content: chatResult.Content,
+		Debug:   debugInfo,
 	}, nil
 }
 
@@ -1642,6 +1710,24 @@ func optionalInstructionBlock(instructions string) string {
 	return "Extra instruction: " + instructions
 }
 
+func normalizeAIGenerateMode(mode string) string {
+	if strings.EqualFold(strings.TrimSpace(mode), "expand") {
+		return "expand"
+	}
+	return "new"
+}
+
+func documentTitleOrEmpty(doc *mindmap.Document) string {
+	if doc == nil {
+		return ""
+	}
+	root := doc.Root()
+	if strings.TrimSpace(root.Title) != "" {
+		return strings.TrimSpace(root.Title)
+	}
+	return strings.TrimSpace(doc.Title)
+}
+
 func normalizedPairKey(left string, right string) string {
 	if left > right {
 		left, right = right, left
@@ -1670,10 +1756,7 @@ func jsonOnlySystemPrompt(systemPrompt string) string {
 }
 
 func unmarshalAIJSON(raw string, target any) error {
-	candidates := []string{
-		strings.TrimSpace(raw),
-		extractJSONObject(raw),
-	}
+	candidates := collectAIJSONCandidates(raw)
 
 	seen := make(map[string]struct{}, len(candidates))
 	var lastErr error
@@ -1698,6 +1781,582 @@ func unmarshalAIJSON(raw string, target any) error {
 		lastErr = errors.New("empty AI response")
 	}
 	return lastErr
+}
+
+func collectAIJSONCandidates(raw string) []string {
+	seen := make(map[string]struct{})
+	candidates := make([]string, 0, 8)
+	appendCandidate := func(candidate string) {
+		candidate = strings.TrimSpace(candidate)
+		if candidate == "" {
+			return
+		}
+		if _, exists := seen[candidate]; exists {
+			return
+		}
+		seen[candidate] = struct{}{}
+		candidates = append(candidates, candidate)
+	}
+
+	appendCandidate(raw)
+	appendCandidate(extractJSONObject(raw))
+
+	for _, candidate := range appendEmbeddedJSONCandidates(strings.TrimSpace(raw), map[string]struct{}{}) {
+		appendCandidate(candidate)
+	}
+	return candidates
+}
+
+func appendEmbeddedJSONCandidates(raw string, seen map[string]struct{}) []string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	if _, exists := seen[raw]; exists {
+		return nil
+	}
+	seen[raw] = struct{}{}
+
+	var value any
+	if err := json.Unmarshal([]byte(raw), &value); err != nil {
+		return nil
+	}
+	return extractEmbeddedJSONCandidates(value, seen)
+}
+
+func extractEmbeddedJSONCandidates(value any, seen map[string]struct{}) []string {
+	results := make([]string, 0)
+	appendResult := func(candidate string) {
+		candidate = strings.TrimSpace(candidate)
+		if candidate == "" {
+			return
+		}
+		if _, exists := seen[candidate]; exists {
+			return
+		}
+		seen[candidate] = struct{}{}
+		results = append(results, candidate)
+	}
+
+	switch typed := value.(type) {
+	case map[string]any:
+		for _, key := range []string{"content", "output", "text", "response", "result", "data"} {
+			if nested, ok := typed[key]; ok {
+				switch nestedTyped := nested.(type) {
+				case string:
+					appendResult(nestedTyped)
+					appendResult(extractJSONObject(nestedTyped))
+					results = append(results, appendEmbeddedJSONCandidates(nestedTyped, seen)...)
+				default:
+					results = append(results, extractEmbeddedJSONCandidates(nestedTyped, seen)...)
+				}
+			}
+		}
+		for _, nested := range typed {
+			results = append(results, extractEmbeddedJSONCandidates(nested, seen)...)
+		}
+	case []any:
+		for _, nested := range typed {
+			results = append(results, extractEmbeddedJSONCandidates(nested, seen)...)
+		}
+	case string:
+		appendResult(typed)
+		appendResult(extractJSONObject(typed))
+		results = append(results, appendEmbeddedJSONCandidates(typed, seen)...)
+	}
+
+	return results
+}
+
+func normalizeGeneratedGraphPayload(raw string, parsed aiGeneratedGraph) (aiGeneratedGraph, error) {
+	if !generatedGraphNeedsNormalization(parsed) {
+		return trimGeneratedGraph(parsed), nil
+	}
+	graph, err := salvageGeneratedGraph(raw)
+	if err != nil {
+		return trimGeneratedGraph(parsed), nil
+	}
+	return trimGeneratedGraph(graph), nil
+}
+
+func generatedGraphNeedsNormalization(payload aiGeneratedGraph) bool {
+	if len(payload.Nodes) == 0 {
+		return true
+	}
+	missingIDs := 0
+	structured := 0
+	for _, node := range payload.Nodes {
+		if strings.TrimSpace(node.ID) == "" {
+			missingIDs++
+		}
+		if strings.TrimSpace(node.ParentID) != "" || strings.EqualFold(strings.TrimSpace(node.Kind), string(mindmap.NodeKindRoot)) {
+			structured++
+		}
+	}
+	if missingIDs*2 > len(payload.Nodes) {
+		return true
+	}
+	if structured == 0 {
+		return true
+	}
+	return false
+}
+
+func trimGeneratedGraph(payload aiGeneratedGraph) aiGeneratedGraph {
+	payload.Title = strings.TrimSpace(payload.Title)
+	payload.Summary = strings.TrimSpace(payload.Summary)
+	for index := range payload.Nodes {
+		payload.Nodes[index].ID = strings.TrimSpace(payload.Nodes[index].ID)
+		payload.Nodes[index].Title = strings.TrimSpace(payload.Nodes[index].Title)
+		payload.Nodes[index].Note = strings.TrimSpace(payload.Nodes[index].Note)
+		payload.Nodes[index].ParentID = strings.TrimSpace(payload.Nodes[index].ParentID)
+		payload.Nodes[index].Kind = strings.TrimSpace(payload.Nodes[index].Kind)
+		payload.Nodes[index].Priority = strings.TrimSpace(payload.Nodes[index].Priority)
+	}
+	for index := range payload.Relations {
+		payload.Relations[index].SourceID = strings.TrimSpace(payload.Relations[index].SourceID)
+		payload.Relations[index].TargetID = strings.TrimSpace(payload.Relations[index].TargetID)
+		payload.Relations[index].Label = strings.TrimSpace(payload.Relations[index].Label)
+	}
+	return payload
+}
+
+func salvageGeneratedGraph(raw string) (aiGeneratedGraph, error) {
+	for _, candidate := range collectAIJSONCandidates(raw) {
+		var value any
+		if err := json.Unmarshal([]byte(candidate), &value); err != nil {
+			continue
+		}
+		if graph, ok := coerceGeneratedGraph(value); ok {
+			return graph, nil
+		}
+	}
+	return aiGeneratedGraph{}, errors.New("no salvageable graph payload found")
+}
+
+func coerceGeneratedGraph(value any) (aiGeneratedGraph, bool) {
+	object, ok := value.(map[string]any)
+	if !ok {
+		return aiGeneratedGraph{}, false
+	}
+	if graph, ok := coerceAlternateGeneratedGraph(object); ok {
+		return graph, true
+	}
+
+	payloadBytes, err := json.Marshal(object)
+	if err != nil {
+		return aiGeneratedGraph{}, false
+	}
+	var graph aiGeneratedGraph
+	if err := json.Unmarshal(payloadBytes, &graph); err != nil {
+		return aiGeneratedGraph{}, false
+	}
+	if len(graph.Nodes) == 0 && len(graph.Relations) == 0 && strings.TrimSpace(graph.Title) == "" {
+		return aiGeneratedGraph{}, false
+	}
+	return graph, true
+}
+
+func coerceAlternateGeneratedGraph(object map[string]any) (aiGeneratedGraph, bool) {
+	rootObject, hasRoot := object["root"].(map[string]any)
+	_, hasEdges := object["edges"]
+	_, hasNodes := object["nodes"]
+	if !hasRoot && !hasEdges && !hasNodes {
+		return aiGeneratedGraph{}, false
+	}
+
+	graph := aiGeneratedGraph{
+		Title:     fallbackString(readObjectString(object, "title"), readObjectString(rootObject, "title")),
+		Summary:   fallbackString(readObjectString(object, "summary"), readObjectString(rootObject, "description")),
+		Nodes:     make([]aiGeneratedNode, 0),
+		Relations: make([]aiGeneratedRelation, 0),
+	}
+
+	titleToID := make(map[string]string)
+	relationSet := make(map[string]struct{})
+	nextNodeID := 1
+
+	ensureNode := func(title string, note string, parentID string, kind string) string {
+		title = strings.TrimSpace(title)
+		note = strings.TrimSpace(note)
+		if title == "" {
+			title = fmt.Sprintf("Node %d", nextNodeID)
+		}
+		titleKey := strings.ToLower(title)
+		if existingID, ok := titleToID[titleKey]; ok {
+			for index := range graph.Nodes {
+				if graph.Nodes[index].ID == existingID && graph.Nodes[index].Note == "" && note != "" {
+					graph.Nodes[index].Note = note
+				}
+			}
+			return existingID
+		}
+
+		nodeID := fmt.Sprintf("node-%d", nextNodeID)
+		nextNodeID++
+		graph.Nodes = append(graph.Nodes, aiGeneratedNode{
+			ID:       nodeID,
+			Title:    title,
+			Note:     note,
+			ParentID: strings.TrimSpace(parentID),
+			Kind:     fallbackString(strings.TrimSpace(kind), string(mindmap.NodeKindTopic)),
+			Priority: "",
+		})
+		titleToID[titleKey] = nodeID
+		return nodeID
+	}
+
+	addRelation := func(source string, target string, label string) {
+		source = strings.TrimSpace(source)
+		target = strings.TrimSpace(target)
+		label = strings.TrimSpace(label)
+		if source == "" || target == "" || source == target {
+			return
+		}
+		if label == "" {
+			label = "related"
+		}
+		key := normalizedPairKey(source, target) + "::" + strings.ToLower(label)
+		if _, exists := relationSet[key]; exists {
+			return
+		}
+		relationSet[key] = struct{}{}
+		graph.Relations = append(graph.Relations, aiGeneratedRelation{
+			SourceID: source,
+			TargetID: target,
+			Label:    label,
+		})
+	}
+
+	var walkChildren func(items []any, parentID string)
+	walkChildren = func(items []any, parentID string) {
+		for _, item := range items {
+			childObject, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			childID := ensureNode(
+				readObjectString(childObject, "title"),
+				fallbackString(readObjectString(childObject, "note"), readObjectString(childObject, "description")),
+				parentID,
+				string(mindmap.NodeKindTopic),
+			)
+			for _, relation := range coerceAlternateRelations(childObject["links"]) {
+				addRelation(
+					ensureNode(relation.SourceID, "", "", string(mindmap.NodeKindTopic)),
+					ensureNode(relation.TargetID, "", "", string(mindmap.NodeKindTopic)),
+					relation.Label,
+				)
+			}
+			if nestedChildren, ok := childObject["children"].([]any); ok {
+				walkChildren(nestedChildren, childID)
+			}
+		}
+	}
+
+	rootID := ensureNode(
+		fallbackString(readObjectString(rootObject, "title"), graph.Title),
+		fallbackString(readObjectString(rootObject, "note"), readObjectString(rootObject, "description")),
+		"",
+		string(mindmap.NodeKindRoot),
+	)
+	for index := range graph.Nodes {
+		if graph.Nodes[index].ID == rootID {
+			graph.Nodes[index].Kind = string(mindmap.NodeKindRoot)
+			graph.Nodes[index].ParentID = ""
+		}
+	}
+	if graph.Title == "" {
+		graph.Title = readObjectString(rootObject, "title")
+	}
+
+	if rootChildren, ok := rootObject["children"].([]any); ok {
+		walkChildren(rootChildren, rootID)
+	}
+	for _, relation := range coerceAlternateRelations(rootObject["crossLinks"]) {
+		addRelation(
+			ensureNode(relation.SourceID, "", "", string(mindmap.NodeKindTopic)),
+			ensureNode(relation.TargetID, "", "", string(mindmap.NodeKindTopic)),
+			relation.Label,
+		)
+	}
+
+	if nodeItems, ok := object["nodes"].([]any); ok {
+		walkChildren(nodeItems, rootID)
+	}
+	for _, relation := range coerceAlternateRelations(object["edges"]) {
+		addRelation(
+			ensureNode(relation.SourceID, "", "", string(mindmap.NodeKindTopic)),
+			ensureNode(relation.TargetID, "", "", string(mindmap.NodeKindTopic)),
+			relation.Label,
+		)
+	}
+
+	if len(graph.Nodes) == 0 {
+		return aiGeneratedGraph{}, false
+	}
+	return graph, true
+}
+
+func coerceAlternateRelations(value any) []aiGeneratedRelation {
+	items, ok := value.([]any)
+	if !ok {
+		return nil
+	}
+	result := make([]aiGeneratedRelation, 0, len(items))
+	for _, item := range items {
+		object, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		source := fallbackString(readObjectString(object, "sourceId"), readObjectString(object, "source"))
+		target := fallbackString(readObjectString(object, "targetId"), readObjectString(object, "target"))
+		label := fallbackString(readObjectString(object, "label"), readObjectString(object, "type"))
+		label = fallbackString(label, readObjectString(object, "title"))
+		label = fallbackString(label, readObjectString(object, "note"))
+		result = append(result, aiGeneratedRelation{
+			SourceID: source,
+			TargetID: target,
+			Label:    shortenText(strings.TrimSpace(label), 48),
+		})
+	}
+	return result
+}
+
+func readObjectString(object map[string]any, key string) string {
+	if object == nil {
+		return ""
+	}
+	value, ok := object[key]
+	if !ok {
+		return ""
+	}
+	switch typed := value.(type) {
+	case string:
+		return strings.TrimSpace(typed)
+	default:
+		return ""
+	}
+}
+
+func shortenText(value string, limit int) string {
+	value = strings.TrimSpace(value)
+	if limit <= 0 || len([]rune(value)) <= limit {
+		return value
+	}
+	runes := []rune(value)
+	if limit <= 1 {
+		return string(runes[:limit])
+	}
+	return string(runes[:limit-1]) + "…"
+}
+
+func mergeGeneratedGraphIntoDocument(base mindmap.Document, payload aiGeneratedGraph) (mindmap.Document, error) {
+	doc := base
+	now := time.Now().UTC()
+	root := doc.Root()
+	existingByID := doc.NodeMap()
+	idMapping := make(map[string]string)
+	titleToID := make(map[string]string, len(doc.Nodes))
+	for _, node := range doc.Nodes {
+		title := strings.ToLower(strings.TrimSpace(node.Title))
+		if title != "" {
+			titleToID[title] = node.ID
+		}
+	}
+
+	rawRoot := findGeneratedRoot(payload.Nodes)
+	if strings.TrimSpace(rawRoot.ID) != "" {
+		idMapping[strings.TrimSpace(rawRoot.ID)] = root.ID
+	}
+
+	pending := make([]aiGeneratedNode, 0, len(payload.Nodes))
+	for _, node := range payload.Nodes {
+		if strings.EqualFold(strings.TrimSpace(node.Kind), string(mindmap.NodeKindRoot)) {
+			continue
+		}
+		if strings.TrimSpace(node.ID) == strings.TrimSpace(rawRoot.ID) && strings.TrimSpace(rawRoot.ID) != "" {
+			continue
+		}
+		pending = append(pending, node)
+	}
+
+	addedNodes := 0
+	for len(pending) > 0 {
+		progressed := false
+		nextPending := make([]aiGeneratedNode, 0, len(pending))
+		for _, node := range pending {
+			actualParentID, resolved := resolveExpansionParentID(node, root.ID, existingByID, idMapping)
+			if !resolved {
+				nextPending = append(nextPending, node)
+				continue
+			}
+			appendExpandedNode(&doc, node, actualParentID, now, existingByID, idMapping, titleToID)
+			addedNodes++
+			progressed = true
+		}
+		if !progressed {
+			for _, node := range nextPending {
+				appendExpandedNode(&doc, node, root.ID, now, existingByID, idMapping, titleToID)
+				addedNodes++
+			}
+			break
+		}
+		pending = nextPending
+	}
+
+	relationPairs := make(map[string]struct{}, len(doc.Relations))
+	for _, relation := range doc.Relations {
+		relationPairs[normalizedPairKey(relation.SourceID, relation.TargetID)] = struct{}{}
+	}
+	for _, relation := range payload.Relations {
+		sourceID := resolveExpansionNodeReference(relation.SourceID, existingByID, idMapping, titleToID)
+		targetID := resolveExpansionNodeReference(relation.TargetID, existingByID, idMapping, titleToID)
+		label := strings.TrimSpace(relation.Label)
+		if sourceID == "" || targetID == "" || sourceID == targetID {
+			continue
+		}
+		key := normalizedPairKey(sourceID, targetID)
+		if _, exists := relationPairs[key]; exists {
+			continue
+		}
+		relationPairs[key] = struct{}{}
+		doc.Relations = append(doc.Relations, mindmap.RelationEdge{
+			ID:        mindmap.NewID("rel"),
+			SourceID:  sourceID,
+			TargetID:  targetID,
+			Label:     label,
+			CreatedAt: now,
+			UpdatedAt: now,
+		})
+	}
+
+	if addedNodes == 0 {
+		return base, nil
+	}
+	doc.PrepareForSave(now)
+	if err := doc.Validate(); err != nil {
+		return mindmap.Document{}, err
+	}
+	return doc, nil
+}
+
+func resolveExpansionParentID(
+	node aiGeneratedNode,
+	rootID string,
+	existingByID map[string]mindmap.Node,
+	idMapping map[string]string,
+) (string, bool) {
+	parentID := strings.TrimSpace(node.ParentID)
+	if parentID == "" {
+		return rootID, true
+	}
+	if actualID, ok := idMapping[parentID]; ok {
+		return actualID, true
+	}
+	if _, ok := existingByID[parentID]; ok {
+		return parentID, true
+	}
+	return "", false
+}
+
+func appendExpandedNode(
+	doc *mindmap.Document,
+	node aiGeneratedNode,
+	actualParentID string,
+	now time.Time,
+	existingByID map[string]mindmap.Node,
+	idMapping map[string]string,
+	titleToID map[string]string,
+) {
+	lookupKey := strings.ToLower(strings.TrimSpace(node.Title))
+	if lookupKey != "" {
+		if existingID, ok := titleToID[lookupKey]; ok {
+			idMapping[strings.TrimSpace(node.ID)] = existingID
+			return
+		}
+	}
+
+	actualID := ensureGeneratedNode(existingByID, node.ID)
+	position := nextChildPositionForDocument(*doc, actualParentID)
+	parentID := actualParentID
+	kind := parseNodeKind(node.Kind)
+	if kind == mindmap.NodeKindFloating && strings.TrimSpace(node.ParentID) == "" {
+		parentID = ""
+		position = nextFloatingPositionForDocument(*doc)
+	}
+
+	newNode := mindmap.Node{
+		ID:        actualID,
+		ParentID:  parentID,
+		Kind:      kind,
+		Title:     fallbackString(strings.TrimSpace(node.Title), "Untitled"),
+		Note:      strings.TrimSpace(node.Note),
+		Priority:  parsePriority(node.Priority),
+		Position:  position,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	doc.Nodes = append(doc.Nodes, newNode)
+	existingByID[actualID] = newNode
+	if titleKey := strings.ToLower(strings.TrimSpace(newNode.Title)); titleKey != "" {
+		titleToID[titleKey] = actualID
+	}
+	idMapping[strings.TrimSpace(node.ID)] = actualID
+}
+
+func resolveExpansionNodeReference(
+	raw string,
+	existingByID map[string]mindmap.Node,
+	idMapping map[string]string,
+	titleToID map[string]string,
+) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	if actualID, ok := idMapping[raw]; ok {
+		return actualID
+	}
+	if _, ok := existingByID[raw]; ok {
+		return raw
+	}
+	if actualID, ok := titleToID[strings.ToLower(raw)]; ok {
+		return actualID
+	}
+	return ""
+}
+
+func nextChildPositionForDocument(doc mindmap.Document, parentID string) mindmap.Position {
+	parent, ok := doc.NodeMap()[parentID]
+	if !ok {
+		return mindmap.Position{X: defaultRootX, Y: defaultRootY}
+	}
+	children := doc.ChildrenOf(parentID)
+	if len(children) == 0 {
+		return mindmap.Position{X: parent.Position.X + 280, Y: parent.Position.Y}
+	}
+	last := children[len(children)-1]
+	return mindmap.Position{X: parent.Position.X + 280, Y: last.Position.Y + 96}
+}
+
+func nextFloatingPositionForDocument(doc mindmap.Document) mindmap.Position {
+	root := doc.Root()
+	lastY := root.Position.Y + 180.0
+	hasFloating := false
+	for _, node := range doc.Nodes {
+		if node.Kind != mindmap.NodeKindFloating {
+			continue
+		}
+		if !hasFloating || node.Position.Y > lastY {
+			lastY = node.Position.Y
+		}
+		hasFloating = true
+	}
+	if !hasFloating {
+		return mindmap.Position{X: root.Position.X - 140, Y: root.Position.Y + 180}
+	}
+	return mindmap.Position{X: root.Position.X - 140, Y: lastY + 96}
 }
 
 func extractJSONObject(raw string) string {

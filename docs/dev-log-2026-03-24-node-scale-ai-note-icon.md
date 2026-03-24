@@ -25,3 +25,9 @@
 - `npm run build:web` 通过。
 - `wails build -nopackage` 通过，但验证确认图标不会嵌入。
 - `wails build` 通过，且打包后的 `build/bin/CodeMind.exe` 已使用自定义图标。
+
+## 后续追加：AI 拓展与解析增强
+
+- 新增“AI 拓展当前脑图”入口，使用当前文档作为上下文，只返回新增节点与新增语义关系，再合并回原脑图。
+- 强化 AI 生成提示词，明确禁止把 JSON 包在 `content` 字符串、Markdown 代码块或 `root/children/crossLinks` 等替代结构里。
+- 服务端新增兼容解析：即使模型返回 `content: "{...}"`，或返回 `root/children/crossLinks`、`nodes/edges` 这类近似结构，也会尽量归一化为标准脑图文档。
