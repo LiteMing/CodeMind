@@ -2,7 +2,7 @@ import type { AppPreferences, Locale } from './types'
 
 const STORAGE_KEY = 'code-mind.preferences'
 export const DEFAULT_LM_STUDIO_URL = 'http://127.0.0.1:1234/v1'
-export const DEFAULT_AI_MAX_TOKENS = 3200
+export const DEFAULT_AI_MAX_TOKENS = 4800
 const MIN_AI_MAX_TOKENS = 256
 const MAX_AI_MAX_TOKENS = 32768
 

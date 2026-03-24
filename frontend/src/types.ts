@@ -82,6 +82,17 @@ export interface AIRelationResponse {
   model: string
 }
 
+export interface AINodeNoteSuggestion {
+  id: string
+  note: string
+}
+
+export interface AINodeNotesResponse {
+  notes: AINodeNoteSuggestion[]
+  summary: string
+  model: string
+}
+
 export interface AIGenerateResponse {
   document: MindMapDocument
   summary: string

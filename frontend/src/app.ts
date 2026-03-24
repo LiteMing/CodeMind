@@ -111,12 +111,18 @@ interface AIWorkspaceState {
   template: AITemplateId
   topic: string
   generationInstructions: string
+  noteInstructions: string
   relationInstructions: string
   lastSummary: string
   lastModel: string
   connectionMessage: string
   connectionModel: string
   connectionOK: boolean | null
+}
+
+interface AINoteTargetState {
+  mode: 'selection' | 'all'
+  nodes: MindNode[]
 }
 
 interface GraphOverlayState {
@@ -380,6 +386,7 @@ class MindMapApp {
         template: 'concept-graph',
         topic: '',
         generationInstructions: '',
+        noteInstructions: '',
         relationInstructions: '',
         lastSummary: '',
         lastModel: '',
@@ -1125,6 +1132,9 @@ class MindMapApp {
         case 'generationInstructions':
           this.state.ai.generationInstructions = target.value
           break
+        case 'noteInstructions':
+          this.state.ai.noteInstructions = target.value
+          break
         case 'relationInstructions':
           this.state.ai.relationInstructions = target.value
           break
@@ -1772,6 +1782,7 @@ class MindMapApp {
 
     const examplePrompt = promptTemplateCopy(this.state.ai.template, this.state.preferences.locale)
     const aiStatusNotice = this.renderAIStatusNotice()
+    const noteTargets = this.resolveAINoteTargets()
     this.refs.aiLayer.className = 'ai-layer is-visible'
     this.refs.aiLayer.innerHTML = `
       <div class="ai-scrim" data-ai-scrim>
@@ -1818,6 +1829,20 @@ class MindMapApp {
           </section>
 
           <section class="settings-card">
+            <p class="section-label">${this.t('ai.notes')}</p>
+            <p class="inspector-copy">${this.t(noteTargets.mode === 'selection' ? 'ai.notesSelectionHint' : 'ai.notesAllHint', {
+              value: noteTargets.nodes.length,
+            })}</p>
+            <label class="field-stack">
+              <span>${this.t('ai.instructions')}</span>
+              <textarea class="settings-input ai-textarea" data-ai-field="noteInstructions" placeholder="${escapeAttribute(this.t('ai.notesPlaceholder'))}">${escapeHtml(this.state.ai.noteInstructions)}</textarea>
+            </label>
+            <div class="ai-action-row">
+              <button type="button" class="action-button" data-command="ai-complete-node-notes" ${this.state.ai.busy ? 'disabled' : ''}>${this.t('ai.notesAction')}</button>
+            </div>
+          </section>
+
+          <section class="settings-card">
             <p class="section-label">${this.t('ai.connect')}</p>
             <p class="inspector-copy">${this.t('ai.connectHint', {
               nodes: this.state.document.nodes.length,
@@ -1840,12 +1865,18 @@ class MindMapApp {
                   }${escapeHtml(this.state.ai.connectionMessage)}</p>`
                 : ''
             }
-            ${
-              this.state.ai.lastSummary
-                ? `<p class="inspector-copy"><strong>${escapeHtml(this.state.ai.lastModel || this.t('common.unknown'))}</strong>: ${escapeHtml(this.state.ai.lastSummary)}</p>`
-                : ''
-            }
           </section>
+
+          ${
+            this.state.ai.lastSummary
+              ? `
+                <section class="settings-card">
+                  <p class="section-label">${this.t('ai.lastResult')}</p>
+                  <p class="inspector-copy"><strong>${escapeHtml(this.state.ai.lastModel || this.t('common.unknown'))}</strong>: ${escapeHtml(this.state.ai.lastSummary)}</p>
+                </section>
+              `
+              : ''
+          }
         </section>
       </div>
     `
@@ -1869,9 +1900,12 @@ class MindMapApp {
       case 'status.aiConnectionFailed':
         return 'is-error'
       case 'status.aiRelationsApplied':
+      case 'status.aiNotesApplied':
       case 'status.aiConnectionOK':
         return 'is-ok'
       case 'status.aiNoRelations':
+      case 'status.aiNoNoteTargets':
+      case 'status.aiNoNotes':
       case 'status.aiTopicRequired':
         return 'is-info'
       default:
@@ -2912,6 +2946,9 @@ class MindMapApp {
         case 'ai-connect-relations':
           await this.applyAIRelations()
           return
+        case 'ai-complete-node-notes':
+          await this.applyAINodeNotes()
+          return
         case 'ai-generate-map':
           await this.generateAIMap()
           return
@@ -3231,6 +3268,82 @@ class MindMapApp {
       this.setStatus('status.aiConnectionFailed', { reason })
     } finally {
       this.state.ai.testing = false
+      this.render()
+    }
+  }
+
+  private resolveAINoteTargets(): AINoteTargetState {
+    const selectedNodes = this.selectedNodeIds()
+      .map((nodeId) => this.findNode(nodeId))
+      .filter((node): node is MindNode => Boolean(node))
+    const selectedNonRootNodes = selectedNodes.filter((node) => node.kind !== 'root')
+    if (selectedNonRootNodes.length > 0) {
+      return { mode: 'selection', nodes: selectedNonRootNodes }
+    }
+
+    const nonRootNodes = this.state.document.nodes.filter((node) => node.kind !== 'root')
+    if (nonRootNodes.length > 0) {
+      return { mode: 'all', nodes: nonRootNodes }
+    }
+
+    const root = findRoot(this.state.document)
+    return root.id ? { mode: 'all', nodes: [root] } : { mode: 'all', nodes: [] }
+  }
+
+  private async applyAINodeNotes(): Promise<void> {
+    if (this.state.ai.busy) {
+      return
+    }
+
+    const targets = this.resolveAINoteTargets()
+    if (targets.nodes.length === 0) {
+      this.setStatus('status.aiNoNoteTargets')
+      this.render()
+      return
+    }
+
+    this.state.ai.busy = true
+    this.setStatus('status.aiRunning')
+    this.renderHeader()
+    this.renderAIWorkspace()
+
+    try {
+      const result = await api.completeNodeNotes({
+        document: this.state.document,
+        settings: this.state.preferences.ai,
+        targetNodeIds: targets.nodes.map((node) => node.id),
+        instructions: this.state.ai.noteInstructions,
+      })
+      this.state.ai.lastSummary = result.summary
+      this.state.ai.lastModel = result.model
+
+      const nextNotes = result.notes.filter((item) => Boolean(this.findNode(item.id)) && item.note.trim() !== '')
+      if (nextNotes.length === 0) {
+        this.setStatus('status.aiNoNotes')
+        return
+      }
+
+      const changes = nextNotes.filter((item) => normalizeNodeNote(this.findNode(item.id)?.note) !== normalizeNodeNote(item.note))
+      if (changes.length === 0) {
+        this.setStatus('status.aiNoNotes')
+        return
+      }
+
+      this.captureHistory()
+      for (const item of changes) {
+        this.updateNode(item.id, (draft) => {
+          draft.note = normalizeNodeNote(item.note)
+        })
+      }
+
+      touchDocument(this.state.document)
+      this.setStatus('status.aiNotesApplied', { count: changes.length })
+      this.render()
+      this.scheduleAutosave('status.noteSaveScheduled')
+    } catch (error) {
+      this.setStatus('status.aiFailed', { reason: getErrorMessage(error) })
+    } finally {
+      this.state.ai.busy = false
       this.render()
     }
   }

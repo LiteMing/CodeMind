@@ -294,8 +294,11 @@ func TestAIGenerateEndpoint(t *testing.T) {
 			if payload.MaxTokens != 4096 {
 				t.Fatalf("expected max_tokens 4096, got %d", payload.MaxTokens)
 			}
+			if !strings.Contains(payload.Messages[1].Content, "Every node must include a note field.") {
+				t.Fatalf("expected generation prompt to require node notes, got %q", payload.Messages[1].Content)
+			}
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"model":"qwen-local","choices":[{"message":{"role":"assistant","content":"{\"title\":\"Graph Databases\",\"summary\":\"覆盖概念、建模、查询与场景。\",\"nodes\":[{\"id\":\"root-topic\",\"title\":\"Graph Databases\",\"parentId\":\"\",\"kind\":\"root\",\"priority\":\"\"},{\"id\":\"concepts\",\"title\":\"Core Concepts\",\"parentId\":\"root-topic\",\"kind\":\"topic\",\"priority\":\"P1\"},{\"id\":\"query\",\"title\":\"Query Languages\",\"parentId\":\"root-topic\",\"kind\":\"topic\",\"priority\":\"\"},{\"id\":\"use-cases\",\"title\":\"Use Cases\",\"parentId\":\"root-topic\",\"kind\":\"topic\",\"priority\":\"\"},{\"id\":\"rdf\",\"title\":\"RDF vs Property Graph\",\"parentId\":\"concepts\",\"kind\":\"topic\",\"priority\":\"\"},{\"id\":\"cypher\",\"title\":\"Cypher\",\"parentId\":\"query\",\"kind\":\"topic\",\"priority\":\"\"},{\"id\":\"recommendation\",\"title\":\"Recommendation\",\"parentId\":\"use-cases\",\"kind\":\"topic\",\"priority\":\"\"}],\"relations\":[{\"sourceId\":\"cypher\",\"targetId\":\"rdf\",\"label\":\"对比\"},{\"sourceId\":\"recommendation\",\"targetId\":\"concepts\",\"label\":\"依赖建模\"}]}"}}]}`))
+			_, _ = w.Write([]byte(`{"model":"qwen-local","choices":[{"message":{"role":"assistant","content":"{\"title\":\"Graph Databases\",\"summary\":\"覆盖概念、建模、查询与场景。\",\"nodes\":[{\"id\":\"root-topic\",\"title\":\"Graph Databases\",\"note\":\"图数据库用图结构表达实体与关系，适合关联密集型问题。\",\"parentId\":\"\",\"kind\":\"root\",\"priority\":\"\"},{\"id\":\"concepts\",\"title\":\"Core Concepts\",\"note\":\"核心概念包括节点、边、属性，以及如何保持关系可遍历。\",\"parentId\":\"root-topic\",\"kind\":\"topic\",\"priority\":\"P1\"},{\"id\":\"query\",\"title\":\"Query Languages\",\"note\":\"查询语言决定如何高效遍历邻接关系并提取模式。\",\"parentId\":\"root-topic\",\"kind\":\"topic\",\"priority\":\"\"},{\"id\":\"use-cases\",\"title\":\"Use Cases\",\"note\":\"典型场景集中在推荐、风控、知识图谱和网络分析。\",\"parentId\":\"root-topic\",\"kind\":\"topic\",\"priority\":\"\"},{\"id\":\"rdf\",\"title\":\"RDF vs Property Graph\",\"note\":\"两种模型分别强调三元组标准化和属性图工程灵活性。\",\"parentId\":\"concepts\",\"kind\":\"topic\",\"priority\":\"\"},{\"id\":\"cypher\",\"title\":\"Cypher\",\"note\":\"Cypher 用模式匹配表达关系查询，适合业务分析与探索。\",\"parentId\":\"query\",\"kind\":\"topic\",\"priority\":\"\"},{\"id\":\"recommendation\",\"title\":\"Recommendation\",\"note\":\"推荐系统常用图数据库建模用户、物品与交互关系。\",\"parentId\":\"use-cases\",\"kind\":\"topic\",\"priority\":\"\"}],\"relations\":[{\"sourceId\":\"cypher\",\"targetId\":\"rdf\",\"label\":\"对比\"},{\"sourceId\":\"recommendation\",\"targetId\":\"concepts\",\"label\":\"依赖建模\"}]}"}}]}`))
 		default:
 			http.NotFound(w, r)
 		}
@@ -327,6 +330,61 @@ func TestAIGenerateEndpoint(t *testing.T) {
 	}
 	if len(payload.Document.Relations) == 0 {
 		t.Fatalf("expected generated document to contain cross relations")
+	}
+	if strings.TrimSpace(payload.Document.Nodes[0].Note) == "" {
+		t.Fatal("expected generated document nodes to include notes")
+	}
+}
+
+func TestAINodeNotesEndpoint(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/models":
+			_, _ = w.Write([]byte(`{"data":[{"id":"qwen-local"}]}`))
+		case "/v1/chat/completions":
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				t.Fatalf("failed to read upstream request body: %v", err)
+			}
+			var payload openAIChatRequest
+			if err := json.Unmarshal(body, &payload); err != nil {
+				t.Fatalf("failed to decode upstream chat request: %v", err)
+			}
+			if !strings.Contains(payload.Messages[1].Content, "Return notes only for the target nodes listed above.") {
+				t.Fatalf("expected node note prompt to target selected nodes, got %q", payload.Messages[1].Content)
+			}
+			writeOpenAIChatResponse(t, w, "qwen-local", `{"summary":"Expanded the most important execution notes.","notes":[{"id":"scope","note":"Scope defines what is intentionally included and excluded so the team can protect focus and prevent requirement drift."},{"id":"timeline","note":"Timeline note that should be filtered because it was not requested."}]}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer upstream.Close()
+
+	server := newTestServer(t)
+	server.httpClient = upstream.Client()
+	handler := server.Handler()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/ai/node-notes", strings.NewReader(`{"settings":{"provider":"openai-compatible","baseUrl":"`+upstream.URL+`","model":"","apiKey":"test-key","maxTokens":4096},"document":{"id":"roadmap","title":"Roadmap","theme":"dark","nodes":[{"id":"root","kind":"root","title":"Roadmap","note":"Top level overview","position":{"x":820,"y":320},"createdAt":"2026-03-01T09:30:00Z","updatedAt":"2026-03-01T09:30:00Z"},{"id":"scope","parentId":"root","kind":"topic","title":"Scope","note":"","position":{"x":1100,"y":320},"createdAt":"2026-03-01T09:30:00Z","updatedAt":"2026-03-01T09:30:00Z"},{"id":"timeline","parentId":"root","kind":"topic","title":"Timeline","note":"","position":{"x":1100,"y":420},"createdAt":"2026-03-01T09:30:00Z","updatedAt":"2026-03-01T09:30:00Z"}],"relations":[],"meta":{"version":1,"lastEditedAt":"2026-03-01T09:30:00Z","lastOpenedAt":"2026-03-02T10:00:00Z"}},"targetNodeIds":["scope"],"instructions":"Focus on execution clarity."}`))
+	req.Header.Set("Content-Type", "application/json")
+	res := httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d with body %s", res.Code, res.Body.String())
+	}
+
+	var payload aiNodeNotesResponse
+	if err := json.Unmarshal(res.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("failed to decode AI node notes response: %v", err)
+	}
+	if payload.Model != "qwen-local" {
+		t.Fatalf("expected model qwen-local, got %q", payload.Model)
+	}
+	if len(payload.Notes) != 1 || payload.Notes[0].ID != "scope" {
+		t.Fatalf("expected endpoint to keep only requested node notes, got %+v", payload.Notes)
+	}
+	if !strings.Contains(payload.Notes[0].Note, "prevent requirement drift") {
+		t.Fatalf("unexpected node note payload: %+v", payload.Notes[0])
 	}
 }
 

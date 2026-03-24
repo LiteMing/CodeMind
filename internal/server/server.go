@@ -20,7 +20,7 @@ import (
 
 const (
 	defaultAIBaseURL   = "http://127.0.0.1:1234/v1"
-	defaultAIMaxTokens = 3200
+	defaultAIMaxTokens = 4800
 	defaultRootX       = 820
 	defaultRootY       = 320
 	defaultBranchGapX  = 280
@@ -68,6 +68,13 @@ type aiRelationsRequest struct {
 	Instructions string            `json:"instructions"`
 }
 
+type aiNodeNotesRequest struct {
+	Settings      aiSettingsRequest `json:"settings"`
+	Document      mindmap.Document  `json:"document"`
+	TargetNodeIDs []string          `json:"targetNodeIds"`
+	Instructions  string            `json:"instructions"`
+}
+
 type aiTestRequest struct {
 	Settings aiSettingsRequest `json:"settings"`
 }
@@ -84,6 +91,17 @@ type aiRelationsResponse struct {
 	Relations []aiRelationSuggestion `json:"relations"`
 	Summary   string                 `json:"summary"`
 	Model     string                 `json:"model"`
+}
+
+type aiNodeNoteSuggestion struct {
+	ID   string `json:"id"`
+	Note string `json:"note"`
+}
+
+type aiNodeNotesResponse struct {
+	Notes   []aiNodeNoteSuggestion `json:"notes"`
+	Summary string                 `json:"summary"`
+	Model   string                 `json:"model"`
 }
 
 type aiGenerateRequest struct {
@@ -117,6 +135,7 @@ type aiGeneratedGraph struct {
 type aiGeneratedNode struct {
 	ID       string `json:"id"`
 	Title    string `json:"title"`
+	Note     string `json:"note"`
 	ParentID string `json:"parentId"`
 	Kind     string `json:"kind"`
 	Priority string `json:"priority"`
@@ -195,6 +214,7 @@ func (s *Server) registerAPI(mux *http.ServeMux) {
 	mux.HandleFunc("/api/import", s.handleImport)
 	mux.HandleFunc("/api/ai/test", s.handleAITest)
 	mux.HandleFunc("/api/ai/relations", s.handleAIRelations)
+	mux.HandleFunc("/api/ai/node-notes", s.handleAINodeNotes)
 	mux.HandleFunc("/api/ai/generate", s.handleAIGenerate)
 }
 
@@ -356,6 +376,32 @@ func (s *Server) handleAIRelations(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, result)
 }
 
+func (s *Server) handleAINodeNotes(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", "POST")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req aiNodeNotesRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if err := req.Document.Validate(); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+
+	result, err := s.completeAINodeNotes(req)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, result)
+}
+
 func (s *Server) handleAITest(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", "POST")
@@ -480,14 +526,102 @@ func (s *Server) suggestAIRelations(req aiRelationsRequest) (aiRelationsResponse
 	}, nil
 }
 
+func (s *Server) completeAINodeNotes(req aiNodeNotesRequest) (aiNodeNotesResponse, error) {
+	type notePayload struct {
+		Summary string                 `json:"summary"`
+		Notes   []aiNodeNoteSuggestion `json:"notes"`
+	}
+
+	targets := resolveAINoteTargets(req.Document, req.TargetNodeIDs)
+	if len(targets) == 0 {
+		return aiNodeNotesResponse{}, errors.New("no target nodes available for note completion")
+	}
+
+	systemPrompt := strings.Join([]string{
+		"You expand and improve node notes for a mind map.",
+		"Write plain text notes that are clear, specific, and useful for future reading.",
+		"Prefer same-language output as the node title and existing note.",
+		"Do not use markdown bullet lists or JSON inside note text.",
+		"Each note should explain what the node means, why it matters, and include an example, mechanism, or caveat when helpful.",
+	}, "\n")
+
+	documentPayload, err := marshalMindMapForPrompt(req.Document)
+	if err != nil {
+		return aiNodeNotesResponse{}, err
+	}
+
+	targetPayload, err := json.MarshalIndent(targets, "", "  ")
+	if err != nil {
+		return aiNodeNotesResponse{}, err
+	}
+
+	userPrompt := strings.Join([]string{
+		"Mind map document:",
+		documentPayload,
+		"",
+		"Target nodes to annotate:",
+		string(targetPayload),
+		"",
+		"Task:",
+		"- Return notes only for the target nodes listed above.",
+		"- Rewrite existing notes into richer, clearer versions when a note already exists.",
+		"- Prefer 3 to 6 informative sentences per node when the topic supports it.",
+		"- Make notes denser for high-level nodes and still useful for detailed nodes.",
+		"- Keep note text factual, readable, and directly tied to the current mind map context.",
+		optionalInstructionBlock(req.Instructions),
+	}, "\n")
+
+	schema := map[string]any{
+		"type": "json_schema",
+		"json_schema": map[string]any{
+			"name":   "mind_map_node_notes",
+			"strict": true,
+			"schema": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"summary": map[string]any{"type": "string"},
+					"notes": map[string]any{
+						"type": "array",
+						"items": map[string]any{
+							"type": "object",
+							"properties": map[string]any{
+								"id":   map[string]any{"type": "string"},
+								"note": map[string]any{"type": "string"},
+							},
+							"required":             []string{"id", "note"},
+							"additionalProperties": false,
+						},
+					},
+				},
+				"required":             []string{"summary", "notes"},
+				"additionalProperties": false,
+			},
+		},
+	}
+
+	var payload notePayload
+	model, err := s.runJSONTask(req.Settings, systemPrompt, userPrompt, schema, &payload)
+	if err != nil {
+		return aiNodeNotesResponse{}, err
+	}
+
+	return aiNodeNotesResponse{
+		Notes:   filterCompletedNodeNotes(req.Document, req.TargetNodeIDs, payload.Notes),
+		Summary: strings.TrimSpace(payload.Summary),
+		Model:   model,
+	}, nil
+}
+
 func (s *Server) generateAIDocument(req aiGenerateRequest) (aiGenerateResponse, error) {
 	systemPrompt := strings.Join([]string{
 		"You create concise but information-dense knowledge-graph style mind maps.",
 		"Return a root topic, meaningful branches, layered sub-branches, and a few cross-links.",
 		"Keep node titles short enough to fit on a mind map.",
+		"Every node must also include a useful explanatory note in plain text.",
 		"Default to a 2 to 3 level hierarchy instead of a flat root-level list.",
 		"Prefer 4 to 7 first-level branches and 14 to 28 nodes total unless the user asks for a smaller graph.",
 		"When the topic allows it, give major branches 2 to 4 supporting child nodes.",
+		"Prefer richer notes over adding many shallow branches with no explanation.",
 		"Include a few semantic relation lines between distant branches when they genuinely help understanding.",
 	}, "\n")
 
@@ -500,6 +634,9 @@ func (s *Server) generateAIDocument(req aiGenerateRequest) (aiGenerateResponse, 
 		"- Do not place nearly every node directly under the root.",
 		"- At least 2 first-level branches should include second-level children when the topic allows it.",
 		"- At least 1 branch should reach third-level depth when the topic allows it.",
+		"- Every node must include a note field.",
+		"- Root and first-level branches should have especially detailed notes.",
+		"- Notes should be plain text, specific, and as detailed as the token budget allows.",
 		"- Each non-root node must either point to a parentId or be marked as floating.",
 		"- Use relation lines only for semantic cross-links, not for tree structure.",
 		"- Keep labels clear and practical.",
@@ -523,11 +660,12 @@ func (s *Server) generateAIDocument(req aiGenerateRequest) (aiGenerateResponse, 
 							"properties": map[string]any{
 								"id":       map[string]any{"type": "string"},
 								"title":    map[string]any{"type": "string"},
+								"note":     map[string]any{"type": "string"},
 								"parentId": map[string]any{"type": "string"},
 								"kind":     map[string]any{"type": "string"},
 								"priority": map[string]any{"type": "string"},
 							},
-							"required":             []string{"id", "title", "parentId", "kind", "priority"},
+							"required":             []string{"id", "title", "note", "parentId", "kind", "priority"},
 							"additionalProperties": false,
 						},
 					},
@@ -564,6 +702,7 @@ func (s *Server) generateAIDocument(req aiGenerateRequest) (aiGenerateResponse, 
 			"- Rebuild it as a layered hierarchy with coherent sibling groups.",
 			"- Keep 4 to 7 first-level branches, but give at least 2 branches meaningful second-level children.",
 			"- Ensure at least 1 branch reaches third-level depth unless the topic truly cannot support it.",
+			"- Preserve detailed notes for every node while revising the hierarchy.",
 			"- Preserve only relation lines that connect distant branches semantically.",
 		}, "\n")
 		model, err = s.runJSONTask(req.Settings, systemPrompt, retryPrompt, schema, &payload)
@@ -797,6 +936,7 @@ func marshalMindMapForPrompt(doc mindmap.Document) (string, error) {
 	type promptNode struct {
 		ID       string           `json:"id"`
 		Title    string           `json:"title"`
+		Note     string           `json:"note,omitempty"`
 		ParentID string           `json:"parentId,omitempty"`
 		Kind     mindmap.NodeKind `json:"kind"`
 		Priority mindmap.Priority `json:"priority,omitempty"`
@@ -813,6 +953,7 @@ func marshalMindMapForPrompt(doc mindmap.Document) (string, error) {
 		nodes = append(nodes, promptNode{
 			ID:       node.ID,
 			Title:    node.Title,
+			Note:     strings.TrimSpace(node.Note),
 			ParentID: node.ParentID,
 			Kind:     node.Kind,
 			Priority: node.Priority,
@@ -893,6 +1034,99 @@ func filterSuggestedRelations(doc mindmap.Document, relations []aiRelationSugges
 	return filtered
 }
 
+func resolveAINoteTargets(doc mindmap.Document, requested []string) []map[string]string {
+	nodeByID := doc.NodeMap()
+	targets := make([]map[string]string, 0)
+	added := make(map[string]struct{})
+	appendTarget := func(node mindmap.Node) {
+		if _, exists := added[node.ID]; exists {
+			return
+		}
+		added[node.ID] = struct{}{}
+		targets = append(targets, map[string]string{
+			"id":       node.ID,
+			"title":    strings.TrimSpace(node.Title),
+			"parentId": strings.TrimSpace(node.ParentID),
+			"kind":     string(node.Kind),
+			"note":     strings.TrimSpace(node.Note),
+		})
+	}
+
+	for _, nodeID := range requested {
+		if node, ok := nodeByID[strings.TrimSpace(nodeID)]; ok {
+			appendTarget(node)
+		}
+	}
+	if len(targets) > 0 {
+		return targets
+	}
+
+	for _, node := range doc.Nodes {
+		if node.Kind == mindmap.NodeKindRoot {
+			continue
+		}
+		appendTarget(node)
+	}
+	if len(targets) > 0 {
+		return targets
+	}
+
+	root := doc.Root()
+	if strings.TrimSpace(root.ID) != "" {
+		appendTarget(root)
+	}
+	return targets
+}
+
+func filterCompletedNodeNotes(doc mindmap.Document, requested []string, notes []aiNodeNoteSuggestion) []aiNodeNoteSuggestion {
+	validTargets := make(map[string]struct{})
+	nodeByID := doc.NodeMap()
+
+	for _, nodeID := range requested {
+		trimmed := strings.TrimSpace(nodeID)
+		if trimmed == "" {
+			continue
+		}
+		if _, exists := nodeByID[trimmed]; exists {
+			validTargets[trimmed] = struct{}{}
+		}
+	}
+	if len(validTargets) == 0 {
+		for _, node := range doc.Nodes {
+			if node.Kind == mindmap.NodeKindRoot {
+				continue
+			}
+			validTargets[node.ID] = struct{}{}
+		}
+		if len(validTargets) == 0 {
+			root := doc.Root()
+			if strings.TrimSpace(root.ID) != "" {
+				validTargets[root.ID] = struct{}{}
+			}
+		}
+	}
+
+	filtered := make([]aiNodeNoteSuggestion, 0, len(notes))
+	added := make(map[string]struct{}, len(notes))
+	for _, item := range notes {
+		item.ID = strings.TrimSpace(item.ID)
+		item.Note = strings.TrimSpace(item.Note)
+		if item.ID == "" || item.Note == "" {
+			continue
+		}
+		if _, ok := validTargets[item.ID]; !ok {
+			continue
+		}
+		if _, exists := added[item.ID]; exists {
+			continue
+		}
+		added[item.ID] = struct{}{}
+		filtered = append(filtered, item)
+	}
+
+	return filtered
+}
+
 func generatedGraphToDocument(topic string, payload aiGeneratedGraph) (mindmap.Document, error) {
 	now := time.Now().UTC()
 	title := strings.TrimSpace(payload.Title)
@@ -921,6 +1155,7 @@ func generatedGraphToDocument(topic string, payload aiGeneratedGraph) (mindmap.D
 				ID:        "root",
 				Kind:      mindmap.NodeKindRoot,
 				Title:     fallbackString(strings.TrimSpace(rootSource.Title), title),
+				Note:      strings.TrimSpace(rootSource.Note),
 				Position:  mindmap.Position{X: defaultRootX, Y: defaultRootY},
 				CreatedAt: now,
 				UpdatedAt: now,
@@ -962,6 +1197,7 @@ func generatedGraphToDocument(topic string, payload aiGeneratedGraph) (mindmap.D
 			ID:        actualID,
 			Kind:      mindmap.NodeKindFloating,
 			Title:     fallbackString(strings.TrimSpace(node.Title), "Untitled"),
+			Note:      strings.TrimSpace(node.Note),
 			Priority:  parsePriority(node.Priority),
 			Position:  mindmap.Position{X: defaultRootX - 220 + float64(index*36), Y: defaultRootY + 220 + float64(index*defaultBranchGapY)},
 			CreatedAt: now,
@@ -1087,6 +1323,7 @@ func appendGeneratedNode(
 		ParentID:  parentID,
 		Kind:      parseNodeKind(source.Kind),
 		Title:     fallbackString(strings.TrimSpace(source.Title), "Untitled"),
+		Note:      strings.TrimSpace(source.Note),
 		Priority:  parsePriority(source.Priority),
 		Position:  mindmap.Position{X: x, Y: y},
 		CreatedAt: now,

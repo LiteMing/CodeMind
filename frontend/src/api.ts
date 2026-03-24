@@ -1,5 +1,6 @@
 import type {
   AIGenerateResponse,
+  AINodeNotesResponse,
   AIRelationResponse,
   AITestResponse,
   AITemplateId,
@@ -134,6 +135,25 @@ export const api = {
     }
 
     return await readJSON<AIRelationResponse>(response, '/api/ai/relations')
+  },
+
+  async completeNodeNotes(input: {
+    document: MindMapDocument
+    settings: AISettings
+    targetNodeIds: string[]
+    instructions: string
+  }): Promise<AINodeNotesResponse> {
+    const response = await fetch(`${API_BASE}/ai/node-notes`, {
+      method: 'POST',
+      headers: JSON_HEADERS,
+      body: JSON.stringify(input),
+    })
+
+    if (!response.ok) {
+      throw new Error(await readError(response))
+    }
+
+    return await readJSON<AINodeNotesResponse>(response, '/api/ai/node-notes')
   },
 
   async generateKnowledgeMap(input: {
