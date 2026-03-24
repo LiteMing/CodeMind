@@ -63,6 +63,8 @@ interface ResizeState {
   startY: number
   startWidth: number
   startHeight: number
+  anchorLeft: number
+  anchorTop: number
   historyCaptured: boolean
 }
 
@@ -688,12 +690,17 @@ class MindMapApp {
         return
       }
 
+      const currentWidth = node.width ?? estimateNodeWidth(node)
+      const currentHeight = node.height ?? estimateNodeHeight(node)
+
       this.state.resize = {
         nodeId: resizeNodeId,
         startX: event.clientX,
         startY: event.clientY,
-        startWidth: node.width ?? MIN_NODE_WIDTH,
-        startHeight: node.height ?? MIN_NODE_HEIGHT,
+        startWidth: currentWidth,
+        startHeight: currentHeight,
+        anchorLeft: node.position.x - currentWidth / 2,
+        anchorTop: node.position.y - currentHeight / 2,
         historyCaptured: false,
       }
       event.preventDefault()
@@ -788,22 +795,27 @@ class MindMapApp {
     }
 
     if (this.state.resize) {
-      const deltaX = event.clientX - this.state.resize.startX
-      const deltaY = event.clientY - this.state.resize.startY
-      if (!this.state.resize.historyCaptured && (Math.abs(deltaX) > 1 || Math.abs(deltaY) > 1)) {
+      const resizeState = this.state.resize
+      const deltaX = event.clientX - resizeState.startX
+      const deltaY = event.clientY - resizeState.startY
+      if (!resizeState.historyCaptured && (Math.abs(deltaX) > 1 || Math.abs(deltaY) > 1)) {
         this.captureHistory()
-        this.state.resize.historyCaptured = true
+        resizeState.historyCaptured = true
         this.renderHeader()
       }
 
-      const nextWidth = clampMin(this.state.resize.startWidth + (event.clientX - this.state.resize.startX) / this.viewport.scale, MIN_NODE_WIDTH)
-      const nextHeight = clampMin(this.state.resize.startHeight + (event.clientY - this.state.resize.startY) / this.viewport.scale, MIN_NODE_HEIGHT)
+      const nextWidth = clampMin(resizeState.startWidth + deltaX / this.viewport.scale, MIN_NODE_WIDTH)
+      const nextHeight = clampMin(resizeState.startHeight + deltaY / this.viewport.scale, MIN_NODE_HEIGHT)
 
-      this.updateNode(this.state.resize.nodeId, (node) => {
+      this.updateNode(resizeState.nodeId, (node) => {
         node.width = Math.round(nextWidth)
         node.height = Math.round(nextHeight)
+        node.position = {
+          x: Math.round(resizeState.anchorLeft + nextWidth / 2),
+          y: Math.round(resizeState.anchorTop + nextHeight / 2),
+        }
       })
-      this.scheduleLiveNodeUpdate(this.state.resize.nodeId, true)
+      this.scheduleLiveNodeUpdate(resizeState.nodeId, true)
       return
     }
 
@@ -1881,6 +1893,7 @@ class MindMapApp {
             </label>
             <div class="ai-action-row">
               <button type="button" class="action-button" data-command="ai-complete-node-notes" ${this.state.ai.busy ? 'disabled' : ''}>${this.t('ai.notesAction')}</button>
+              <button type="button" class="chip-button" data-command="ai-complete-node-notes-as-children" ${this.state.ai.busy ? 'disabled' : ''}>${this.aiNoteChildActionLabel()}</button>
             </div>
             ${this.renderAIRawEditor('noteRawRequest', this.state.ai.noteRawRequest)}
           </section>
@@ -1996,6 +2009,10 @@ class MindMapApp {
       default:
         return ''
     }
+  }
+
+  private aiNoteChildActionLabel(): string {
+    return this.state.preferences.locale === 'zh-CN' ? '生成注释并添加为下级节点' : 'Generate Notes as Child Nodes'
   }
 
   private aiDebugText(
@@ -3143,6 +3160,9 @@ class MindMapApp {
         case 'ai-complete-node-notes':
           await this.applyAINodeNotes()
           return
+        case 'ai-complete-node-notes-as-children':
+          await this.applyAINodeNotes('children')
+          return
         case 'ai-generate-map':
           await this.generateAIMap()
           return
@@ -3538,7 +3558,7 @@ class MindMapApp {
     }
   }
 
-  private async applyAINodeNotes(): Promise<void> {
+  private async applyAINodeNotes(mode: 'replace' | 'children' = 'replace'): Promise<void> {
     if (this.state.ai.busy) {
       return
     }
@@ -3573,23 +3593,65 @@ class MindMapApp {
         return
       }
 
-      const changes = nextNotes.filter((item) => normalizeNodeNote(this.findNode(item.id)?.note) !== normalizeNodeNote(item.note))
-      if (changes.length === 0) {
-        this.setStatus('status.aiNoNotes')
-        return
-      }
+      let appliedCount = 0
 
-      this.captureHistory()
-      for (const item of changes) {
-        this.updateNode(item.id, (draft) => {
-          draft.note = normalizeNodeNote(item.note)
-        })
+      if (mode === 'children') {
+        const preparedChildren = nextNotes
+          .map((item) => {
+            const parent = this.findNode(item.id)
+            const normalizedNote = normalizeNodeNote(item.note)
+            if (!parent || !normalizedNote) {
+              return null
+            }
+
+            return { parent, normalizedNote }
+          })
+          .filter((item): item is { parent: MindNode; normalizedNote: string } => Boolean(item))
+
+        if (preparedChildren.length === 0) {
+          this.setStatus('status.aiNoNotes')
+          return
+        }
+
+        this.captureHistory()
+        const createdIds: string[] = []
+        for (const { parent, normalizedNote } of preparedChildren) {
+          parent.collapsed = false
+          parent.updatedAt = new Date().toISOString()
+          const childNode = createNode({
+            parentId: parent.id,
+            kind: 'topic',
+            position: nextChildPosition(this.state.document, parent.id),
+            title: deriveNoteChildTitle(parent, normalizedNote, this.state.preferences.locale),
+            color: normalizeNodeColor(parent.color) || undefined,
+          })
+          childNode.note = normalizedNote
+          this.state.document.nodes.push(childNode)
+          createdIds.push(childNode.id)
+          appliedCount += 1
+        }
+
+        this.setSelection(createdIds, createdIds[0] ?? null)
+      } else {
+        const changes = nextNotes.filter((item) => normalizeNodeNote(this.findNode(item.id)?.note) !== normalizeNodeNote(item.note))
+        if (changes.length === 0) {
+          this.setStatus('status.aiNoNotes')
+          return
+        }
+
+        this.captureHistory()
+        for (const item of changes) {
+          this.updateNode(item.id, (draft) => {
+            draft.note = normalizeNodeNote(item.note)
+          })
+        }
+        appliedCount = changes.length
       }
 
       touchDocument(this.state.document)
-      this.setStatus('status.aiNotesApplied', { count: changes.length })
+      this.setStatus('status.aiNotesApplied', { count: appliedCount })
       this.render()
-      this.scheduleAutosave('status.noteSaveScheduled')
+      this.scheduleAutosave(mode === 'children' ? 'status.childSaveScheduled' : 'status.noteSaveScheduled')
     } catch (error) {
       const reason = getErrorMessage(error)
       this.captureAIDebug('notes', getAIDebugInfo(error), reason)
@@ -5062,6 +5124,19 @@ function normalizeNodeNote(value: string | null | undefined): string | undefined
 
   const normalized = value.replace(/\r\n/g, '\n').trim()
   return normalized ? normalized : undefined
+}
+
+function deriveNoteChildTitle(parent: MindNode, note: string, locale: Locale): string {
+  const normalized = note.replace(/\s+/g, ' ').trim()
+  const firstChunk = normalized.split(/(?<=[。！？.!?])\s+|\n+/).find((item) => item.trim().length > 0) ?? normalized
+  const maxLength = locale === 'zh-CN' ? 18 : 28
+  const compact = shorten(firstChunk.trim(), maxLength)
+
+  if (compact.length >= (locale === 'zh-CN' ? 6 : 10)) {
+    return compact
+  }
+
+  return locale === 'zh-CN' ? `${parent.title} 注释` : `${parent.title} Note`
 }
 
 function resolveNodeColorPalette(color: NodeColor): NodeColorPalette | null {
