@@ -2282,7 +2282,7 @@ class MindMapApp {
           ? `<input class="node-editor" type="text" style="${nodeDimensions}" data-node-editor="${node.id}" value="${escapeAttribute(node.title)}" maxlength="120" />`
           : `<button type="button" class="node-shell" style="${nodeDimensions}" data-node-button="${node.id}">
                ${priorityBadge}
-               <span class="node-title">${escapeHtml(shorten(node.title, node.kind === 'root' ? 60 : 72))}</span>
+               <span class="node-title" data-node-title="${node.id}">${escapeHtml(nodeVisibleTitle(node))}</span>
                ${branchBadge}
              </button>`
 
@@ -4125,9 +4125,14 @@ class MindMapApp {
         element.style.top = `${workspacePosition.y}px`
         if (includeDimensionIds.has(nodeId)) {
           const sizingTarget = element.querySelector<HTMLElement>('.node-shell, .node-editor')
+          const titleTarget = element.querySelector<HTMLElement>('[data-node-title]')
           if (sizingTarget) {
             sizingTarget.style.width = node.width ? `${Math.max(node.width, MIN_NODE_WIDTH)}px` : ''
             sizingTarget.style.height = node.height ? `${Math.max(node.height, MIN_NODE_HEIGHT)}px` : ''
+            sizingTarget.style.maxWidth = node.width ? 'none' : ''
+          }
+          if (titleTarget) {
+            titleTarget.textContent = nodeVisibleTitle(node)
           }
         }
       }
@@ -5021,11 +5026,20 @@ function buildNodeDimensionStyle(node: MindNode): string {
   const styles: string[] = []
   if (node.width) {
     styles.push(`width: ${Math.max(node.width, MIN_NODE_WIDTH)}px;`)
+    styles.push('max-width: none;')
   }
   if (node.height) {
     styles.push(`height: ${Math.max(node.height, MIN_NODE_HEIGHT)}px;`)
   }
   return styles.join(' ')
+}
+
+function nodeVisibleTitle(node: MindNode): string {
+  if (node.width || node.height) {
+    return node.title
+  }
+
+  return shorten(node.title, node.kind === 'root' ? 60 : 72)
 }
 
 function buildNodeColorStyle(color: NodeColor): string {
