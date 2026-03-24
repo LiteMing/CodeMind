@@ -1054,6 +1054,7 @@ kbd {
 
 .edge-layer {
   pointer-events: none;
+  overflow: visible;
   shape-rendering: geometricPrecision;
   text-rendering: geometricPrecision;
 }

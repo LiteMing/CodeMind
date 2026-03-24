@@ -862,6 +862,7 @@ class MindMapApp {
       this.state.resize = null
       if (resized) {
         touchDocument(this.state.document)
+        this.renderWorkspace()
         this.renderHeader()
         this.scheduleAutosave('status.layoutSaveScheduled')
       }
@@ -876,6 +877,7 @@ class MindMapApp {
     this.state.drag = null
     if (moved) {
       touchDocument(this.state.document)
+      this.renderWorkspace()
       this.renderHeader()
       this.scheduleAutosave('status.layoutSaveScheduled')
     }
@@ -3640,7 +3642,14 @@ class MindMapApp {
     }
 
     const bounds = getWorkspaceBounds(this.state.document)
+    const originChanged = bounds.originX !== this.workspaceBounds.originX || bounds.originY !== this.workspaceBounds.originY
+    if (originChanged) {
+      this.renderWorkspace()
+      return
+    }
+
     this.applyCanvasMetrics(bounds)
+    this.updateCanvasViewportView()
     this.refs.edgeLayer.setAttribute('viewBox', `0 0 ${bounds.width} ${bounds.height}`)
 
     for (const nodeId of nodeIds) {
