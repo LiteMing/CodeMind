@@ -145,9 +145,10 @@ export function nextChildPosition(document: MindMapDocument, parentId: string): 
   }
 
   const children = childrenOf(document, parentId)
-  const direction = branchDirection(document, parent)
-  const targetX = resolveChildColumn(parent, children, direction)
-  const targetY = children.length === 0 ? parent.position.y : children[children.length - 1].position.y + NODE_GAP_Y
+  const direction = parent.kind === 'root' ? preferredRootChildDirection(document, children) : branchDirection(document, parent)
+  const laneChildren = parent.kind === 'root' ? children.filter((child) => branchDirection(document, child) === direction) : children
+  const targetX = resolveChildColumn(parent, laneChildren, direction)
+  const targetY = laneChildren.length === 0 ? parent.position.y : laneChildren[laneChildren.length - 1].position.y + NODE_GAP_Y
   return findAvailablePosition(document, { x: targetX, y: targetY }, 'topic')
 }
 
@@ -189,6 +190,25 @@ function branchDirection(document: MindMapDocument, node: MindNode): -1 | 1 {
 
   const root = findRoot(document)
   return node.position.x < root.position.x ? -1 : 1
+}
+
+function preferredRootChildDirection(document: MindMapDocument, children: MindNode[]): -1 | 1 {
+  if (children.length === 0) {
+    return 1
+  }
+
+  const root = findRoot(document)
+  const leftCount = children.filter((child) => child.position.x < root.position.x).length
+  const rightCount = children.length - leftCount
+  if (leftCount < rightCount) {
+    return -1
+  }
+  if (rightCount < leftCount) {
+    return 1
+  }
+
+  const lastChild = children[children.length - 1]
+  return lastChild.position.x < root.position.x ? 1 : -1
 }
 
 function resolveChildColumn(parent: MindNode, children: MindNode[], direction: -1 | 1): number {

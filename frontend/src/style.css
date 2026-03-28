@@ -1176,9 +1176,15 @@ kbd {
 }
 
 .node-editor {
+  display: block;
   padding: 11px 14px;
   outline: none;
   overflow: hidden;
+  resize: none;
+  font: inherit;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .node-editor.is-all-selected {

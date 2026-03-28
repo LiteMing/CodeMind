@@ -107,6 +107,8 @@ interface StatusDescriptor {
 interface EditorLaunchOptions {
   value?: string | null
   selection?: 'all' | 'end'
+  selectionStart?: number
+  selectionEnd?: number
 }
 
 interface GraphDragState {
@@ -256,6 +258,7 @@ const MAX_ZOOM = 2.4
 const ZOOM_SENSITIVITY = 0.0018
 const MIN_NODE_WIDTH = 170
 const MIN_NODE_HEIGHT = 52
+const AUTO_NODE_EDITOR_MAX_WIDTH = 320
 const HISTORY_LIMIT = 120
 const GRAPH_DEFAULT_ZOOM = 1.16
 const GRAPH_MIN_ZOOM = 0.68
@@ -370,6 +373,7 @@ class MindMapApp {
   private copiedSubtree: CopiedSubtree | null = null
   private suppressContextMenuOnce = false
   private pendingEditorOptions: EditorLaunchOptions | null = null
+  private nodeEditorMeasureCanvas: HTMLCanvasElement | null = null
   private workspaceBounds: WorkspaceBounds = {
     minX: 0,
     minY: 0,
@@ -506,7 +510,13 @@ class MindMapApp {
     }
 
     const command = target.closest<HTMLElement>('[data-command]')?.dataset.command
+    const clickedNodeEditor = target.closest<HTMLTextAreaElement>('[data-node-editor]')
+    const nodeButton = target.closest<HTMLElement>('[data-node-button]')
+    const clickedWorkspace = target.closest<HTMLElement>('[data-workspace-scroll]')
     if (command) {
+      if (this.state.editingNodeId && !clickedNodeEditor) {
+        this.finishActiveNodeEditing()
+      }
       this.state.contextMenu = null
       void this.runCommand(command)
       return
@@ -514,12 +524,18 @@ class MindMapApp {
 
     const priority = target.closest<HTMLElement>('[data-priority]')?.dataset.priority as Priority | undefined
     if (priority !== undefined) {
+      if (this.state.editingNodeId && !clickedNodeEditor) {
+        this.finishActiveNodeEditing()
+      }
       this.setPriority(priority)
       return
     }
 
     const nodeColor = target.closest<HTMLElement>('[data-node-color]')?.dataset.nodeColor as NodeColor | undefined
     if (nodeColor !== undefined) {
+      if (this.state.editingNodeId && !clickedNodeEditor) {
+        this.finishActiveNodeEditing()
+      }
       this.setNodeColor(normalizeNodeColor(nodeColor))
       return
     }
@@ -541,7 +557,14 @@ class MindMapApp {
       return
     }
 
-    const nodeButton = target.closest<HTMLElement>('[data-node-button]')
+    if (clickedNodeEditor) {
+      return
+    }
+
+    if (this.state.editingNodeId) {
+      this.finishActiveNodeEditing()
+    }
+
     if (nodeButton?.dataset.nodeButton) {
       const nodeId = nodeButton.dataset.nodeButton
       if (this.state.connectSourceNodeId && this.state.connectSourceNodeId !== nodeId) {
@@ -575,7 +598,6 @@ class MindMapApp {
       this.renderHeader()
     }
 
-    const clickedWorkspace = target.closest<HTMLElement>('[data-workspace-scroll]')
     if (clickedWorkspace) {
       this.clearSelection()
     }
@@ -663,6 +685,10 @@ class MindMapApp {
     }
 
     if (!(target instanceof HTMLElement)) {
+      return
+    }
+
+    if (target.closest('[data-node-editor]')) {
       return
     }
 
@@ -1081,11 +1107,11 @@ class MindMapApp {
 
   private readonly handleEditorKeyDown = (event: KeyboardEvent): void => {
     const target = event.target
-    if (!(target instanceof HTMLInputElement || target instanceof HTMLSelectElement)) {
+    if (!(target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement)) {
       return
     }
 
-    if (target instanceof HTMLInputElement && target.dataset.nodeEditor) {
+    if ((target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) && target.dataset.nodeEditor) {
       if (event.key === 'Enter') {
         event.preventDefault()
         this.commitNodeEditor(target.dataset.nodeEditor, target.value)
@@ -1133,8 +1159,15 @@ class MindMapApp {
       return
     }
 
-    if (target instanceof HTMLInputElement && target.dataset.nodeEditor) {
-      this.commitNodeEditor(target.dataset.nodeEditor, target.value)
+    if ((target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) && target.dataset.nodeEditor) {
+      const nodeId = target.dataset.nodeEditor
+      queueMicrotask(() => {
+        const currentEditor = this.nodeEditor(nodeId)
+        if (this.state.editingNodeId === nodeId && currentEditor && currentEditor !== target) {
+          return
+        }
+        this.commitNodeEditor(nodeId, target.value)
+      })
       return
     }
 
@@ -1154,8 +1187,11 @@ class MindMapApp {
       return
     }
 
-    if (target instanceof HTMLInputElement && target.dataset.nodeEditor) {
+    if ((target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) && target.dataset.nodeEditor) {
       target.classList.remove('is-all-selected')
+      if (target instanceof HTMLTextAreaElement) {
+        this.syncNodeEditorPreview(target)
+      }
       return
     }
 
@@ -2319,7 +2355,9 @@ class MindMapApp {
         const nodePresentationStyle = buildNodeColorStyle(nodeColor)
 
         const content = this.state.editingNodeId === node.id
-          ? `<input class="node-editor" type="text" style="${nodeDimensions}" data-node-editor="${node.id}" value="${escapeAttribute(node.title)}" maxlength="120" />`
+          ? `<textarea class="node-editor" style="${nodeDimensions}" data-node-editor="${node.id}" rows="1" maxlength="120" spellcheck="false">${escapeHtml(
+              node.title,
+            )}</textarea>`
           : `<button type="button" class="node-shell" style="${nodeDimensions}" data-node-button="${node.id}">
                ${priorityBadge}
                <span class="node-title" data-node-title="${node.id}">${escapeHtml(nodeVisibleTitle(node))}</span>
@@ -2406,12 +2444,126 @@ class MindMapApp {
     `
   }
 
+  private nodeEditor(nodeId = this.state.editingNodeId): HTMLTextAreaElement | null {
+    if (!nodeId) {
+      return null
+    }
+
+    return this.rootEl.querySelector<HTMLTextAreaElement>(`[data-node-editor="${nodeId}"]`)
+  }
+
+  private captureActiveNodeEditorDraft():
+    | {
+        nodeId: string
+        value: string
+        selectionStart: number
+        selectionEnd: number
+      }
+    | null {
+    const nodeId = this.state.editingNodeId
+    const editor = this.nodeEditor(nodeId)
+    if (!nodeId || !editor) {
+      return null
+    }
+
+    return {
+      nodeId,
+      value: editor.value,
+      selectionStart: editor.selectionStart ?? editor.value.length,
+      selectionEnd: editor.selectionEnd ?? editor.value.length,
+    }
+  }
+
+  private restoreActiveNodeEditorDraft(
+    draft:
+      | {
+          nodeId: string
+          value: string
+          selectionStart: number
+          selectionEnd: number
+        }
+      | null,
+  ): void {
+    if (!draft || !this.findNode(draft.nodeId)) {
+      return
+    }
+
+    this.state.editingNodeId = draft.nodeId
+    this.pendingEditorOptions = {
+      value: draft.value,
+      selectionStart: draft.selectionStart,
+      selectionEnd: draft.selectionEnd,
+    }
+  }
+
+  private syncNodeEditorPreview(editor: HTMLTextAreaElement): void {
+    const node = this.findNode(editor.dataset.nodeEditor ?? '')
+    if (!node) {
+      return
+    }
+
+    const computed = window.getComputedStyle(editor)
+    const minWidth = Math.max(MIN_NODE_WIDTH, parsePixelValue(computed.minWidth))
+    const maxWidth = Math.max(minWidth, parsePixelValue(computed.maxWidth) || AUTO_NODE_EDITOR_MAX_WIDTH)
+    const minHeight = Math.max(MIN_NODE_HEIGHT, parsePixelValue(computed.minHeight))
+
+    if (node.width) {
+      editor.style.width = `${Math.max(node.width, MIN_NODE_WIDTH)}px`
+      editor.style.maxWidth = 'none'
+    } else {
+      const horizontalPadding = parsePixelValue(computed.paddingLeft) + parsePixelValue(computed.paddingRight) + 2
+      const longestLineWidth = editor.value
+        .split(/\r?\n/)
+        .reduce((maxWidthSoFar, line) => Math.max(maxWidthSoFar, this.measureNodeEditorLineWidth(line || ' ', computed.font)), 0)
+      const nextWidth = clamp(Math.ceil(longestLineWidth + horizontalPadding), minWidth, maxWidth)
+      editor.style.width = `${nextWidth}px`
+      editor.style.maxWidth = `${maxWidth}px`
+    }
+
+    editor.style.height = 'auto'
+    if (node.height) {
+      editor.style.height = `${Math.max(node.height, minHeight)}px`
+      return
+    }
+
+    editor.style.height = `${Math.max(editor.scrollHeight, minHeight)}px`
+  }
+
+  private measureNodeEditorLineWidth(text: string, font: string): number {
+    if (!this.nodeEditorMeasureCanvas) {
+      this.nodeEditorMeasureCanvas = document.createElement('canvas')
+    }
+
+    const context = this.nodeEditorMeasureCanvas.getContext('2d')
+    if (!context) {
+      return Math.max(text.length, 1) * 8.6
+    }
+
+    context.font = font || '16px sans-serif'
+    return context.measureText(text || ' ').width
+  }
+
+  private finishActiveNodeEditing(renderAfter = false): void {
+    const nodeId = this.state.editingNodeId
+    if (!nodeId) {
+      return
+    }
+
+    const editor = this.nodeEditor(nodeId)
+    const fallbackTitle = this.findNode(nodeId)?.title ?? ''
+    this.commitNodeEditor(nodeId, editor?.value ?? fallbackTitle, {
+      allowInactive: true,
+      preserveSelection: true,
+      renderAfter,
+    })
+  }
+
   private focusEditorIfNeeded(): void {
     if (!this.state.editingNodeId || this.overlayBlocksCanvas()) {
       return
     }
 
-    const editor = this.rootEl.querySelector<HTMLInputElement>(`[data-node-editor="${this.state.editingNodeId}"]`)
+    const editor = this.nodeEditor(this.state.editingNodeId)
     if (!editor) {
       return
     }
@@ -2422,14 +2574,16 @@ class MindMapApp {
       if (pendingOptions?.value !== undefined && pendingOptions.value !== null) {
         editor.value = pendingOptions.value
       }
+      this.syncNodeEditorPreview(editor)
       this.restoreEditorSelection(editor, pendingOptions)
       window.setTimeout(() => {
+        this.syncNodeEditorPreview(editor)
         this.restoreEditorSelection(editor, pendingOptions)
       }, 0)
     })
   }
 
-  private restoreEditorSelection(editor: HTMLInputElement, options: EditorLaunchOptions | null | undefined, attempt = 0): void {
+  private restoreEditorSelection(editor: HTMLInputElement | HTMLTextAreaElement, options: EditorLaunchOptions | null | undefined, attempt = 0): void {
     if (!editor.isConnected || this.state.editingNodeId !== editor.dataset.nodeEditor) {
       return
     }
@@ -2440,17 +2594,24 @@ class MindMapApp {
       editor.focus()
     }
 
-    const selectionMode = options?.selection ?? 'all'
-    editor.classList.toggle('is-all-selected', selectionMode === 'all')
-    if (selectionMode === 'end') {
-      const cursor = editor.value.length
-      editor.setSelectionRange(cursor, cursor)
+    if (typeof options?.selectionStart === 'number') {
+      const start = clamp(Math.round(options.selectionStart), 0, editor.value.length)
+      const end = clamp(Math.round(options.selectionEnd ?? options.selectionStart), start, editor.value.length)
+      editor.classList.toggle('is-all-selected', start === 0 && end === editor.value.length)
+      editor.setSelectionRange(start, end)
     } else {
-      editor.select()
-      editor.setSelectionRange(0, editor.value.length)
+      const selectionMode = options?.selection ?? 'all'
+      editor.classList.toggle('is-all-selected', selectionMode === 'all')
+      if (selectionMode === 'end') {
+        const cursor = editor.value.length
+        editor.setSelectionRange(cursor, cursor)
+      } else {
+        editor.select()
+        editor.setSelectionRange(0, editor.value.length)
+      }
     }
 
-    if (this.editorSelectionSettled(editor, selectionMode) || attempt >= 4) {
+    if (this.editorSelectionSettled(editor, options) || attempt >= 4) {
       return
     }
 
@@ -2459,13 +2620,20 @@ class MindMapApp {
     })
   }
 
-  private editorSelectionSettled(editor: HTMLInputElement, selectionMode: NonNullable<EditorLaunchOptions['selection']> | 'all'): boolean {
+  private editorSelectionSettled(editor: HTMLInputElement | HTMLTextAreaElement, options: EditorLaunchOptions | null | undefined): boolean {
     if (document.activeElement !== editor) {
       return false
     }
 
     const selectionStart = editor.selectionStart ?? -1
     const selectionEnd = editor.selectionEnd ?? -1
+    if (typeof options?.selectionStart === 'number') {
+      const expectedStart = clamp(Math.round(options.selectionStart), 0, editor.value.length)
+      const expectedEnd = clamp(Math.round(options.selectionEnd ?? options.selectionStart), expectedStart, editor.value.length)
+      return selectionStart === expectedStart && selectionEnd === expectedEnd
+    }
+
+    const selectionMode = options?.selection ?? 'all'
     if (selectionMode === 'end') {
       const cursor = editor.value.length
       return selectionStart === cursor && selectionEnd === cursor
@@ -2496,7 +2664,7 @@ class MindMapApp {
     return orderedIds
   }
 
-  private setSelection(nodeIds: string[], primaryNodeId: string | null = nodeIds[nodeIds.length - 1] ?? null): void {
+  private applySelectionState(nodeIds: string[], primaryNodeId: string | null = nodeIds[nodeIds.length - 1] ?? null): void {
     const normalizedIds = nodeIds.filter((nodeId, index) => {
       return nodeIds.indexOf(nodeId) === index && Boolean(this.findNode(nodeId))
     })
@@ -2505,6 +2673,11 @@ class MindMapApp {
 
     this.state.selectedNodeIds = nextIds
     this.state.selectedNodeId = nextPrimary
+  }
+
+  private setSelection(nodeIds: string[], primaryNodeId: string | null = nodeIds[nodeIds.length - 1] ?? null): void {
+    this.finishActiveNodeEditing()
+    this.applySelectionState(nodeIds, primaryNodeId)
     this.state.editingNodeId = null
     this.pendingEditorOptions = null
   }
@@ -2976,8 +3149,16 @@ class MindMapApp {
     this.render()
   }
 
-  private commitNodeEditor(nodeId: string, rawTitle: string): void {
-    if (this.state.editingNodeId !== nodeId) {
+  private commitNodeEditor(
+    nodeId: string,
+    rawTitle: string,
+    options: {
+      allowInactive?: boolean
+      preserveSelection?: boolean
+      renderAfter?: boolean
+    } = {},
+  ): void {
+    if (!options.allowInactive && this.state.editingNodeId !== nodeId) {
       return
     }
 
@@ -2985,13 +3166,19 @@ class MindMapApp {
     const existingNode = this.findNode(nodeId)
     if (!existingNode) {
       this.state.editingNodeId = null
-      this.render()
+      this.pendingEditorOptions = null
+      if (options.renderAfter !== false) {
+        this.render()
+      }
       return
     }
 
+    this.state.editingNodeId = null
+    this.pendingEditorOptions = null
     if (existingNode.title === title) {
-      this.state.editingNodeId = null
-      this.render()
+      if (options.renderAfter !== false) {
+        this.render()
+      }
       return
     }
 
@@ -2999,11 +3186,14 @@ class MindMapApp {
     this.updateNode(nodeId, (node) => {
       node.title = title
     })
-    this.state.editingNodeId = null
-    this.setSelection([nodeId], nodeId)
+    if (!options.preserveSelection) {
+      this.applySelectionState([nodeId], nodeId)
+    }
     touchDocument(this.state.document)
     this.setStatus('status.nodeTitleUpdated')
-    this.render()
+    if (options.renderAfter !== false) {
+      this.render()
+    }
     this.scheduleAutosave('status.titleSaveScheduled')
   }
 
@@ -3291,14 +3481,17 @@ class MindMapApp {
   }
 
   private async saveDocument(statusKey: TranslationKey, values?: Record<string, string | number>): Promise<void> {
+    const editorDraft = this.captureActiveNodeEditorDraft()
     try {
       const savedDocument = await api.saveMap(this.state.document)
       this.state.document = savedDocument
       this.state.currentMapId = savedDocument.id
       await this.refreshMaps()
       this.setStatus(statusKey, values)
+      this.restoreActiveNodeEditorDraft(editorDraft)
     } catch (error) {
       this.setStatus('status.saveFailed', { reason: getErrorMessage(error) })
+      this.restoreActiveNodeEditorDraft(editorDraft)
     }
 
     this.applyTheme()
@@ -5374,6 +5567,11 @@ function slugify(value: string): string {
 
 function isTypingTarget(target: EventTarget | null): boolean {
   return target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement
+}
+
+function parsePixelValue(value: string | null | undefined): number {
+  const parsed = Number.parseFloat(value ?? '')
+  return Number.isFinite(parsed) ? parsed : 0
 }
 
 function directionalPrimaryDelta(direction: string, deltaX: number, deltaY: number): number {
