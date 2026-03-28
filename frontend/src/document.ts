@@ -1,4 +1,4 @@
-import type { MindMapDocument, MindNode, Position, RelationEdge } from './types'
+import type { LayoutMode, MindMapDocument, MindNode, Position, RelationEdge } from './types'
 
 const ROOT_POSITION: Position = { x: 820, y: 320 }
 const NODE_GAP_X = 280
@@ -138,23 +138,32 @@ export function visibleNodeIds(document: MindMapDocument): Set<string> {
   return visible
 }
 
-export function nextChildPosition(document: MindMapDocument, parentId: string): Position {
+export function nextChildPosition(document: MindMapDocument, parentId: string, layoutMode: LayoutMode = 'balanced'): Position {
   const parent = findNode(document, parentId)
   if (!parent) {
     return ROOT_POSITION
   }
 
   const children = childrenOf(document, parentId)
-  const direction = parent.kind === 'root' ? preferredRootChildDirection(document, children) : branchDirection(document, parent)
-  const laneChildren = parent.kind === 'root' ? children.filter((child) => branchDirection(document, child) === direction) : children
+  const direction = parent.kind === 'root' ? preferredRootChildDirection(document, children, layoutMode) : branchDirection(document, parent)
+  const laneChildren = parent.kind === 'root' && layoutMode === 'right'
+    ? children
+    : parent.kind === 'root'
+      ? children.filter((child) => branchDirection(document, child) === direction)
+      : children
   const targetX = resolveChildColumn(parent, laneChildren, direction)
   const targetY = laneChildren.length === 0 ? parent.position.y : laneChildren[laneChildren.length - 1].position.y + NODE_GAP_Y
   return findAvailablePosition(document, { x: targetX, y: targetY }, 'topic')
 }
 
-export function nextSiblingPosition(document: MindMapDocument, node: MindNode): Position {
+export function nextSiblingPosition(document: MindMapDocument, node: MindNode, layoutMode: LayoutMode = 'balanced'): Position {
   if (!node.parentId) {
     return nextFloatingPosition(document)
+  }
+
+  const parent = findNode(document, node.parentId)
+  if (parent?.kind === 'root') {
+    return nextChildPosition(document, parent.id, layoutMode)
   }
 
   const siblings = childrenOf(document, node.parentId)
@@ -192,7 +201,11 @@ function branchDirection(document: MindMapDocument, node: MindNode): -1 | 1 {
   return node.position.x < root.position.x ? -1 : 1
 }
 
-function preferredRootChildDirection(document: MindMapDocument, children: MindNode[]): -1 | 1 {
+function preferredRootChildDirection(document: MindMapDocument, children: MindNode[], layoutMode: LayoutMode): -1 | 1 {
+  if (layoutMode === 'right') {
+    return 1
+  }
+
   if (children.length === 0) {
     return 1
   }
@@ -343,7 +356,7 @@ export function toggleCollapse(document: MindMapDocument, nodeId: string): boole
   return true
 }
 
-export function autoLayoutHierarchy(document: MindMapDocument): number {
+export function autoLayoutHierarchy(document: MindMapDocument, layoutMode: LayoutMode = 'balanced'): number {
   const root = findRoot(document)
   root.position = { ...ROOT_POSITION }
   root.updatedAt = new Date().toISOString()
@@ -353,9 +366,14 @@ export function autoLayoutHierarchy(document: MindMapDocument): number {
     return 1
   }
 
+  const moved = new Set<string>(['root'])
+  if (layoutMode === 'right') {
+    layoutGroup(document, root, rootChildren, 1, moved)
+    return moved.size
+  }
+
   let leftRoots = rootChildren.filter((node) => node.position.x < root.position.x)
   let rightRoots = rootChildren.filter((node) => node.position.x >= root.position.x)
-
   if (leftRoots.length === 0 || rightRoots.length === 0) {
     leftRoots = []
     rightRoots = []
@@ -368,7 +386,6 @@ export function autoLayoutHierarchy(document: MindMapDocument): number {
     })
   }
 
-  const moved = new Set<string>(['root'])
   layoutGroup(document, root, leftRoots, -1, moved)
   layoutGroup(document, root, rightRoots, 1, moved)
   return moved.size

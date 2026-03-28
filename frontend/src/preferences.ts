@@ -1,4 +1,4 @@
-import type { AppPreferences, Locale } from './types'
+import type { AppPreferences, EdgeStyle, LayoutMode, Locale, TopPanelPosition } from './types'
 
 const STORAGE_KEY = 'code-mind.preferences'
 export const DEFAULT_LM_STUDIO_URL = 'http://127.0.0.1:1234/v1'
@@ -13,6 +13,11 @@ export function createDefaultPreferences(): AppPreferences {
   return {
     locale: detectLocale(),
     onboardingCompleted: false,
+    appearance: {
+      edgeStyle: 'curve',
+      layoutMode: 'balanced',
+      topPanelPosition: 'left',
+    },
     ai: {
       provider: 'lmstudio',
       baseUrl: DEFAULT_LM_STUDIO_URL,
@@ -36,6 +41,11 @@ export function loadPreferences(): AppPreferences {
     return {
       locale: normalizeLocale(parsed.locale) ?? defaults.locale,
       onboardingCompleted: parsed.onboardingCompleted ?? defaults.onboardingCompleted,
+      appearance: {
+        edgeStyle: normalizeEdgeStyle(parsed.appearance?.edgeStyle),
+        layoutMode: normalizeLayoutMode(parsed.appearance?.layoutMode),
+        topPanelPosition: normalizeTopPanelPosition(parsed.appearance?.topPanelPosition),
+      },
       ai: {
         provider: parsed.ai?.provider === 'openai-compatible' ? 'openai-compatible' : 'lmstudio',
         baseUrl: (parsed.ai?.baseUrl ?? defaults.ai.baseUrl).trim() || defaults.ai.baseUrl,
@@ -64,6 +74,21 @@ function normalizeLocale(value: string | undefined): Locale | null {
   }
 
   return value.toLowerCase().startsWith('zh') ? 'zh-CN' : 'en'
+}
+
+export function normalizeEdgeStyle(value: unknown): EdgeStyle {
+  return value === 'orthogonal' ? 'orthogonal' : 'curve'
+}
+
+export function normalizeLayoutMode(value: unknown): LayoutMode {
+  return value === 'right' ? 'right' : 'balanced'
+}
+
+export function normalizeTopPanelPosition(value: unknown): TopPanelPosition {
+  if (value === 'center' || value === 'right') {
+    return value
+  }
+  return 'left'
 }
 
 export function normalizeAIMaxTokens(value: unknown): number {

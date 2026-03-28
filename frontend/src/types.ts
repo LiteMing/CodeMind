@@ -2,6 +2,9 @@ export type Theme = 'light' | 'dark'
 export type Locale = 'zh-CN' | 'en'
 export type AIProvider = 'lmstudio' | 'openai-compatible'
 export type AITemplateId = 'concept-graph' | 'project-planning' | 'character-network'
+export type EdgeStyle = 'curve' | 'orthogonal'
+export type LayoutMode = 'balanced' | 'right'
+export type TopPanelPosition = 'left' | 'center' | 'right'
 
 export type NodeKind = 'root' | 'topic' | 'floating'
 
@@ -69,6 +72,12 @@ export interface AISettings {
   timeoutSeconds: number
 }
 
+export interface AppearanceSettings {
+  edgeStyle: EdgeStyle
+  layoutMode: LayoutMode
+  topPanelPosition: TopPanelPosition
+}
+
 export interface AIDebugRequest {
   rawMode: boolean
   rawRequest: string
@@ -127,5 +136,6 @@ export interface AITestResponse {
 export interface AppPreferences {
   locale: Locale
   onboardingCompleted: boolean
+  appearance: AppearanceSettings
   ai: AISettings
 }

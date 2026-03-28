@@ -27,6 +27,9 @@ import {
   loadPreferences,
   normalizeAIMaxTokens,
   normalizeAITimeoutSeconds,
+  normalizeEdgeStyle,
+  normalizeLayoutMode,
+  normalizeTopPanelPosition,
   savePreferences,
 } from './preferences'
 import type {
@@ -34,6 +37,7 @@ import type {
   AIDebugRequest,
   AppPreferences,
   AITemplateId,
+  EdgeStyle,
   Locale,
   MindMapDocument,
   MindMapSummary,
@@ -1475,6 +1479,7 @@ class MindMapApp {
     }
 
     const locale = this.state.preferences.locale
+    this.refs.topChrome.dataset.panelPosition = this.state.preferences.appearance.topPanelPosition
     this.refs.topPanel.classList.toggle('is-collapsed', this.state.topPanelCollapsed)
     this.refs.eyebrow.textContent = this.t('app.eyebrow')
     this.refs.title.textContent = this.state.document.title
@@ -1768,6 +1773,7 @@ class MindMapApp {
     }
 
     const locale = this.state.preferences.locale
+    const appearance = this.state.preferences.appearance
     this.refs.settingsLayer.className = 'settings-layer is-visible'
     this.refs.settingsLayer.innerHTML = `
       <div class="settings-scrim" data-settings-scrim>
@@ -1795,6 +1801,28 @@ class MindMapApp {
               <select class="settings-select" data-setting-field="theme">
                 <option value="light" ${this.state.document.theme === 'light' ? 'selected' : ''}>${this.t('settings.theme.light')}</option>
                 <option value="dark" ${this.state.document.theme === 'dark' ? 'selected' : ''}>${this.t('settings.theme.dark')}</option>
+              </select>
+            </label>
+            <label class="field-row">
+              <span>${this.t('settings.edgeStyle')}</span>
+              <select class="settings-select" data-setting-field="appearance.edgeStyle">
+                <option value="curve" ${appearance.edgeStyle === 'curve' ? 'selected' : ''}>${this.t('settings.edgeStyle.curve')}</option>
+                <option value="orthogonal" ${appearance.edgeStyle === 'orthogonal' ? 'selected' : ''}>${this.t('settings.edgeStyle.orthogonal')}</option>
+              </select>
+            </label>
+            <label class="field-row">
+              <span>${this.t('settings.layoutMode')}</span>
+              <select class="settings-select" data-setting-field="appearance.layoutMode">
+                <option value="balanced" ${appearance.layoutMode === 'balanced' ? 'selected' : ''}>${this.t('settings.layoutMode.balanced')}</option>
+                <option value="right" ${appearance.layoutMode === 'right' ? 'selected' : ''}>${this.t('settings.layoutMode.right')}</option>
+              </select>
+            </label>
+            <label class="field-row">
+              <span>${this.t('settings.topPanelPosition')}</span>
+              <select class="settings-select" data-setting-field="appearance.topPanelPosition">
+                <option value="left" ${appearance.topPanelPosition === 'left' ? 'selected' : ''}>${this.t('settings.topPanelPosition.left')}</option>
+                <option value="center" ${appearance.topPanelPosition === 'center' ? 'selected' : ''}>${this.t('settings.topPanelPosition.center')}</option>
+                <option value="right" ${appearance.topPanelPosition === 'right' ? 'selected' : ''}>${this.t('settings.topPanelPosition.right')}</option>
               </select>
             </label>
           </section>
@@ -2283,6 +2311,7 @@ class MindMapApp {
 
   private renderEdges(): string {
     const visibleIds = visibleNodeIds(this.state.document)
+    const edgeStyle = this.state.preferences.appearance.edgeStyle
     const projectPosition = (position: Position) => this.toWorkspacePosition(position)
     const hierarchyEdges = this.state.document.nodes
       .filter((node) => Boolean(node.parentId) && visibleIds.has(node.id) && visibleIds.has(node.parentId ?? ''))
@@ -2291,7 +2320,7 @@ class MindMapApp {
         if (!parent) {
           return ''
         }
-        return `<path class="edge edge-hierarchy" d="${buildHierarchyPath(projectPosition(parent.position), projectPosition(node.position))}" />`
+        return `<path class="edge edge-hierarchy" d="${buildHierarchyPath(projectPosition(parent.position), projectPosition(node.position), edgeStyle)}" />`
       })
       .join('')
 
@@ -2305,13 +2334,13 @@ class MindMapApp {
 
         const projectedSource = projectPosition(source.position)
         const projectedTarget = projectPosition(target.position)
-        const mid = getRelationMidpoint(projectedSource, projectedTarget)
+        const mid = getRelationMidpoint(projectedSource, projectedTarget, edgeStyle)
         const label = edge.label
           ? `<text class="relation-label" x="${mid.x}" y="${mid.y - 10}">${escapeHtml(edge.label)}</text>`
           : ''
 
         return `<g>
-          <path class="edge edge-relation" d="${buildRelationPath(projectedSource, projectedTarget)}" />
+          <path class="edge edge-relation" d="${buildRelationPath(projectedSource, projectedTarget, edgeStyle)}" />
           ${label}
         </g>`
       })
@@ -2826,7 +2855,7 @@ class MindMapApp {
     parent.collapsed = false
     parent.updatedAt = now
 
-    const anchor = nextChildPosition(this.state.document, targetNode.id)
+    const anchor = nextChildPosition(this.state.document, targetNode.id, this.state.preferences.appearance.layoutMode)
     const insertedNodes: MindNode[] = []
 
     for (const snapshot of this.copiedSubtree.nodes) {
@@ -2928,7 +2957,7 @@ class MindMapApp {
     const newNode = createNode({
       parentId,
       kind: 'topic',
-      position: nextChildPosition(this.state.document, parentId),
+      position: nextChildPosition(this.state.document, parentId, this.state.preferences.appearance.layoutMode),
       title: this.t('node.newChild'),
       color: normalizeNodeColor(parent.color) || undefined,
     })
@@ -2960,7 +2989,7 @@ class MindMapApp {
       newNode = createNode({
         parentId: node.parentId,
         kind: 'topic',
-        position: nextSiblingPosition(this.state.document, node),
+        position: nextSiblingPosition(this.state.document, node, this.state.preferences.appearance.layoutMode),
         title: this.t('node.newSibling'),
         color: normalizeNodeColor(node.color) || undefined,
       })
@@ -3262,7 +3291,7 @@ class MindMapApp {
 
   private autoLayout(): void {
     const snapshot = this.createHistorySnapshot()
-    const movedNodes = autoLayoutHierarchy(this.state.document)
+    const movedNodes = autoLayoutHierarchy(this.state.document, this.state.preferences.appearance.layoutMode)
     if (movedNodes === 0) {
       this.setStatus('status.layoutUpdated', { count: 0 })
       this.render()
@@ -3840,7 +3869,7 @@ class MindMapApp {
           const childNode = createNode({
             parentId: parent.id,
             kind: 'topic',
-            position: nextChildPosition(this.state.document, parent.id),
+            position: nextChildPosition(this.state.document, parent.id, this.state.preferences.appearance.layoutMode),
             title: deriveNoteChildTitle(parent, normalizedNote, this.state.preferences.locale),
             color: normalizeNodeColor(parent.color) || undefined,
           })
@@ -4152,6 +4181,27 @@ class MindMapApp {
       case 'theme':
         this.setTheme(value === 'light' ? 'light' : 'dark')
         return
+      case 'appearance.edgeStyle':
+        this.updatePreferences((preferences) => {
+          preferences.appearance.edgeStyle = normalizeEdgeStyle(value)
+        })
+        this.setStatus('status.appearanceUpdated')
+        this.render()
+        return
+      case 'appearance.layoutMode':
+        this.updatePreferences((preferences) => {
+          preferences.appearance.layoutMode = normalizeLayoutMode(value)
+        })
+        this.setStatus('status.appearanceUpdated')
+        this.render()
+        return
+      case 'appearance.topPanelPosition':
+        this.updatePreferences((preferences) => {
+          preferences.appearance.topPanelPosition = normalizeTopPanelPosition(value)
+        })
+        this.setStatus('status.appearanceUpdated')
+        this.render()
+        return
       case 'ai.provider':
         this.updatePreferences((preferences) => {
           preferences.ai.provider = value === 'openai-compatible' ? 'openai-compatible' : 'lmstudio'
@@ -4260,6 +4310,9 @@ class MindMapApp {
   private updatePreferences(updater: (preferences: AppPreferences) => void): void {
     const nextPreferences: AppPreferences = {
       ...this.state.preferences,
+      appearance: {
+        ...this.state.preferences.appearance,
+      },
       ai: {
         ...this.state.preferences.ai,
       },
@@ -4859,7 +4912,13 @@ class MindMapApp {
   }
 }
 
-function buildHierarchyPath(source: Position, target: Position): string {
+function buildHierarchyPath(source: Position, target: Position, edgeStyle: EdgeStyle): string {
+  return edgeStyle === 'orthogonal'
+    ? buildOrthogonalHierarchyPath(source, target)
+    : buildCurvedHierarchyPath(source, target)
+}
+
+function buildCurvedHierarchyPath(source: Position, target: Position): string {
   const controlOffset = Math.max(48, Math.abs(target.x - source.x) * 0.36)
   const movingRight = target.x >= source.x
   const controlX1 = movingRight ? source.x + controlOffset : source.x - controlOffset
@@ -4867,16 +4926,47 @@ function buildHierarchyPath(source: Position, target: Position): string {
   return `M ${source.x} ${source.y} C ${controlX1} ${source.y}, ${controlX2} ${target.y}, ${target.x} ${target.y}`
 }
 
-function buildRelationPath(source: Position, target: Position): string {
-  const midpoint = getRelationMidpoint(source, target)
+function buildOrthogonalHierarchyPath(source: Position, target: Position): string {
+  const bendX = source.x + (target.x - source.x) / 2
+  return `M ${source.x} ${source.y} L ${bendX} ${source.y} L ${bendX} ${target.y} L ${target.x} ${target.y}`
+}
+
+function buildRelationPath(source: Position, target: Position, edgeStyle: EdgeStyle): string {
+  if (edgeStyle === 'orthogonal') {
+    return buildOrthogonalRelationPath(source, target)
+  }
+
+  const midpoint = getCurvedRelationMidpoint(source, target)
   return `M ${source.x} ${source.y} Q ${midpoint.x} ${midpoint.y} ${target.x} ${target.y}`
 }
 
-function getRelationMidpoint(source: Position, target: Position): Position {
+function buildOrthogonalRelationPath(source: Position, target: Position): string {
+  const guideY = resolveOrthogonalRelationGuideY(source, target)
+  return `M ${source.x} ${source.y} L ${source.x} ${guideY} L ${target.x} ${guideY} L ${target.x} ${target.y}`
+}
+
+function getRelationMidpoint(source: Position, target: Position, edgeStyle: EdgeStyle): Position {
+  return edgeStyle === 'orthogonal'
+    ? getOrthogonalRelationMidpoint(source, target)
+    : getCurvedRelationMidpoint(source, target)
+}
+
+function getCurvedRelationMidpoint(source: Position, target: Position): Position {
   return {
     x: (source.x + target.x) / 2,
     y: (source.y + target.y) / 2 - Math.max(60, Math.abs(target.x - source.x) * 0.08),
   }
+}
+
+function getOrthogonalRelationMidpoint(source: Position, target: Position): Position {
+  return {
+    x: (source.x + target.x) / 2,
+    y: resolveOrthogonalRelationGuideY(source, target),
+  }
+}
+
+function resolveOrthogonalRelationGuideY(source: Position, target: Position): number {
+  return Math.min(source.y, target.y) - Math.max(44, Math.abs(target.x - source.x) * 0.08)
 }
 
 function escapeHtml(value: string): string {

@@ -281,6 +281,14 @@ kbd {
   pointer-events: none;
 }
 
+.top-chrome[data-panel-position='center'] {
+  justify-content: center;
+}
+
+.top-chrome[data-panel-position='right'] {
+  justify-content: flex-end;
+}
+
 .top-chrome > * {
   pointer-events: auto;
 }
