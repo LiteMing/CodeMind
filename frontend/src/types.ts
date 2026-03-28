@@ -78,6 +78,10 @@ export interface AppearanceSettings {
   topPanelPosition: TopPanelPosition
 }
 
+export interface InteractionSettings {
+  dragSubtreeWithParent: boolean
+}
+
 export interface AIDebugRequest {
   rawMode: boolean
   rawRequest: string
@@ -137,5 +141,6 @@ export interface AppPreferences {
   locale: Locale
   onboardingCompleted: boolean
   appearance: AppearanceSettings
+  interaction: InteractionSettings
   ai: AISettings
 }

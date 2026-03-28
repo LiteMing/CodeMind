@@ -761,9 +761,8 @@ class MindMapApp {
     }
 
     const node = this.findNode(nodeId)
-    const dragNodeIds = (this.state.selectedNodeIds.includes(nodeId) ? this.state.selectedNodeIds : [nodeId]).filter((candidateId) => {
-      return this.findNode(candidateId)?.kind !== 'root'
-    })
+    const selectedDragIds = this.state.selectedNodeIds.includes(nodeId) ? this.state.selectedNodeIds : [nodeId]
+    const dragNodeIds = this.resolveDragNodeIds(selectedDragIds)
 
     if (event.detail >= 2) {
       return
@@ -798,6 +797,37 @@ class MindMapApp {
       ),
       historyCaptured: false,
     }
+  }
+
+  private resolveDragNodeIds(baseNodeIds: string[]): string[] {
+    const dragNodeIds: string[] = []
+    const seen = new Set<string>()
+
+    for (const baseNodeId of baseNodeIds) {
+      const baseNode = this.findNode(baseNodeId)
+      if (!baseNode || baseNode.kind === 'root' || seen.has(baseNodeId)) {
+        continue
+      }
+
+      seen.add(baseNodeId)
+      dragNodeIds.push(baseNodeId)
+
+      if (!this.state.preferences.interaction.dragSubtreeWithParent) {
+        continue
+      }
+
+      for (const descendantId of descendantIds(this.state.document, baseNodeId)) {
+        const descendant = this.findNode(descendantId)
+        if (!descendant || descendant.kind === 'root' || seen.has(descendantId)) {
+          continue
+        }
+
+        seen.add(descendantId)
+        dragNodeIds.push(descendantId)
+      }
+    }
+
+    return dragNodeIds
   }
 
   private readonly handlePointerMove = (event: PointerEvent): void => {
@@ -1823,6 +1853,17 @@ class MindMapApp {
                 <option value="left" ${appearance.topPanelPosition === 'left' ? 'selected' : ''}>${this.t('settings.topPanelPosition.left')}</option>
                 <option value="center" ${appearance.topPanelPosition === 'center' ? 'selected' : ''}>${this.t('settings.topPanelPosition.center')}</option>
                 <option value="right" ${appearance.topPanelPosition === 'right' ? 'selected' : ''}>${this.t('settings.topPanelPosition.right')}</option>
+              </select>
+            </label>
+          </section>
+
+          <section class="settings-card">
+            <p class="section-label">${this.t('settings.interaction')}</p>
+            <label class="field-row">
+              <span>${this.t('settings.dragSubtreeWithParent')}</span>
+              <select class="settings-select" data-setting-field="interaction.dragSubtreeWithParent">
+                <option value="true" ${this.state.preferences.interaction.dragSubtreeWithParent ? 'selected' : ''}>${this.t('common.on')}</option>
+                <option value="false" ${this.state.preferences.interaction.dragSubtreeWithParent ? '' : 'selected'}>${this.t('common.off')}</option>
               </select>
             </label>
           </section>
@@ -4202,6 +4243,13 @@ class MindMapApp {
         this.setStatus('status.appearanceUpdated')
         this.render()
         return
+      case 'interaction.dragSubtreeWithParent':
+        this.updatePreferences((preferences) => {
+          preferences.interaction.dragSubtreeWithParent = value === 'true'
+        })
+        this.setStatus('status.interactionUpdated')
+        this.render()
+        return
       case 'ai.provider':
         this.updatePreferences((preferences) => {
           preferences.ai.provider = value === 'openai-compatible' ? 'openai-compatible' : 'lmstudio'
@@ -4312,6 +4360,9 @@ class MindMapApp {
       ...this.state.preferences,
       appearance: {
         ...this.state.preferences.appearance,
+      },
+      interaction: {
+        ...this.state.preferences.interaction,
       },
       ai: {
         ...this.state.preferences.ai,

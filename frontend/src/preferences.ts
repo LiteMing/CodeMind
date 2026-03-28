@@ -18,6 +18,9 @@ export function createDefaultPreferences(): AppPreferences {
       layoutMode: 'balanced',
       topPanelPosition: 'left',
     },
+    interaction: {
+      dragSubtreeWithParent: true,
+    },
     ai: {
       provider: 'lmstudio',
       baseUrl: DEFAULT_LM_STUDIO_URL,
@@ -45,6 +48,9 @@ export function loadPreferences(): AppPreferences {
         edgeStyle: normalizeEdgeStyle(parsed.appearance?.edgeStyle),
         layoutMode: normalizeLayoutMode(parsed.appearance?.layoutMode),
         topPanelPosition: normalizeTopPanelPosition(parsed.appearance?.topPanelPosition),
+      },
+      interaction: {
+        dragSubtreeWithParent: normalizeBoolean(parsed.interaction?.dragSubtreeWithParent, defaults.interaction.dragSubtreeWithParent),
       },
       ai: {
         provider: parsed.ai?.provider === 'openai-compatible' ? 'openai-compatible' : 'lmstudio',
@@ -89,6 +95,13 @@ export function normalizeTopPanelPosition(value: unknown): TopPanelPosition {
     return value
   }
   return 'left'
+}
+
+export function normalizeBoolean(value: unknown, fallback = false): boolean {
+  if (typeof value === 'boolean') {
+    return value
+  }
+  return fallback
 }
 
 export function normalizeAIMaxTokens(value: unknown): number {
