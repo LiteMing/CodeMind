@@ -6,6 +6,12 @@
   "frontend:build": "npm run build:wails",
   "frontend:dev:watcher": "npm run dev:wails",
   "frontend:dev:serverUrl": "auto",
+  "info": {
+    "companyName": "CodeMind",
+    "productName": "CodeMind",
+    "productVersion": "1.0.0",
+    "comments": "Local-first mind mapping desktop app."
+  },
   "author": {
     "name": "Codex",
     "email": "codex@local.invalid"

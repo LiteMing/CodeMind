@@ -2459,7 +2459,8 @@ class MindMapApp {
         if (!parent) {
           return ''
         }
-        return `<path class="edge edge-hierarchy" d="${buildHierarchyPath(projectPosition(parent.position), projectPosition(node.position), edgeStyle)}" />`
+        const edgePoints = resolveHierarchyEdgeEndpoints(parent, node)
+        return `<path class="edge edge-hierarchy" d="${buildHierarchyPath(projectPosition(edgePoints.source), projectPosition(edgePoints.target), edgeStyle)}" />`
       })
       .join('')
 
@@ -2471,8 +2472,9 @@ class MindMapApp {
           return ''
         }
 
-        const projectedSource = projectPosition(source.position)
-        const projectedTarget = projectPosition(target.position)
+        const edgePoints = resolveRelationEdgeEndpoints(source, target)
+        const projectedSource = projectPosition(edgePoints.source)
+        const projectedTarget = projectPosition(edgePoints.target)
         const mid = getRelationMidpoint(projectedSource, projectedTarget, edgeStyle)
         const label = edge.label
           ? `<text class="relation-label" x="${mid.x}" y="${mid.y - 10}">${escapeHtml(edge.label)}</text>`
@@ -5250,6 +5252,51 @@ function buildHierarchyPath(source: Position, target: Position, edgeStyle: EdgeS
   return edgeStyle === 'orthogonal'
     ? buildOrthogonalHierarchyPath(source, target)
     : buildCurvedHierarchyPath(source, target)
+}
+
+function resolveHierarchyEdgeEndpoints(parent: MindNode, child: MindNode): { source: Position; target: Position } {
+  const direction = child.position.x >= parent.position.x ? 1 : -1
+  const parentWidth = parent.width ?? estimateNodeWidth(parent)
+  const childWidth = child.width ?? estimateNodeWidth(child)
+
+  return {
+    source: {
+      x: parent.position.x + direction * parentWidth / 2,
+      y: parent.position.y,
+    },
+    target: {
+      x: child.position.x - direction * childWidth / 2,
+      y: child.position.y,
+    },
+  }
+}
+
+function resolveRelationEdgeEndpoints(source: MindNode, target: MindNode): { source: Position; target: Position } {
+  return {
+    source: resolveNodeAnchorToward(source, target.position),
+    target: resolveNodeAnchorToward(target, source.position),
+  }
+}
+
+function resolveNodeAnchorToward(node: MindNode, toward: Position): Position {
+  const width = node.width ?? estimateNodeWidth(node)
+  const height = node.height ?? estimateNodeHeight(node)
+  const halfWidth = width / 2
+  const halfHeight = height / 2
+  const deltaX = toward.x - node.position.x
+  const deltaY = toward.y - node.position.y
+
+  if (Math.abs(deltaX) * halfHeight >= Math.abs(deltaY) * halfWidth) {
+    return {
+      x: node.position.x + Math.sign(deltaX || 1) * halfWidth,
+      y: node.position.y + clamp(deltaY, -halfHeight + 10, halfHeight - 10),
+    }
+  }
+
+  return {
+    x: node.position.x + clamp(deltaX, -halfWidth + 10, halfWidth - 10),
+    y: node.position.y + Math.sign(deltaY || 1) * halfHeight,
+  }
 }
 
 function buildCurvedHierarchyPath(source: Position, target: Position): string {

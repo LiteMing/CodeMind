@@ -9,6 +9,7 @@
     "build": "npm run build:web && npm run build:go",
     "build:web": "cd frontend && npm run build",
     "build:go": "go build ./...",
+    "build:desktop": "powershell -ExecutionPolicy Bypass -File scripts/package-desktop.ps1",
     "test": "go test ./... && npm run build:web"
   },
   "devDependencies": {
