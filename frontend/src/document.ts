@@ -1,15 +1,9 @@
+import { estimateNodeHeight, estimateNodeWidth, resolveNodeMinHeight, resolveNodeMinWidth } from './node-sizing'
 import type { LayoutMode, MindMapDocument, MindNode, Position, RelationEdge } from './types'
 
 const ROOT_POSITION: Position = { x: 820, y: 320 }
 const NODE_GAP_X = 280
 const NODE_GAP_Y = 96
-const DEFAULT_ROOT_WIDTH = 220
-const DEFAULT_NODE_WIDTH = 196
-const DEFAULT_ROOT_HEIGHT = 74
-const DEFAULT_NODE_HEIGHT = 62
-const AUTO_NODE_WIDTH_MAX = 520
-const ROOT_NODE_WIDTH_MAX = 560
-const ESTIMATED_CHAR_WIDTH = 9
 const COMPACT_NODE_GAP_Y = 18
 const PLACEMENT_PADDING_X = 28
 const PLACEMENT_PADDING_Y = 8
@@ -156,7 +150,7 @@ export function nextChildPosition(document: MindMapDocument, parentId: string, l
     : parent.kind === 'root'
       ? children.filter((child) => branchDirection(document, child) === direction)
       : children
-  const targetX = resolveChildColumn(parent, laneChildren, direction)
+  const targetX = resolveChildColumn(document, parent, laneChildren, direction)
   const targetY = nextStackedY(laneChildren, 'topic', parent.position.y)
   return findAvailablePosition(document, { x: targetX, y: targetY }, 'topic')
 }
@@ -235,17 +229,23 @@ function preferredRootChildDirection(document: MindMapDocument, children: MindNo
   return lastChild.position.x < root.position.x ? 1 : -1
 }
 
-function resolveChildColumn(parent: MindNode, children: MindNode[], direction: -1 | 1): number {
+function resolveChildColumn(document: MindMapDocument, parent: MindNode, children: MindNode[], direction: -1 | 1): number {
   if (children.length === 0) {
     return resolveAlignedChildCenter(parent.position.x + direction * NODE_GAP_X, direction, defaultNodeWidth('topic'))
   }
 
   if (direction === 1) {
-    const leftColumn = Math.min(parent.position.x + NODE_GAP_X, ...children.map((child) => child.position.x - resolvedNodeWidth(child) / 2))
+    const leftColumn = Math.min(
+      parent.position.x + NODE_GAP_X,
+      ...children.map((child) => child.position.x - estimateNodeWidth(child, childrenOf(document, child.id).length) / 2),
+    )
     return resolveAlignedChildCenter(leftColumn, direction, defaultNodeWidth('topic'))
   }
 
-  const rightColumn = Math.max(parent.position.x - NODE_GAP_X, ...children.map((child) => child.position.x + resolvedNodeWidth(child) / 2))
+  const rightColumn = Math.max(
+    parent.position.x - NODE_GAP_X,
+    ...children.map((child) => child.position.x + estimateNodeWidth(child, childrenOf(document, child.id).length) / 2),
+  )
   return resolveAlignedChildCenter(rightColumn, direction, defaultNodeWidth('topic'))
 }
 
@@ -255,7 +255,7 @@ function nextStackedY(nodes: MindNode[], kind: MindNode['kind'], fallbackY: numb
   }
 
   const lowestBottom = nodes.reduce((maxBottom, node) => {
-    return Math.max(maxBottom, node.position.y + resolvedNodeHeight(node) / 2)
+    return Math.max(maxBottom, node.position.y + estimateNodeHeight(node, 0) / 2)
   }, Number.NEGATIVE_INFINITY)
 
   return Math.round(lowestBottom + COMPACT_NODE_GAP_Y + defaultNodeHeight(kind) / 2)
@@ -289,8 +289,8 @@ function positionCollides(document: MindMapDocument, position: Position, kind: M
   return document.nodes.some((node) => {
     const existingBounds = nodeBounds({
       kind: node.kind,
-      width: resolvedNodeWidth(node),
-      height: resolvedNodeHeight(node),
+      width: estimateNodeWidth(node, childrenOf(document, node.id).length),
+      height: estimateNodeHeight(node, childrenOf(document, node.id).length),
       position: node.position,
     })
 
@@ -321,50 +321,17 @@ function nodeBounds(input: { kind: MindNode['kind']; width: number; height: numb
 }
 
 function defaultNodeWidth(kind: MindNode['kind']): number {
-  return kind === 'root' ? DEFAULT_ROOT_WIDTH : DEFAULT_NODE_WIDTH
+  return resolveNodeMinWidth(kind)
 }
 
 function defaultNodeHeight(kind: MindNode['kind']): number {
-  return kind === 'root' ? DEFAULT_ROOT_HEIGHT : DEFAULT_NODE_HEIGHT
+  return resolveNodeMinHeight(kind)
 }
 
 function resolveAlignedChildCenter(columnEdge: number, direction: -1 | 1, nodeWidth: number): number {
   return direction === 1
     ? Math.round(columnEdge + nodeWidth / 2)
     : Math.round(columnEdge - nodeWidth / 2)
-}
-
-function resolvedNodeWidth(node: MindNode): number {
-  if (node.width) {
-    return Math.max(node.width, defaultNodeWidth(node.kind))
-  }
-
-  const lines = node.title.split(/\r?\n/)
-  const longestLine = lines.reduce((maxLength, line) => Math.max(maxLength, line.length), 0)
-  const padding = node.kind === 'root' ? 86 : 58
-  const minWidth = defaultNodeWidth(node.kind)
-  const maxWidth = node.kind === 'root' ? ROOT_NODE_WIDTH_MAX : AUTO_NODE_WIDTH_MAX
-  return clamp(Math.round(longestLine * ESTIMATED_CHAR_WIDTH + padding), minWidth, maxWidth)
-}
-
-function resolvedNodeHeight(node: MindNode): number {
-  if (node.height) {
-    return Math.max(node.height, defaultNodeHeight(node.kind))
-  }
-
-  const estimatedWidth = resolvedNodeWidth(node)
-  const contentWidth = Math.max(estimatedWidth - (node.kind === 'root' ? 40 : 28), 72)
-  const charsPerLine = Math.max(8, Math.floor(contentWidth / ESTIMATED_CHAR_WIDTH))
-  const visualLines = node.title
-    .split(/\r?\n/)
-    .reduce((lineCount, line) => lineCount + Math.max(1, Math.ceil(Math.max(line.length, 1) / charsPerLine)), 0)
-  const lineHeight = node.kind === 'root' ? 28 : 22
-  const verticalPadding = node.kind === 'root' ? 34 : 30
-  return Math.max(defaultNodeHeight(node.kind), Math.round(verticalPadding + visualLines * lineHeight))
-}
-
-function clamp(value: number, min: number, max: number): number {
-  return Math.min(Math.max(value, min), max)
 }
 
 export function touchDocument(document: MindMapDocument): void {
@@ -494,7 +461,7 @@ function layoutBranch(
 
   const weight = branchWeight(document, nodeId)
   const columnEdge = root.position.x + side * depth * NODE_GAP_X
-  const nodeWidth = resolvedNodeWidth(node)
+  const nodeWidth = estimateNodeWidth(node, childrenOf(document, node.id).length)
   node.position = {
     x: resolveAlignedChildCenter(columnEdge, side, nodeWidth),
     y: topY + ((weight - 1) * NODE_GAP_Y) / 2,

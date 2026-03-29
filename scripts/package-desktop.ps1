@@ -11,8 +11,16 @@ if (-not $version -or $version -notmatch '^\d+\.\d+\.\d+$') {
 }
 
 $iconPath = Join-Path $projectRoot 'build\\windows\\icon.ico'
+$manifestPath = Join-Path $projectRoot 'build\\windows\\wails.exe.manifest'
+$infoPath = Join-Path $projectRoot 'build\\windows\\info.json'
 if (-not (Test-Path $iconPath)) {
   throw "Missing app icon: $iconPath"
+}
+if (-not (Test-Path $manifestPath)) {
+  throw "Missing Windows manifest: $manifestPath"
+}
+if (-not (Test-Path $infoPath)) {
+  throw "Missing Windows version info: $infoPath"
 }
 
 $baseName = [System.IO.Path]::GetFileNameWithoutExtension([string]$wailsConfig.outputfilename)
@@ -23,6 +31,7 @@ $pendingExe = Join-Path $projectRoot "build\\bin\\$baseName-$version.pending.exe
 Push-Location $projectRoot
 try {
   wails build -nopackage
+  go run .\\scripts\\patch_windows_resources -exe $sourceExe -icon $iconPath -manifest $manifestPath -info $infoPath
 } finally {
   Pop-Location
 }
@@ -45,10 +54,11 @@ if (Test-Path $versionedExe) {
 
 Move-Item $sourceExe $versionedExe -Force
 
-Add-Type -AssemblyName System.Drawing
-$icon = [System.Drawing.Icon]::ExtractAssociatedIcon($versionedExe)
-if (-not $icon) {
-  throw "Failed to extract app icon from: $versionedExe"
+go run .\\scripts\\check_windows_resources -exe $versionedExe -icon $iconPath
+
+$versionInfo = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($versionedExe)
+if ($versionInfo.ProductVersion -ne $version -and $versionInfo.ProductVersion -ne ($version + '.0')) {
+  throw "Packaged exe ProductVersion mismatch. Expected $version, got $($versionInfo.ProductVersion)"
 }
 
 Write-Host "Packaged: $versionedExe"

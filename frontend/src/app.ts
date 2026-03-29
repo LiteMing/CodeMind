@@ -21,6 +21,13 @@ import {
 } from './document'
 import { type TranslationKey, kindLabel, nodeColorLabel, themeLabel, translate } from './i18n'
 import {
+  estimateNodeHeight,
+  estimateNodeWidth,
+  resolveNodeMinHeight,
+  resolveNodeMinWidth,
+  TOPIC_NODE_MAX_WIDTH,
+} from './node-sizing'
+import {
   DEFAULT_AI_MAX_TOKENS,
   DEFAULT_AI_TIMEOUT_SECONDS,
   DEFAULT_LM_STUDIO_URL,
@@ -261,9 +268,9 @@ const WORKSPACE_PADDING = 360
 const MIN_ZOOM = 0.4
 const MAX_ZOOM = 2.4
 const ZOOM_SENSITIVITY = 0.0018
-const MIN_NODE_WIDTH = 170
-const MIN_NODE_HEIGHT = 52
-const AUTO_NODE_EDITOR_MAX_WIDTH = 520
+const MIN_NODE_WIDTH = resolveNodeMinWidth('topic')
+const MIN_NODE_HEIGHT = resolveNodeMinHeight('topic')
+const AUTO_NODE_EDITOR_MAX_WIDTH = TOPIC_NODE_MAX_WIDTH
 const DRAG_SNAP_THRESHOLD = 18
 const AUTO_SNAPSHOT_MIN_INTERVAL_MS = 2 * 60 * 1000
 const HISTORY_LIMIT = 120
@@ -732,8 +739,9 @@ class MindMapApp {
         return
       }
 
-      const currentWidth = node.width ?? estimateNodeWidth(node)
-      const currentHeight = node.height ?? estimateNodeHeight(node)
+      const childCount = childrenOf(this.state.document, node.id).length
+      const currentWidth = node.width ?? estimateNodeWidth(node, childCount)
+      const currentHeight = node.height ?? estimateNodeHeight(node, childCount, currentWidth)
 
       this.state.resize = {
         nodeId: resizeNodeId,
@@ -2452,6 +2460,7 @@ class MindMapApp {
     const visibleIds = visibleNodeIds(this.state.document)
     const edgeStyle = this.state.preferences.appearance.edgeStyle
     const projectPosition = (position: Position) => this.toWorkspacePosition(position)
+    const childCountById = new Map(this.state.document.nodes.map((node) => [node.id, childrenOf(this.state.document, node.id).length]))
     const hierarchyEdges = this.state.document.nodes
       .filter((node) => Boolean(node.parentId) && visibleIds.has(node.id) && visibleIds.has(node.parentId ?? ''))
       .map((node) => {
@@ -2459,7 +2468,12 @@ class MindMapApp {
         if (!parent) {
           return ''
         }
-        const edgePoints = resolveHierarchyEdgeEndpoints(parent, node)
+        const edgePoints = resolveHierarchyEdgeEndpoints(
+          parent,
+          node,
+          childCountById.get(parent.id) ?? 0,
+          childCountById.get(node.id) ?? 0,
+        )
         return `<path class="edge edge-hierarchy" d="${buildHierarchyPath(projectPosition(edgePoints.source), projectPosition(edgePoints.target), edgeStyle)}" />`
       })
       .join('')
@@ -2472,7 +2486,12 @@ class MindMapApp {
           return ''
         }
 
-        const edgePoints = resolveRelationEdgeEndpoints(source, target)
+        const edgePoints = resolveRelationEdgeEndpoints(
+          source,
+          target,
+          childCountById.get(source.id) ?? 0,
+          childCountById.get(target.id) ?? 0,
+        )
         const projectedSource = projectPosition(edgePoints.source)
         const projectedTarget = projectPosition(edgePoints.target)
         const mid = getRelationMidpoint(projectedSource, projectedTarget, edgeStyle)
@@ -3384,7 +3403,7 @@ class MindMapApp {
 
     const element = this.rootEl.querySelector<HTMLElement>(`[data-node-id="${nodeId}"] .node-shell, [data-node-id="${nodeId}"] .node-editor`)
     if (!element) {
-      return node.position.x - estimateNodeWidth(node) / 2
+      return node.position.x - estimateNodeWidth(node, childrenOf(this.state.document, node.id).length) / 2
     }
 
     const measuredWidth = element.getBoundingClientRect().width / this.viewport.scale
@@ -5254,10 +5273,15 @@ function buildHierarchyPath(source: Position, target: Position, edgeStyle: EdgeS
     : buildCurvedHierarchyPath(source, target)
 }
 
-function resolveHierarchyEdgeEndpoints(parent: MindNode, child: MindNode): { source: Position; target: Position } {
+function resolveHierarchyEdgeEndpoints(
+  parent: MindNode,
+  child: MindNode,
+  parentChildCount = 0,
+  childChildCount = 0,
+): { source: Position; target: Position } {
   const direction = child.position.x >= parent.position.x ? 1 : -1
-  const parentWidth = parent.width ?? estimateNodeWidth(parent)
-  const childWidth = child.width ?? estimateNodeWidth(child)
+  const parentWidth = estimateNodeWidth(parent, parentChildCount)
+  const childWidth = estimateNodeWidth(child, childChildCount)
 
   return {
     source: {
@@ -5271,16 +5295,21 @@ function resolveHierarchyEdgeEndpoints(parent: MindNode, child: MindNode): { sou
   }
 }
 
-function resolveRelationEdgeEndpoints(source: MindNode, target: MindNode): { source: Position; target: Position } {
+function resolveRelationEdgeEndpoints(
+  source: MindNode,
+  target: MindNode,
+  sourceChildCount = 0,
+  targetChildCount = 0,
+): { source: Position; target: Position } {
   return {
-    source: resolveNodeAnchorToward(source, target.position),
-    target: resolveNodeAnchorToward(target, source.position),
+    source: resolveNodeAnchorToward(source, target.position, sourceChildCount),
+    target: resolveNodeAnchorToward(target, source.position, targetChildCount),
   }
 }
 
-function resolveNodeAnchorToward(node: MindNode, toward: Position): Position {
-  const width = node.width ?? estimateNodeWidth(node)
-  const height = node.height ?? estimateNodeHeight(node)
+function resolveNodeAnchorToward(node: MindNode, toward: Position, childCount = 0): Position {
+  const width = estimateNodeWidth(node, childCount)
+  const height = estimateNodeHeight(node, childCount, width)
   const halfWidth = width / 2
   const halfHeight = height / 2
   const deltaX = toward.x - node.position.x
@@ -5969,8 +5998,9 @@ function getWorkspaceBounds(document: MindMapDocument): WorkspaceBounds {
   let maxY = WORKSPACE_MIN_HEIGHT
 
   for (const node of document.nodes) {
-    const nodeWidth = node.width ?? estimateNodeWidth(node)
-    const nodeHeight = node.height ?? estimateNodeHeight(node)
+    const childCount = childrenOf(document, node.id).length
+    const nodeWidth = estimateNodeWidth(node, childCount)
+    const nodeHeight = estimateNodeHeight(node, childCount, nodeWidth)
     minX = Math.min(minX, node.position.x - nodeWidth / 2 - WORKSPACE_PADDING)
     minY = Math.min(minY, node.position.y - nodeHeight / 2 - WORKSPACE_PADDING)
     maxX = Math.max(maxX, node.position.x + nodeWidth / 2 + WORKSPACE_PADDING)
@@ -5989,34 +6019,10 @@ function getWorkspaceBounds(document: MindMapDocument): WorkspaceBounds {
   }
 }
 
-function estimateNodeWidth(node: MindNode): number {
-  const lines = node.title.split(/\r?\n/)
-  const longestLine = lines.reduce((maxLength, line) => Math.max(maxLength, line.length), 0)
-  const padding = node.kind === 'root' ? 86 : 58
-  const minWidth = node.kind === 'root' ? 182 : MIN_NODE_WIDTH
-  const maxWidth = node.kind === 'root' ? 560 : AUTO_NODE_EDITOR_MAX_WIDTH
-  return clamp(Math.round(longestLine * 9 + padding), minWidth, maxWidth)
-}
-
-function estimateNodeHeight(node: MindNode): number {
-  const estimatedWidth = estimateNodeWidth(node)
-  const contentWidth = Math.max(estimatedWidth - (node.kind === 'root' ? 40 : 28), 72)
-  const charsPerLine = Math.max(8, Math.floor(contentWidth / 9))
-  const visualLines = node.title
-    .split(/\r?\n/)
-    .reduce((lineCount, line) => lineCount + Math.max(1, Math.ceil(Math.max(line.length, 1) / charsPerLine)), 0)
-  const lineHeight = node.kind === 'root' ? 28 : 22
-  const verticalPadding = node.kind === 'root' ? 34 : 30
-  const minHeight = node.kind === 'root' ? 64 : MIN_NODE_HEIGHT
-  return Math.max(minHeight, Math.round(verticalPadding + visualLines * lineHeight))
-}
-
 function nodeCenter(node: MindNode): Position {
-  const width = node.width ?? estimateNodeWidth(node)
-  const height = node.height ?? estimateNodeHeight(node)
   return {
-    x: node.position.x + width / 2,
-    y: node.position.y + height / 2,
+    x: node.position.x,
+    y: node.position.y,
   }
 }
 
