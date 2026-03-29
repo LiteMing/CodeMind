@@ -771,6 +771,30 @@ kbd {
   gap: 10px;
 }
 
+.snapshot-save-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.snapshot-name-field {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.snapshot-name-label {
+  display: inline-flex;
+  margin-bottom: 6px;
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 600;
+}
+
+.snapshot-name-input {
+  width: 100%;
+}
+
 .snapshot-item {
   display: flex;
   align-items: center;
@@ -806,6 +830,13 @@ kbd {
 .snapshot-restore-button {
   flex: 0 0 auto;
   white-space: nowrap;
+}
+
+@media (max-width: 560px) {
+  .snapshot-save-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
 }
 
 .relation-item-top {

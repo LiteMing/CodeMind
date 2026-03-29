@@ -175,6 +175,7 @@ interface AppState {
   maps: MindMapSummary[]
   document: MindMapDocument
   currentMapId: string | null
+  snapshotDraftName: string
   selectedNodeId: string | null
   selectedNodeIds: string[]
   editingNodeId: string | null
@@ -406,6 +407,7 @@ class MindMapApp {
       view: 'home',
       maps: [],
       currentMapId: null,
+      snapshotDraftName: '',
       selectedNodeId: 'root',
       selectedNodeIds: ['root'],
       editingNodeId: null,
@@ -1265,6 +1267,12 @@ class MindMapApp {
       if (this.state.graph.selectedNodeId) {
         this.focusNodeFromGraph(this.state.graph.selectedNodeId)
       }
+      return
+    }
+
+    if (target instanceof HTMLInputElement && target.dataset.snapshotName !== undefined && event.key === 'Enter') {
+      event.preventDefault()
+      this.saveSnapshot('manual')
     }
   }
 
@@ -1351,6 +1359,11 @@ class MindMapApp {
       }
       this.updateGraphSummaryPanel()
       this.drawGraphScene()
+      return
+    }
+
+    if (target instanceof HTMLInputElement && target.dataset.snapshotName !== undefined) {
+      this.state.snapshotDraftName = target.value
     }
   }
 
@@ -2648,6 +2661,7 @@ class MindMapApp {
 
   private renderSnapshotSection(): string {
     const snapshots = this.currentSnapshotList()
+    const canSaveSnapshot = Boolean(this.state.currentMapId)
     return `
       <section class="inspector-card">
         <div class="inspector-header">
@@ -2655,9 +2669,21 @@ class MindMapApp {
             <p class="section-label">${this.t('snapshot.title')}</p>
             <h2>${this.t('snapshot.heading')}</h2>
           </div>
-          <button type="button" class="chip-button" data-command="save-snapshot" ${this.state.currentMapId ? '' : 'disabled'}>${this.t('snapshot.save')}</button>
         </div>
         <p class="inspector-copy">${this.t('snapshot.copy')}</p>
+        <div class="snapshot-save-row">
+          <label class="snapshot-name-field">
+            <span class="snapshot-name-label">${this.t('snapshot.nameLabel')}</span>
+            <input
+              class="settings-input snapshot-name-input"
+              data-snapshot-name
+              value="${escapeAttribute(this.state.snapshotDraftName)}"
+              placeholder="${escapeAttribute(this.t('snapshot.namePlaceholder'))}"
+              ${canSaveSnapshot ? '' : 'disabled'}
+            />
+          </label>
+          <button type="button" class="chip-button" data-command="save-snapshot" ${canSaveSnapshot ? '' : 'disabled'}>${this.t('snapshot.save')}</button>
+        </div>
         ${
           snapshots.length === 0
             ? `<p class="empty-state">${this.t('snapshot.empty')}</p>`
@@ -2666,13 +2692,14 @@ class MindMapApp {
                 ${snapshots
                   .map((snapshot) => {
                     const modeLabel = snapshot.mode === 'manual' ? this.t('snapshot.modeManual') : this.t('snapshot.modeAuto')
+                    const metaSuffix = snapshot.mapTitle && snapshot.mapTitle !== snapshot.title ? ` · ${escapeHtml(snapshot.mapTitle)}` : ''
                     return `
                       <li class="snapshot-item">
                         <div class="snapshot-item-copy">
                           <p class="snapshot-item-title">${escapeHtml(snapshot.title)}</p>
                           <p class="snapshot-item-meta">${escapeHtml(modeLabel)} · ${escapeHtml(
                             formatRelativeTime(snapshot.createdAt, this.state.preferences.locale),
-                          )} · ${escapeHtml(this.t('dock.nodes', { value: snapshot.nodeCount }))}</p>
+                          )} · ${escapeHtml(this.t('dock.nodes', { value: snapshot.nodeCount }))}${metaSuffix}</p>
                         </div>
                         <button type="button" class="ghost-button snapshot-restore-button" data-command="restore-snapshot:${snapshot.id}">${this.t('snapshot.restore')}</button>
                       </li>
@@ -3794,12 +3821,14 @@ class MindMapApp {
 
     saveLocalSnapshot({
       mapId,
-      title: this.state.document.title,
+      title: this.resolveSnapshotTitle(mode),
+      mapTitle: this.state.document.title,
       mode,
       document: this.state.document,
     })
 
     if (mode === 'manual') {
+      this.state.snapshotDraftName = ''
       this.setStatus('status.snapshotSaved')
       this.render()
     }
@@ -3822,10 +3851,23 @@ class MindMapApp {
 
     saveLocalSnapshot({
       mapId,
-      title: document.title,
+      title: this.resolveSnapshotTitle('auto', document.title),
+      mapTitle: document.title,
       mode: 'auto',
       document,
     })
+  }
+
+  private resolveSnapshotTitle(mode: 'manual' | 'auto', documentTitle = this.state.document.title): string {
+    const draft = mode === 'manual' ? this.state.snapshotDraftName.trim() : ''
+    if (draft) {
+      return draft
+    }
+
+    const normalizedTitle = documentTitle.trim() || this.t('node.untitled')
+    return mode === 'manual'
+      ? this.t('snapshot.defaultManualName', { title: normalizedTitle })
+      : this.t('snapshot.defaultAutoName', { title: normalizedTitle })
   }
 
   private restoreSnapshot(snapshotId: string): void {
@@ -3844,6 +3886,7 @@ class MindMapApp {
     this.captureHistory()
     restoredDocument.id = mapId
     this.state.document = restoredDocument
+    this.state.snapshotDraftName = ''
     this.setSelection([findRoot(restoredDocument).id], findRoot(restoredDocument).id)
     this.state.connectSourceNodeId = null
     touchDocument(this.state.document)
@@ -3917,6 +3960,7 @@ class MindMapApp {
     await this.refreshMaps('status.mapListLoaded')
     this.state.view = 'home'
     this.state.currentMapId = null
+    this.state.snapshotDraftName = ''
     this.state.ai.open = false
     this.state.graph.open = false
     this.stopGraphAnimation()
@@ -4424,6 +4468,7 @@ class MindMapApp {
   private openLoadedDocument(document: MindMapDocument, statusKey: TranslationKey): void {
     this.state.document = document
     this.state.currentMapId = document.id
+    this.state.snapshotDraftName = ''
     this.state.view = 'map'
     this.state.ai.open = false
     this.state.graph.open = false
