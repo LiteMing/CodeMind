@@ -762,6 +762,52 @@ kbd {
   background: var(--surface);
 }
 
+.snapshot-list {
+  list-style: none;
+  margin: 16px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.snapshot-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px;
+  border-radius: 16px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.snapshot-item-copy {
+  min-width: 0;
+}
+
+.snapshot-item-title,
+.snapshot-item-meta {
+  margin: 0;
+}
+
+.snapshot-item-title {
+  color: var(--text);
+  line-height: 1.45;
+}
+
+.snapshot-item-meta {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.4;
+}
+
+.snapshot-restore-button {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
 .relation-item-top {
   display: flex;
   justify-content: space-between;
@@ -1161,10 +1207,14 @@ kbd {
   transform: translate(-50%, -50%);
 }
 
+.node-card.is-editing-auto-width {
+  transform: translate(0, -50%);
+}
+
 .node-shell,
 .node-editor {
   min-width: 156px;
-  max-width: 320px;
+  max-width: 520px;
   border-radius: 14px;
   border: 1px solid var(--node-border);
   background: var(--node);
@@ -1244,6 +1294,7 @@ kbd {
 .node-root .node-shell,
 .node-root .node-editor {
   min-width: 182px;
+  max-width: 560px;
   padding: 15px 20px;
   background: var(--root-bg);
   color: var(--root-text);

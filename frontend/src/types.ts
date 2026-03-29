@@ -80,6 +80,9 @@ export interface AppearanceSettings {
 
 export interface InteractionSettings {
   dragSubtreeWithParent: boolean
+  dragSnap: boolean
+  autoLayoutOnCollapse: boolean
+  autoSnapshots: boolean
 }
 
 export interface AIDebugRequest {

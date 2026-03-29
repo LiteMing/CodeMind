@@ -7,9 +7,11 @@ const DEFAULT_ROOT_WIDTH = 220
 const DEFAULT_NODE_WIDTH = 196
 const DEFAULT_ROOT_HEIGHT = 74
 const DEFAULT_NODE_HEIGHT = 62
-const PLACEMENT_PADDING_X = 34
-const PLACEMENT_PADDING_Y = 18
-const PLACEMENT_SEARCH_STEPS = 24
+const COMPACT_NODE_GAP_Y = 18
+const PLACEMENT_PADDING_X = 28
+const PLACEMENT_PADDING_Y = 8
+const PLACEMENT_SEARCH_STEPS = 40
+const PLACEMENT_SCAN_STEP_Y = 14
 
 export function createDefaultDocument(): MindMapDocument {
   const now = new Date().toISOString()
@@ -152,7 +154,7 @@ export function nextChildPosition(document: MindMapDocument, parentId: string, l
       ? children.filter((child) => branchDirection(document, child) === direction)
       : children
   const targetX = resolveChildColumn(parent, laneChildren, direction)
-  const targetY = laneChildren.length === 0 ? parent.position.y : laneChildren[laneChildren.length - 1].position.y + NODE_GAP_Y
+  const targetY = nextStackedY(laneChildren, 'topic', parent.position.y)
   return findAvailablePosition(document, { x: targetX, y: targetY }, 'topic')
 }
 
@@ -167,10 +169,9 @@ export function nextSiblingPosition(document: MindMapDocument, node: MindNode, l
   }
 
   const siblings = childrenOf(document, node.parentId)
-  const lastSibling = siblings[siblings.length - 1]
   return findAvailablePosition(
     document,
-    { x: lastSibling.position.x, y: lastSibling.position.y + NODE_GAP_Y },
+    { x: node.position.x, y: nextStackedY(siblings, node.kind === 'floating' ? 'floating' : 'topic', node.position.y + NODE_GAP_Y) },
     node.kind === 'floating' ? 'floating' : 'topic',
   )
 }
@@ -186,7 +187,14 @@ export function nextFloatingPosition(document: MindMapDocument): Position {
   }
 
   const lastFloatingNode = floatingNodes[floatingNodes.length - 1]
-  return findAvailablePosition(document, { x: lastFloatingNode.position.x + 36, y: lastFloatingNode.position.y + NODE_GAP_Y }, 'floating')
+  return findAvailablePosition(
+    document,
+    {
+      x: lastFloatingNode.position.x + 36,
+      y: nextStackedY(floatingNodes, 'floating', lastFloatingNode.position.y + NODE_GAP_Y),
+    },
+    'floating',
+  )
 }
 
 function branchDirection(document: MindMapDocument, node: MindNode): -1 | 1 {
@@ -234,11 +242,23 @@ function resolveChildColumn(parent: MindNode, children: MindNode[], direction: -
     : Math.max(parent.position.x + NODE_GAP_X, ...children.map((child) => child.position.x))
 }
 
+function nextStackedY(nodes: MindNode[], kind: MindNode['kind'], fallbackY: number): number {
+  if (nodes.length === 0) {
+    return fallbackY
+  }
+
+  const lowestBottom = nodes.reduce((maxBottom, node) => {
+    return Math.max(maxBottom, node.position.y + resolvedNodeHeight(node) / 2)
+  }, Number.NEGATIVE_INFINITY)
+
+  return Math.round(lowestBottom + COMPACT_NODE_GAP_Y + defaultNodeHeight(kind) / 2)
+}
+
 function findAvailablePosition(document: MindMapDocument, preferred: Position, kind: MindNode['kind']): Position {
   for (let step = 0; step <= PLACEMENT_SEARCH_STEPS; step += 1) {
     const candidate = {
       x: preferred.x,
-      y: preferred.y + step * NODE_GAP_Y,
+      y: Math.round(preferred.y + step * PLACEMENT_SCAN_STEP_Y),
     }
     if (!positionCollides(document, candidate, kind)) {
       return candidate
@@ -299,6 +319,10 @@ function defaultNodeWidth(kind: MindNode['kind']): number {
 
 function defaultNodeHeight(kind: MindNode['kind']): number {
   return kind === 'root' ? DEFAULT_ROOT_HEIGHT : DEFAULT_NODE_HEIGHT
+}
+
+function resolvedNodeHeight(node: MindNode): number {
+  return Math.max(node.height ?? defaultNodeHeight(node.kind), defaultNodeHeight(node.kind))
 }
 
 export function touchDocument(document: MindMapDocument): void {

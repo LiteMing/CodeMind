@@ -32,6 +32,7 @@ import {
   normalizeTopPanelPosition,
   savePreferences,
 } from './preferences'
+import { listLocalSnapshots, loadLocalSnapshot, saveLocalSnapshot, type LocalSnapshotSummary } from './snapshots'
 import type {
   AIDebugInfo,
   AIDebugRequest,
@@ -262,7 +263,9 @@ const MAX_ZOOM = 2.4
 const ZOOM_SENSITIVITY = 0.0018
 const MIN_NODE_WIDTH = 170
 const MIN_NODE_HEIGHT = 52
-const AUTO_NODE_EDITOR_MAX_WIDTH = 320
+const AUTO_NODE_EDITOR_MAX_WIDTH = 520
+const DRAG_SNAP_THRESHOLD = 18
+const AUTO_SNAPSHOT_MIN_INTERVAL_MS = 2 * 60 * 1000
 const HISTORY_LIMIT = 120
 const GRAPH_DEFAULT_ZOOM = 1.16
 const GRAPH_MIN_ZOOM = 0.68
@@ -377,6 +380,7 @@ class MindMapApp {
   private copiedSubtree: CopiedSubtree | null = null
   private suppressContextMenuOnce = false
   private pendingEditorOptions: EditorLaunchOptions | null = null
+  private activeEditorAnchorLeft: number | null = null
   private nodeEditorMeasureCanvas: HTMLCanvasElement | null = null
   private workspaceBounds: WorkspaceBounds = {
     minX: 0,
@@ -918,8 +922,11 @@ class MindMapApp {
       return
     }
 
-    const deltaX = nextPosition.x - anchorStart.x
-    const deltaY = nextPosition.y - anchorStart.y
+    const rawDeltaX = nextPosition.x - anchorStart.x
+    const rawDeltaY = nextPosition.y - anchorStart.y
+    const { deltaX, deltaY } = this.state.preferences.interaction.dragSnap
+      ? this.resolveSnappedDragDelta(this.state.drag, rawDeltaX, rawDeltaY)
+      : { deltaX: rawDeltaX, deltaY: rawDeltaY }
     for (const candidateId of this.state.drag.nodeIds) {
       const candidateStart = this.state.drag.initialPositions[candidateId]
       if (!candidateStart) {
@@ -934,6 +941,72 @@ class MindMapApp {
       })
       this.scheduleLiveNodeUpdate(candidateId)
     }
+  }
+
+  private resolveSnappedDragDelta(dragState: DragState, deltaX: number, deltaY: number): { deltaX: number; deltaY: number } {
+    const draggedNodeIDs = new Set(dragState.nodeIds)
+    return {
+      deltaX: this.resolveDragAxisSnap(dragState, deltaX, 'x', draggedNodeIDs),
+      deltaY: this.resolveDragAxisSnap(dragState, deltaY, 'y', draggedNodeIDs),
+    }
+  }
+
+  private resolveDragAxisSnap(
+    dragState: DragState,
+    delta: number,
+    axis: 'x' | 'y',
+    draggedNodeIDs: Set<string>,
+  ): number {
+    let bestOffset: number | null = null
+
+    for (const nodeId of dragState.nodeIds) {
+      const start = dragState.initialPositions[nodeId]
+      const node = this.findNode(nodeId)
+      if (!start || !node) {
+        continue
+      }
+
+      const currentValue = (axis === 'x' ? start.x : start.y) + delta
+      for (const target of this.dragSnapTargetsForNode(node, axis, draggedNodeIDs)) {
+        const offset = target - currentValue
+        if (Math.abs(offset) > DRAG_SNAP_THRESHOLD) {
+          continue
+        }
+        if (bestOffset === null || Math.abs(offset) < Math.abs(bestOffset)) {
+          bestOffset = offset
+        }
+      }
+    }
+
+    return delta + (bestOffset ?? 0)
+  }
+
+  private dragSnapTargetsForNode(node: MindNode, axis: 'x' | 'y', draggedNodeIDs: Set<string>): number[] {
+    const targets: number[] = []
+
+    if (axis === 'x' && node.parentId) {
+      const parent = this.findNode(node.parentId)
+      if (parent) {
+        const direction = node.position.x < parent.position.x ? -1 : 1
+        const branchGap = Math.max(180, Math.abs(node.position.x - parent.position.x))
+        targets.push(parent.position.x + direction * branchGap)
+      }
+
+      for (const sibling of childrenOf(this.state.document, node.parentId)) {
+        if (sibling.id !== node.id && !draggedNodeIDs.has(sibling.id)) {
+          targets.push(sibling.position.x)
+        }
+      }
+    }
+
+    for (const candidate of this.state.document.nodes) {
+      if (draggedNodeIDs.has(candidate.id)) {
+        continue
+      }
+      targets.push(axis === 'x' ? candidate.position.x : candidate.position.y)
+    }
+
+    return targets
   }
 
   private readonly handlePointerUp = (event: PointerEvent): void => {
@@ -1146,7 +1219,7 @@ class MindMapApp {
     }
 
     if ((target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) && target.dataset.nodeEditor) {
-      if (event.key === 'Enter') {
+      if (event.key === 'Enter' && !event.shiftKey) {
         event.preventDefault()
         this.commitNodeEditor(target.dataset.nodeEditor, target.value)
         return
@@ -1154,7 +1227,7 @@ class MindMapApp {
 
       if (event.key === 'Escape') {
         event.preventDefault()
-        this.state.editingNodeId = null
+        this.clearNodeEditorState()
         this.render()
       }
       return
@@ -1601,6 +1674,8 @@ class MindMapApp {
               ${workspaceMetrics}
             </div>
           </section>
+
+          ${this.renderSnapshotSection()}
         `
       return
     }
@@ -1686,6 +1761,8 @@ class MindMapApp {
             ${workspaceMetrics}
           </div>
         </section>
+
+        ${this.renderSnapshotSection()}
 
         <section class="inspector-card">
           <p class="section-label">${this.t('inspector.relations')}</p>
@@ -1864,6 +1941,27 @@ class MindMapApp {
               <select class="settings-select" data-setting-field="interaction.dragSubtreeWithParent">
                 <option value="true" ${this.state.preferences.interaction.dragSubtreeWithParent ? 'selected' : ''}>${this.t('common.on')}</option>
                 <option value="false" ${this.state.preferences.interaction.dragSubtreeWithParent ? '' : 'selected'}>${this.t('common.off')}</option>
+              </select>
+            </label>
+            <label class="field-row">
+              <span>${this.t('settings.dragSnap')}</span>
+              <select class="settings-select" data-setting-field="interaction.dragSnap">
+                <option value="true" ${this.state.preferences.interaction.dragSnap ? 'selected' : ''}>${this.t('common.on')}</option>
+                <option value="false" ${this.state.preferences.interaction.dragSnap ? '' : 'selected'}>${this.t('common.off')}</option>
+              </select>
+            </label>
+            <label class="field-row">
+              <span>${this.t('settings.autoLayoutOnCollapse')}</span>
+              <select class="settings-select" data-setting-field="interaction.autoLayoutOnCollapse">
+                <option value="true" ${this.state.preferences.interaction.autoLayoutOnCollapse ? 'selected' : ''}>${this.t('common.on')}</option>
+                <option value="false" ${this.state.preferences.interaction.autoLayoutOnCollapse ? '' : 'selected'}>${this.t('common.off')}</option>
+              </select>
+            </label>
+            <label class="field-row">
+              <span>${this.t('settings.autoSnapshots')}</span>
+              <select class="settings-select" data-setting-field="interaction.autoSnapshots">
+                <option value="true" ${this.state.preferences.interaction.autoSnapshots ? 'selected' : ''}>${this.t('common.on')}</option>
+                <option value="false" ${this.state.preferences.interaction.autoSnapshots ? '' : 'selected'}>${this.t('common.off')}</option>
               </select>
             </label>
           </section>
@@ -2400,10 +2498,13 @@ class MindMapApp {
       .filter((node) => visibleIds.has(node.id))
       .map((node) => {
         const nodeColor = normalizeNodeColor(node.color)
+        const isEditingNode = this.state.editingNodeId === node.id
+        const isAutoWidthEditingNode = isEditingNode && !node.width && this.activeEditorAnchorLeft !== null
         const classes = [
           'node-card',
           `node-${node.kind}`,
           nodeColor ? 'has-color' : '',
+          isAutoWidthEditingNode ? 'is-editing-auto-width' : '',
           node.id === this.state.selectedNodeId ? 'is-selected' : '',
           selectedIds.has(node.id) && node.id !== this.state.selectedNodeId ? 'is-selected-secondary' : '',
           node.id === this.state.connectSourceNodeId ? 'is-connect-source' : '',
@@ -2423,8 +2524,10 @@ class MindMapApp {
 
         const nodeDimensions = buildNodeDimensionStyle(node)
         const nodePresentationStyle = buildNodeColorStyle(nodeColor)
+        const anchorX = isAutoWidthEditingNode ? this.activeEditorAnchorLeft ?? node.position.x : node.position.x
+        const articleStyle = `left: ${anchorX + originX}px; top: ${node.position.y + originY}px; ${nodePresentationStyle}`
 
-        const content = this.state.editingNodeId === node.id
+        const content = isEditingNode
           ? `<textarea class="node-editor" style="${nodeDimensions}" data-node-editor="${node.id}" rows="1" maxlength="120" spellcheck="false">${escapeHtml(
               node.title,
             )}</textarea>`
@@ -2442,7 +2545,7 @@ class MindMapApp {
           <article
             class="${classes}"
             data-node-id="${node.id}"
-            style="left: ${node.position.x + originX}px; top: ${node.position.y + originY}px; ${nodePresentationStyle}"
+            style="${articleStyle}"
           >
             ${content}
             ${resizeHandle}
@@ -2514,6 +2617,54 @@ class MindMapApp {
     `
   }
 
+  private currentSnapshotList(): LocalSnapshotSummary[] {
+    if (!this.state.currentMapId) {
+      return []
+    }
+
+    return listLocalSnapshots(this.state.currentMapId)
+  }
+
+  private renderSnapshotSection(): string {
+    const snapshots = this.currentSnapshotList()
+    return `
+      <section class="inspector-card">
+        <div class="inspector-header">
+          <div>
+            <p class="section-label">${this.t('snapshot.title')}</p>
+            <h2>${this.t('snapshot.heading')}</h2>
+          </div>
+          <button type="button" class="chip-button" data-command="save-snapshot" ${this.state.currentMapId ? '' : 'disabled'}>${this.t('snapshot.save')}</button>
+        </div>
+        <p class="inspector-copy">${this.t('snapshot.copy')}</p>
+        ${
+          snapshots.length === 0
+            ? `<p class="empty-state">${this.t('snapshot.empty')}</p>`
+            : `
+              <ul class="snapshot-list">
+                ${snapshots
+                  .map((snapshot) => {
+                    const modeLabel = snapshot.mode === 'manual' ? this.t('snapshot.modeManual') : this.t('snapshot.modeAuto')
+                    return `
+                      <li class="snapshot-item">
+                        <div class="snapshot-item-copy">
+                          <p class="snapshot-item-title">${escapeHtml(snapshot.title)}</p>
+                          <p class="snapshot-item-meta">${escapeHtml(modeLabel)} · ${escapeHtml(
+                            formatRelativeTime(snapshot.createdAt, this.state.preferences.locale),
+                          )} · ${escapeHtml(this.t('dock.nodes', { value: snapshot.nodeCount }))}</p>
+                        </div>
+                        <button type="button" class="ghost-button snapshot-restore-button" data-command="restore-snapshot:${snapshot.id}">${this.t('snapshot.restore')}</button>
+                      </li>
+                    `
+                  })
+                  .join('')}
+              </ul>
+            `
+        }
+      </section>
+    `
+  }
+
   private nodeEditor(nodeId = this.state.editingNodeId): HTMLTextAreaElement | null {
     if (!nodeId) {
       return null
@@ -2528,6 +2679,7 @@ class MindMapApp {
         value: string
         selectionStart: number
         selectionEnd: number
+        anchorLeft: number | null
       }
     | null {
     const nodeId = this.state.editingNodeId
@@ -2541,6 +2693,7 @@ class MindMapApp {
       value: editor.value,
       selectionStart: editor.selectionStart ?? editor.value.length,
       selectionEnd: editor.selectionEnd ?? editor.value.length,
+      anchorLeft: this.activeEditorAnchorLeft,
     }
   }
 
@@ -2551,6 +2704,7 @@ class MindMapApp {
           value: string
           selectionStart: number
           selectionEnd: number
+          anchorLeft: number | null
         }
       | null,
   ): void {
@@ -2559,6 +2713,7 @@ class MindMapApp {
     }
 
     this.state.editingNodeId = draft.nodeId
+    this.activeEditorAnchorLeft = draft.anchorLeft
     this.pendingEditorOptions = {
       value: draft.value,
       selectionStart: draft.selectionStart,
@@ -2748,8 +2903,7 @@ class MindMapApp {
   private setSelection(nodeIds: string[], primaryNodeId: string | null = nodeIds[nodeIds.length - 1] ?? null): void {
     this.finishActiveNodeEditing()
     this.applySelectionState(nodeIds, primaryNodeId)
-    this.state.editingNodeId = null
-    this.pendingEditorOptions = null
+    this.clearNodeEditorState()
   }
 
   private clearSelection(): void {
@@ -3215,8 +3369,30 @@ class MindMapApp {
 
   private openNodeEditor(nodeId: string, options: EditorLaunchOptions = {}): void {
     this.state.editingNodeId = nodeId
+    this.activeEditorAnchorLeft = this.resolveNodeEditorAnchorLeft(nodeId)
     this.pendingEditorOptions = options
     this.render()
+  }
+
+  private resolveNodeEditorAnchorLeft(nodeId: string): number | null {
+    const node = this.findNode(nodeId)
+    if (!node || node.width) {
+      return null
+    }
+
+    const element = this.rootEl.querySelector<HTMLElement>(`[data-node-id="${nodeId}"] .node-shell, [data-node-id="${nodeId}"] .node-editor`)
+    if (!element) {
+      return node.position.x - estimateNodeWidth(node) / 2
+    }
+
+    const measuredWidth = element.getBoundingClientRect().width / this.viewport.scale
+    return node.position.x - measuredWidth / 2
+  }
+
+  private clearNodeEditorState(): void {
+    this.state.editingNodeId = null
+    this.pendingEditorOptions = null
+    this.activeEditorAnchorLeft = null
   }
 
   private commitNodeEditor(
@@ -3234,17 +3410,18 @@ class MindMapApp {
 
     const title = rawTitle.trim() || this.t('node.untitled')
     const existingNode = this.findNode(nodeId)
+    const editor = this.nodeEditor(nodeId)
+    const preservedAnchorLeft = this.activeEditorAnchorLeft
+    const measuredWidth = editor ? editor.getBoundingClientRect().width / this.viewport.scale : null
     if (!existingNode) {
-      this.state.editingNodeId = null
-      this.pendingEditorOptions = null
+      this.clearNodeEditorState()
       if (options.renderAfter !== false) {
         this.render()
       }
       return
     }
 
-    this.state.editingNodeId = null
-    this.pendingEditorOptions = null
+    this.clearNodeEditorState()
     if (existingNode.title === title) {
       if (options.renderAfter !== false) {
         this.render()
@@ -3255,6 +3432,12 @@ class MindMapApp {
     this.captureHistory()
     this.updateNode(nodeId, (node) => {
       node.title = title
+      if (!node.width && preservedAnchorLeft !== null && measuredWidth) {
+        node.position = {
+          ...node.position,
+          x: Math.round(preservedAnchorLeft + measuredWidth / 2),
+        }
+      }
     })
     if (!options.preserveSelection) {
       this.applySelectionState([nodeId], nodeId)
@@ -3316,7 +3499,7 @@ class MindMapApp {
       return
     }
 
-    this.captureHistory()
+    const snapshot = this.createHistorySnapshot()
     const changed = toggleCollapse(this.state.document, selectedNode.id)
     if (!changed) {
       this.setStatus('status.noBranchToCollapse')
@@ -3324,6 +3507,11 @@ class MindMapApp {
       return
     }
 
+    if (this.state.preferences.interaction.autoLayoutOnCollapse) {
+      autoLayoutHierarchy(this.state.document, this.state.preferences.appearance.layoutMode)
+    }
+
+    this.pushHistorySnapshot(snapshot)
     touchDocument(this.state.document)
     this.setStatus(selectedNode.collapsed ? 'status.branchCollapsed' : 'status.branchExpanded')
     this.render()
@@ -3424,6 +3612,14 @@ class MindMapApp {
           return
         case 'save':
           await this.saveDocument('status.saved')
+          return
+        case 'save-snapshot':
+          this.saveSnapshot('manual')
+          return
+        case 'restore-snapshot':
+          if (argument) {
+            this.restoreSnapshot(argument)
+          }
           return
         case 'auto-layout':
           this.autoLayout()
@@ -3557,6 +3753,7 @@ class MindMapApp {
       this.state.document = savedDocument
       this.state.currentMapId = savedDocument.id
       await this.refreshMaps()
+      this.maybeSaveAutoSnapshot(savedDocument)
       this.setStatus(statusKey, values)
       this.restoreActiveNodeEditorDraft(editorDraft)
     } catch (error) {
@@ -3566,6 +3763,73 @@ class MindMapApp {
 
     this.applyTheme()
     this.render()
+  }
+
+  private saveSnapshot(mode: 'manual' | 'auto'): void {
+    const mapId = this.state.currentMapId
+    if (!mapId) {
+      return
+    }
+
+    saveLocalSnapshot({
+      mapId,
+      title: this.state.document.title,
+      mode,
+      document: this.state.document,
+    })
+
+    if (mode === 'manual') {
+      this.setStatus('status.snapshotSaved')
+      this.render()
+    }
+  }
+
+  private maybeSaveAutoSnapshot(document: MindMapDocument): void {
+    if (!this.state.preferences.interaction.autoSnapshots) {
+      return
+    }
+
+    const mapId = document.id || this.state.currentMapId
+    if (!mapId) {
+      return
+    }
+
+    const latestAutoSnapshot = listLocalSnapshots(mapId).find((snapshot) => snapshot.mode === 'auto')
+    if (latestAutoSnapshot && Date.now() - Date.parse(latestAutoSnapshot.createdAt) < AUTO_SNAPSHOT_MIN_INTERVAL_MS) {
+      return
+    }
+
+    saveLocalSnapshot({
+      mapId,
+      title: document.title,
+      mode: 'auto',
+      document,
+    })
+  }
+
+  private restoreSnapshot(snapshotId: string): void {
+    const mapId = this.state.currentMapId
+    if (!mapId) {
+      return
+    }
+
+    const restoredDocument = loadLocalSnapshot(mapId, snapshotId)
+    if (!restoredDocument) {
+      this.setStatus('status.snapshotRestoreFailed')
+      this.render()
+      return
+    }
+
+    this.captureHistory()
+    restoredDocument.id = mapId
+    this.state.document = restoredDocument
+    this.setSelection([findRoot(restoredDocument).id], findRoot(restoredDocument).id)
+    this.state.connectSourceNodeId = null
+    touchDocument(this.state.document)
+    this.applyTheme()
+    this.setStatus('status.snapshotRestored')
+    this.render()
+    this.scheduleAutosave('status.saved')
   }
 
   private async exportMarkdown(): Promise<void> {
@@ -3593,7 +3857,6 @@ class MindMapApp {
       this.captureHistory()
       this.state.document = importedDocument
       this.setSelection([findRoot(importedDocument).id], findRoot(importedDocument).id)
-      this.state.editingNodeId = null
       this.state.connectSourceNodeId = null
       this.viewport.scale = 1
       this.didInitializeViewport = false
@@ -4145,7 +4408,6 @@ class MindMapApp {
     this.state.graph.open = false
     this.stopGraphAnimation()
     this.setSelection([findRoot(document).id], findRoot(document).id)
-    this.state.editingNodeId = null
     this.state.connectSourceNodeId = null
     this.state.resize = null
     this.viewport.scale = 1
@@ -4246,6 +4508,27 @@ class MindMapApp {
       case 'interaction.dragSubtreeWithParent':
         this.updatePreferences((preferences) => {
           preferences.interaction.dragSubtreeWithParent = value === 'true'
+        })
+        this.setStatus('status.interactionUpdated')
+        this.render()
+        return
+      case 'interaction.dragSnap':
+        this.updatePreferences((preferences) => {
+          preferences.interaction.dragSnap = value === 'true'
+        })
+        this.setStatus('status.interactionUpdated')
+        this.render()
+        return
+      case 'interaction.autoLayoutOnCollapse':
+        this.updatePreferences((preferences) => {
+          preferences.interaction.autoLayoutOnCollapse = value === 'true'
+        })
+        this.setStatus('status.interactionUpdated')
+        this.render()
+        return
+      case 'interaction.autoSnapshots':
+        this.updatePreferences((preferences) => {
+          preferences.interaction.autoSnapshots = value === 'true'
         })
         this.setStatus('status.interactionUpdated')
         this.render()
@@ -4468,7 +4751,7 @@ class MindMapApp {
     this.state.connectSourceNodeId = snapshot.connectSourceNodeId && findNode(this.state.document, snapshot.connectSourceNodeId)
       ? snapshot.connectSourceNodeId
       : null
-    this.state.editingNodeId = null
+    this.clearNodeEditorState()
     this.state.drag = null
     this.state.resize = null
     this.state.contextMenu = null
@@ -5521,11 +5804,7 @@ function buildNodeDimensionStyle(node: MindNode): string {
 }
 
 function nodeVisibleTitle(node: MindNode): string {
-  if (node.width || node.height) {
-    return node.title
-  }
-
-  return shorten(node.title, node.kind === 'root' ? 60 : 72)
+  return node.title
 }
 
 function buildNodeColorStyle(color: NodeColor): string {
@@ -5664,17 +5943,25 @@ function getWorkspaceBounds(document: MindMapDocument): WorkspaceBounds {
 }
 
 function estimateNodeWidth(node: MindNode): number {
-  if (node.kind === 'root') {
-    return 220
-  }
-  return 196
+  const lines = node.title.split(/\r?\n/)
+  const longestLine = lines.reduce((maxLength, line) => Math.max(maxLength, line.length), 0)
+  const padding = node.kind === 'root' ? 86 : 58
+  const minWidth = node.kind === 'root' ? 182 : MIN_NODE_WIDTH
+  const maxWidth = node.kind === 'root' ? 560 : AUTO_NODE_EDITOR_MAX_WIDTH
+  return clamp(Math.round(longestLine * 9 + padding), minWidth, maxWidth)
 }
 
 function estimateNodeHeight(node: MindNode): number {
-  if (node.kind === 'root') {
-    return 64
-  }
-  return MIN_NODE_HEIGHT
+  const estimatedWidth = estimateNodeWidth(node)
+  const contentWidth = Math.max(estimatedWidth - (node.kind === 'root' ? 40 : 28), 72)
+  const charsPerLine = Math.max(8, Math.floor(contentWidth / 9))
+  const visualLines = node.title
+    .split(/\r?\n/)
+    .reduce((lineCount, line) => lineCount + Math.max(1, Math.ceil(Math.max(line.length, 1) / charsPerLine)), 0)
+  const lineHeight = node.kind === 'root' ? 28 : 22
+  const verticalPadding = node.kind === 'root' ? 34 : 30
+  const minHeight = node.kind === 'root' ? 64 : MIN_NODE_HEIGHT
+  return Math.max(minHeight, Math.round(verticalPadding + visualLines * lineHeight))
 }
 
 function nodeCenter(node: MindNode): Position {

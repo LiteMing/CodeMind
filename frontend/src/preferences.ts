@@ -20,6 +20,9 @@ export function createDefaultPreferences(): AppPreferences {
     },
     interaction: {
       dragSubtreeWithParent: true,
+      dragSnap: true,
+      autoLayoutOnCollapse: true,
+      autoSnapshots: true,
     },
     ai: {
       provider: 'lmstudio',
@@ -51,6 +54,9 @@ export function loadPreferences(): AppPreferences {
       },
       interaction: {
         dragSubtreeWithParent: normalizeBoolean(parsed.interaction?.dragSubtreeWithParent, defaults.interaction.dragSubtreeWithParent),
+        dragSnap: normalizeBoolean(parsed.interaction?.dragSnap, defaults.interaction.dragSnap),
+        autoLayoutOnCollapse: normalizeBoolean(parsed.interaction?.autoLayoutOnCollapse, defaults.interaction.autoLayoutOnCollapse),
+        autoSnapshots: normalizeBoolean(parsed.interaction?.autoSnapshots, defaults.interaction.autoSnapshots),
       },
       ai: {
         provider: parsed.ai?.provider === 'openai-compatible' ? 'openai-compatible' : 'lmstudio',
