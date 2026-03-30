@@ -1,3 +1,16 @@
+## Dependencies
 node_modules/
+
+## Local app data
 data/maps/
+
+## Nested local repo
 code-mind/
+
+## Desktop build outputs
+build/bin/
+build/windows/icon-verify.png
+
+## OS noise
+Thumbs.db
+.DS_Store
