@@ -10,30 +10,89 @@ if (-not $version -or $version -notmatch '^\d+\.\d+\.\d+$') {
   throw "wails.json info.productVersion must use x.y.z format."
 }
 
+function Write-WindowsVersionInfo {
+  param(
+    [string]$Path,
+    [string]$ProductVersion,
+    [string]$CompanyName,
+    [string]$ProductName,
+    [string]$Comments
+  )
+
+  $fileVersion = "$ProductVersion.0"
+  $versionInfo = [ordered]@{
+    fixed = [ordered]@{
+      file_version = $fileVersion
+      product_version = $fileVersion
+    }
+    info = [ordered]@{
+      '0000' = [ordered]@{
+        ProductVersion = $ProductVersion
+        FileVersion = $fileVersion
+        CompanyName = $CompanyName
+        FileDescription = $ProductName
+        LegalCopyright = "Copyright $CompanyName"
+        ProductName = $ProductName
+        Comments = $Comments
+      }
+      '0409' = [ordered]@{
+        ProductVersion = $ProductVersion
+        FileVersion = $fileVersion
+        CompanyName = $CompanyName
+        FileDescription = $ProductName
+        LegalCopyright = "Copyright $CompanyName"
+        ProductName = $ProductName
+        Comments = $Comments
+      }
+    }
+  }
+
+  $json = $versionInfo | ConvertTo-Json -Depth 6
+  [System.IO.File]::WriteAllText($Path, $json, [System.Text.UTF8Encoding]::new($false))
+}
+
 $iconPath = Join-Path $projectRoot 'build\\windows\\icon.ico'
-$manifestPath = Join-Path $projectRoot 'build\\windows\\wails.exe.manifest'
-$infoPath = Join-Path $projectRoot 'build\\windows\\info.json'
+$manifestTemplatePath = Join-Path $projectRoot 'build\\windows\\wails.exe.manifest'
 if (-not (Test-Path $iconPath)) {
   throw "Missing app icon: $iconPath"
 }
-if (-not (Test-Path $manifestPath)) {
-  throw "Missing Windows manifest: $manifestPath"
-}
-if (-not (Test-Path $infoPath)) {
-  throw "Missing Windows version info: $infoPath"
+if (-not (Test-Path $manifestTemplatePath)) {
+  throw "Missing Windows manifest template: $manifestTemplatePath"
 }
 
 $baseName = [System.IO.Path]::GetFileNameWithoutExtension([string]$wailsConfig.outputfilename)
+$companyName = [string]$wailsConfig.info.companyName
+if ([string]::IsNullOrWhiteSpace($companyName)) {
+  $companyName = $baseName
+}
+$productName = [string]$wailsConfig.info.productName
+if ([string]::IsNullOrWhiteSpace($productName)) {
+  $productName = $baseName
+}
+$comments = [string]$wailsConfig.info.comments
 $sourceExe = Join-Path $projectRoot "build\\bin\\$baseName.exe"
 $versionedExe = Join-Path $projectRoot "build\\bin\\$baseName-$version.exe"
 $pendingExe = Join-Path $projectRoot "build\\bin\\$baseName-$version.pending.exe"
+$generatedInfoPath = Join-Path $projectRoot 'build\\windows\\info.generated.json'
+$generatedManifestPath = Join-Path $projectRoot 'build\\windows\\wails.generated.manifest'
+
+Write-WindowsVersionInfo -Path $generatedInfoPath -ProductVersion $version -CompanyName $companyName -ProductName $productName -Comments $comments
+$manifestTemplate = Get-Content -Raw -Encoding UTF8 $manifestTemplatePath
+$manifestContent = $manifestTemplate.Replace('{{.Name}}', [string]$wailsConfig.name).Replace('{{.Info.ProductVersion}}', $version)
+[System.IO.File]::WriteAllText($generatedManifestPath, $manifestContent, [System.Text.UTF8Encoding]::new($false))
 
 Push-Location $projectRoot
 try {
   wails build -nopackage
-  go run .\\scripts\\patch_windows_resources -exe $sourceExe -icon $iconPath -manifest $manifestPath -info $infoPath
+  go run .\\scripts\\patch_windows_resources -exe $sourceExe -icon $iconPath -manifest $generatedManifestPath -info $generatedInfoPath
 } finally {
   Pop-Location
+  if (Test-Path $generatedInfoPath) {
+    Remove-Item $generatedInfoPath -Force -ErrorAction SilentlyContinue
+  }
+  if (Test-Path $generatedManifestPath) {
+    Remove-Item $generatedManifestPath -Force -ErrorAction SilentlyContinue
+  }
 }
 
 if (-not (Test-Path $sourceExe)) {

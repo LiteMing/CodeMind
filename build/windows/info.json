@@ -1,26 +1,26 @@
 {
 	"fixed": {
-		"file_version": "1.0.0.0",
-		"product_version": "1.0.0.0"
+		"file_version": "{{.Info.ProductVersion}}.0",
+		"product_version": "{{.Info.ProductVersion}}.0"
 	},
 	"info": {
 		"0000": {
-			"ProductVersion": "1.0.0",
-			"FileVersion": "1.0.0.0",
-			"CompanyName": "CodeMind",
-			"FileDescription": "CodeMind",
-			"LegalCopyright": "Copyright CodeMind",
-			"ProductName": "CodeMind",
-			"Comments": "Local-first mind mapping desktop app."
+			"ProductVersion": "{{.Info.ProductVersion}}",
+			"FileVersion": "{{.Info.ProductVersion}}.0",
+			"CompanyName": "{{.Info.CompanyName}}",
+			"FileDescription": "{{.Info.ProductName}}",
+			"LegalCopyright": "Copyright {{.Info.CompanyName}}",
+			"ProductName": "{{.Info.ProductName}}",
+			"Comments": "{{.Info.Comments}}"
 		},
 		"0409": {
-			"ProductVersion": "1.0.0",
-			"FileVersion": "1.0.0.0",
-			"CompanyName": "CodeMind",
-			"FileDescription": "CodeMind",
-			"LegalCopyright": "Copyright CodeMind",
-			"ProductName": "CodeMind",
-			"Comments": "Local-first mind mapping desktop app."
+			"ProductVersion": "{{.Info.ProductVersion}}",
+			"FileVersion": "{{.Info.ProductVersion}}.0",
+			"CompanyName": "{{.Info.CompanyName}}",
+			"FileDescription": "{{.Info.ProductName}}",
+			"LegalCopyright": "Copyright {{.Info.CompanyName}}",
+			"ProductName": "{{.Info.ProductName}}",
+			"Comments": "{{.Info.Comments}}"
 		}
 	}
 }

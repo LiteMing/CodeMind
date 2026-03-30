@@ -759,6 +759,11 @@ class MindMapApp {
       return
     }
 
+    if (target.closest('[data-node-collapse-button]')) {
+      event.preventDefault()
+      return
+    }
+
     if (event.shiftKey || event.ctrlKey || event.metaKey) {
       return
     }
@@ -2555,6 +2560,7 @@ class MindMapApp {
         const branchBadge = childCount > 0
           ? `<span class="node-branch-badge">${node.collapsed ? `+${hiddenDescendantCount(this.state.document, node.id)}` : childCount}</span>`
           : ''
+        const collapseLabel = node.collapsed ? this.t('action.expand') : this.t('action.collapse')
 
         const nodeDimensions = buildNodeDimensionStyle(node)
         const nodePresentationStyle = buildNodeColorStyle(nodeColor)
@@ -2574,6 +2580,16 @@ class MindMapApp {
         const resizeHandle = node.kind !== 'root'
           ? `<button type="button" class="node-resizer" data-node-resizer="${node.id}" aria-label="Resize node"></button>`
           : ''
+        const collapseButton = childCount > 0
+          ? `<button
+               type="button"
+               class="node-collapse-button"
+               data-node-collapse-button="${node.id}"
+               data-command="toggle-node-collapse:${node.id}"
+               aria-label="${escapeAttribute(collapseLabel)}"
+               title="${escapeAttribute(collapseLabel)}"
+             ></button>`
+          : ''
 
         return `
           <article
@@ -2582,6 +2598,7 @@ class MindMapApp {
             style="${articleStyle}"
           >
             ${content}
+            ${collapseButton}
             ${resizeHandle}
           </article>
         `
@@ -3206,6 +3223,7 @@ class MindMapApp {
     })
 
     this.state.document.nodes.push(newNode)
+    this.relayoutHierarchyAfterInsert(newNode)
     this.setSelection([newNode.id], newNode.id)
     this.state.editingNodeId = newNode.id
     touchDocument(this.state.document)
@@ -3246,6 +3264,7 @@ class MindMapApp {
     }
 
     this.state.document.nodes.push(newNode)
+    this.relayoutHierarchyAfterInsert(newNode)
     this.setSelection([newNode.id], newNode.id)
     this.state.editingNodeId = newNode.id
     touchDocument(this.state.document)
@@ -3541,29 +3560,7 @@ class MindMapApp {
       return
     }
 
-    if (childrenOf(this.state.document, selectedNode.id).length === 0) {
-      this.setStatus('status.noBranchToCollapse')
-      this.render()
-      return
-    }
-
-    const snapshot = this.createHistorySnapshot()
-    const changed = toggleCollapse(this.state.document, selectedNode.id)
-    if (!changed) {
-      this.setStatus('status.noBranchToCollapse')
-      this.render()
-      return
-    }
-
-    if (this.state.preferences.interaction.autoLayoutOnCollapse) {
-      autoLayoutHierarchy(this.state.document, this.state.preferences.appearance.layoutMode)
-    }
-
-    this.pushHistorySnapshot(snapshot)
-    touchDocument(this.state.document)
-    this.setStatus(selectedNode.collapsed ? 'status.branchCollapsed' : 'status.branchExpanded')
-    this.render()
-    this.scheduleAutosave('status.layoutSaveScheduled')
+    this.toggleNodeCollapse(selectedNode.id)
   }
 
   private autoLayout(): void {
@@ -3578,6 +3575,47 @@ class MindMapApp {
     this.pushHistorySnapshot(snapshot)
     touchDocument(this.state.document)
     this.setStatus('status.layoutUpdated', { count: movedNodes })
+    this.render()
+    this.scheduleAutosave('status.layoutSaveScheduled')
+  }
+
+  private relayoutHierarchyAfterInsert(insertedNode: MindNode): void {
+    if (!insertedNode.parentId) {
+      return
+    }
+
+    autoLayoutHierarchy(this.state.document, this.state.preferences.appearance.layoutMode)
+  }
+
+  private toggleNodeCollapse(nodeId: string): void {
+    const node = this.findNode(nodeId)
+    if (!node) {
+      return
+    }
+
+    if (childrenOf(this.state.document, nodeId).length === 0) {
+      this.setStatus('status.noBranchToCollapse')
+      this.render()
+      return
+    }
+
+    const snapshot = this.createHistorySnapshot()
+    this.setSelection([nodeId], nodeId)
+    const changed = toggleCollapse(this.state.document, nodeId)
+    if (!changed) {
+      this.setStatus('status.noBranchToCollapse')
+      this.render()
+      return
+    }
+
+    if (this.state.preferences.interaction.autoLayoutOnCollapse) {
+      autoLayoutHierarchy(this.state.document, this.state.preferences.appearance.layoutMode)
+    }
+
+    this.pushHistorySnapshot(snapshot)
+    touchDocument(this.state.document)
+    const toggledNode = this.findNode(nodeId)
+    this.setStatus(toggledNode?.collapsed ? 'status.branchCollapsed' : 'status.branchExpanded')
     this.render()
     this.scheduleAutosave('status.layoutSaveScheduled')
   }
@@ -3721,6 +3759,11 @@ class MindMapApp {
           return
         case 'toggle-collapse':
           this.toggleSelectedCollapse()
+          return
+        case 'toggle-node-collapse':
+          if (argument) {
+            this.toggleNodeCollapse(argument)
+          }
           return
         case 'delete-selected':
           this.deleteSelectedNode()

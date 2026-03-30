@@ -22,7 +22,7 @@ func main() {
 
 	flag.StringVar(&exePath, "exe", "", "path to the built exe")
 	flag.StringVar(&iconPath, "icon", "", "path to the ico file")
-	flag.StringVar(&manifestPath, "manifest", "", "path to the Windows manifest xml")
+	flag.StringVar(&manifestPath, "manifest", "", "path to the rendered Windows manifest xml")
 	flag.StringVar(&infoPath, "info", "", "path to the Windows version info json")
 	flag.Parse()
 

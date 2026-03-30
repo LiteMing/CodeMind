@@ -151,7 +151,7 @@ export function nextChildPosition(document: MindMapDocument, parentId: string, l
       ? children.filter((child) => branchDirection(document, child) === direction)
       : children
   const targetX = resolveChildColumn(document, parent, laneChildren, direction)
-  const targetY = nextStackedY(laneChildren, 'topic', parent.position.y)
+  const targetY = nextStackedY(document, laneChildren, 'topic', parent.position.y)
   return findAvailablePosition(document, { x: targetX, y: targetY }, 'topic')
 }
 
@@ -168,7 +168,7 @@ export function nextSiblingPosition(document: MindMapDocument, node: MindNode, l
   const siblings = childrenOf(document, node.parentId)
   return findAvailablePosition(
     document,
-    { x: node.position.x, y: nextStackedY(siblings, node.kind === 'floating' ? 'floating' : 'topic', node.position.y + NODE_GAP_Y) },
+    { x: node.position.x, y: nextStackedY(document, siblings, node.kind === 'floating' ? 'floating' : 'topic', node.position.y + NODE_GAP_Y) },
     node.kind === 'floating' ? 'floating' : 'topic',
   )
 }
@@ -188,7 +188,7 @@ export function nextFloatingPosition(document: MindMapDocument): Position {
     document,
     {
       x: lastFloatingNode.position.x + 36,
-      y: nextStackedY(floatingNodes, 'floating', lastFloatingNode.position.y + NODE_GAP_Y),
+      y: nextStackedY(document, floatingNodes, 'floating', lastFloatingNode.position.y + NODE_GAP_Y),
     },
     'floating',
   )
@@ -249,13 +249,14 @@ function resolveChildColumn(document: MindMapDocument, parent: MindNode, childre
   return resolveAlignedChildCenter(rightColumn, direction, defaultNodeWidth('topic'))
 }
 
-function nextStackedY(nodes: MindNode[], kind: MindNode['kind'], fallbackY: number): number {
+function nextStackedY(document: MindMapDocument, nodes: MindNode[], kind: MindNode['kind'], fallbackY: number): number {
   if (nodes.length === 0) {
     return fallbackY
   }
 
   const lowestBottom = nodes.reduce((maxBottom, node) => {
-    return Math.max(maxBottom, node.position.y + estimateNodeHeight(node, 0) / 2)
+    const childCount = childrenOf(document, node.id).length
+    return Math.max(maxBottom, node.position.y + estimateNodeHeight(node, childCount) / 2)
   }, Number.NEGATIVE_INFINITY)
 
   return Math.round(lowestBottom + COMPACT_NODE_GAP_Y + defaultNodeHeight(kind) / 2)
@@ -469,7 +470,7 @@ function layoutBranch(
   node.updatedAt = new Date().toISOString()
   moved.add(node.id)
 
-  const children = childrenOf(document, nodeId)
+  const children = branchChildren(document, node)
   if (children.length === 0) {
     return
   }
@@ -483,7 +484,12 @@ function layoutBranch(
 }
 
 function branchWeight(document: MindMapDocument, nodeId: string): number {
-  const children = childrenOf(document, nodeId)
+  const node = findNode(document, nodeId)
+  if (!node) {
+    return 1
+  }
+
+  const children = branchChildren(document, node)
   if (children.length === 0) {
     return 1
   }
@@ -492,4 +498,12 @@ function branchWeight(document: MindMapDocument, nodeId: string): number {
     1,
     children.reduce((sum, child) => sum + branchWeight(document, child.id), 0),
   )
+}
+
+function branchChildren(document: MindMapDocument, node: MindNode): MindNode[] {
+  if (node.collapsed) {
+    return []
+  }
+
+  return childrenOf(document, node.id)
 }

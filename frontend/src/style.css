@@ -1311,6 +1311,43 @@ kbd {
   border-bottom-right-radius: 4px;
 }
 
+.node-collapse-button {
+  position: absolute;
+  top: 50%;
+  right: -12px;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--line) 80%, transparent);
+  background: var(--surface);
+  color: var(--muted);
+  box-shadow: var(--shadow-card);
+  transform: translateY(-50%);
+  cursor: pointer;
+  z-index: 2;
+}
+
+.node-collapse-button::before {
+  content: '';
+  display: block;
+  width: 6px;
+  height: 6px;
+  margin: auto;
+  border-radius: 999px;
+  background: currentColor;
+}
+
+.node-collapse-button:hover {
+  color: var(--accent-strong);
+  border-color: color-mix(in srgb, var(--accent) 48%, var(--line));
+}
+
+.node-collapse-button:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 70%, transparent);
+  outline-offset: 2px;
+}
+
 .node-title {
   display: block;
   flex: 1 1 auto;
@@ -1391,6 +1428,12 @@ kbd {
 
 .node-card.is-collapsed .node-shell {
   border-style: dashed;
+}
+
+.node-card.is-collapsed .node-collapse-button {
+  border-color: color-mix(in srgb, var(--accent) 62%, transparent);
+  background: color-mix(in srgb, var(--accent) 88%, var(--surface));
+  color: #ffffff;
 }
 
 .priority-badge {
