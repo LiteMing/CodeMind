@@ -416,10 +416,12 @@ class MindMapApp {
     | {
         pointerId: number
         nodeId: string
+        button: number
         startClientX: number
         startClientY: number
         clientX: number
         clientY: number
+        dragNodeIds: string[]
         activated: boolean
       }
     | null = null
@@ -771,7 +773,11 @@ class MindMapApp {
       return
     }
 
-    if (event.button === 2) {
+    const nodeButton = target.closest<HTMLElement>('[data-node-button]')
+    const nodeId = nodeButton?.dataset.nodeButton
+    const longPressAction = this.longPressActionForButton(event.button)
+
+    if (event.button === 2 && !nodeId) {
       const withinScroll = target.closest<HTMLElement>('[data-workspace-scroll]')
       if (!withinScroll) {
         return
@@ -791,13 +797,16 @@ class MindMapApp {
       return
     }
 
-    if (event.button !== 0) {
+    if (event.button !== 0 && event.button !== 1 && event.button !== 2) {
       return
     }
 
     const resizeHandle = target.closest<HTMLElement>('[data-node-resizer]')
     const resizeNodeId = resizeHandle?.dataset.nodeResizer
     if (resizeNodeId) {
+      if (event.button !== 0) {
+        return
+      }
       const node = this.findNode(resizeNodeId)
       if (!node || node.kind === 'root') {
         return
@@ -830,11 +839,11 @@ class MindMapApp {
       return
     }
 
-    const nodeButton = target.closest<HTMLElement>('[data-node-button]')
-    const nodeId = nodeButton?.dataset.nodeButton
     if (!nodeId) {
       this.clearNodeLongPress()
-      this.tryStartCanvasPan(event, target)
+      if (event.button === 0) {
+        this.tryStartCanvasPan(event, target)
+      }
       return
     }
 
@@ -846,45 +855,28 @@ class MindMapApp {
     const selectedDragIds = this.state.selectedNodeIds.includes(nodeId) ? this.state.selectedNodeIds : [nodeId]
     const dragNodeIds = this.resolveDragNodeIds(selectedDragIds)
 
-    if (!event.shiftKey && !event.ctrlKey && !event.metaKey && event.detail === 1) {
-      this.armNodeLongPress(nodeId, event)
-    } else {
-      this.clearNodeLongPress()
-    }
-
     if (event.detail >= 2) {
-      return
-    }
-
-    if (!node || dragNodeIds.length === 0 || this.state.editingNodeId === nodeId || this.state.connectSourceNodeId !== null) {
       this.clearNodeLongPress()
-      this.tryStartCanvasPan(event, target)
       return
     }
 
-    const canvas = this.refs?.canvas
-    if (!canvas) {
+    if (!node || (event.button === 0 && dragNodeIds.length === 0) || this.state.editingNodeId === nodeId || this.state.connectSourceNodeId !== null) {
+      this.clearNodeLongPress()
+      if (event.button === 0) {
+        this.tryStartCanvasPan(event, target)
+      }
       return
     }
 
-    const pointerPosition = this.clientToCanvasPosition(event.clientX, event.clientY)
-    this.state.drag = {
-      nodeId,
-      nodeIds: dragNodeIds,
-      offsetX: pointerPosition.x - node.position.x,
-      offsetY: pointerPosition.y - node.position.y,
-      initialPositions: Object.fromEntries(
-        dragNodeIds
-          .map((candidateId) => {
-            const candidateNode = this.findNode(candidateId)
-            if (!candidateNode) {
-              return null
-            }
-            return [candidateId, { ...candidateNode.position }] as const
-          })
-          .filter((entry): entry is readonly [string, Position] => entry !== null),
-      ),
-      historyCaptured: false,
+    if (longPressAction !== 'none') {
+      this.armNodeLongPress(nodeId, dragNodeIds, event)
+      event.preventDefault()
+      return
+    }
+
+    this.clearNodeLongPress()
+    if (event.button === 0) {
+      this.startNodeDrag(nodeId, dragNodeIds, event)
     }
   }
 
@@ -941,7 +933,11 @@ class MindMapApp {
         !this.longPressState.activated &&
         Math.hypot(event.clientX - this.longPressState.startClientX, event.clientY - this.longPressState.startClientY) > NODE_LONG_PRESS_MOVE_THRESHOLD
       ) {
+        const { nodeId, dragNodeIds, button } = this.longPressState
         this.clearNodeLongPress()
+        if (button === 0 && dragNodeIds.length > 0) {
+          this.startNodeDrag(nodeId, dragNodeIds, event)
+        }
       }
     }
 
@@ -1387,24 +1383,75 @@ class MindMapApp {
     this.pendingNodeGestureNodeId = null
   }
 
-  private armNodeLongPress(nodeId: string, event: PointerEvent): void {
+  private startNodeDrag(nodeId: string, dragNodeIds: string[], event: PointerEvent): void {
+    const node = this.findNode(nodeId)
+    const canvas = this.refs?.canvas
+    if (!node || !canvas) {
+      return
+    }
+
+    const pointerPosition = this.clientToCanvasPosition(event.clientX, event.clientY)
+    this.state.drag = {
+      nodeId,
+      nodeIds: dragNodeIds,
+      offsetX: pointerPosition.x - node.position.x,
+      offsetY: pointerPosition.y - node.position.y,
+      initialPositions: Object.fromEntries(
+        dragNodeIds
+          .map((candidateId) => {
+            const candidateNode = this.findNode(candidateId)
+            if (!candidateNode) {
+              return null
+            }
+            return [candidateId, { ...candidateNode.position }] as const
+          })
+          .filter((entry): entry is readonly [string, Position] => entry !== null),
+      ),
+      historyCaptured: false,
+    }
+  }
+
+  private longPressActionForButton(button: number): GestureAction {
+    switch (button) {
+      case 0:
+        return this.state.preferences.interaction.leftLongPressAction
+      case 1:
+        return this.state.preferences.interaction.middleLongPressAction
+      case 2:
+        return this.state.preferences.interaction.rightLongPressAction
+      default:
+        return 'none'
+    }
+  }
+
+  private armNodeLongPress(nodeId: string, dragNodeIds: string[], event: PointerEvent): void {
     this.clearNodeLongPress()
     this.longPressState = {
       pointerId: event.pointerId,
       nodeId,
+      button: event.button,
       startClientX: event.clientX,
       startClientY: event.clientY,
       clientX: event.clientX,
       clientY: event.clientY,
+      dragNodeIds,
       activated: false,
     }
     this.longPressHandle = window.setTimeout(() => {
       if (!this.longPressState || this.longPressState.nodeId !== nodeId) {
         return
       }
+      const action = this.longPressActionForButton(this.longPressState.button)
+      if (action === 'none') {
+        this.clearNodeLongPress()
+        return
+      }
       this.longPressState.activated = true
       this.state.drag = null
-      void this.runNodeGestureAction(this.state.preferences.interaction.longPressAction, nodeId, {
+      if (this.longPressState.button === 2) {
+        this.suppressContextMenuOnce = true
+      }
+      void this.runNodeGestureAction(action, nodeId, {
         clientX: this.longPressState.clientX,
         clientY: this.longPressState.clientY,
       })
@@ -1547,6 +1594,11 @@ class MindMapApp {
       return
     }
 
+    if (target instanceof HTMLTextAreaElement && target.dataset.nodeNote) {
+      this.syncInspectorNoteInputHeight(target)
+      return
+    }
+
     const aiField = target.dataset.aiField
     if (aiField) {
       switch (aiField) {
@@ -1650,6 +1702,7 @@ class MindMapApp {
     this.renderHeader()
     this.renderWorkspace()
     this.renderInspector()
+    this.syncInspectorNoteInputs()
     this.renderOverlay()
     this.renderSettings()
     this.renderAIWorkspace()
@@ -2271,6 +2324,9 @@ class MindMapApp {
 
     this.refs.overlayLayer.classList.toggle('is-visible', Boolean(marqueeMarkup || contextMenuMarkup || aiWheelMarkup))
     this.refs.overlayLayer.innerHTML = `${marqueeMarkup}${contextMenuMarkup}${aiWheelMarkup}`
+    if (this.state.contextMenu) {
+      this.syncContextMenuPosition()
+    }
   }
 
   private renderMarqueeBox(marquee: MarqueeState): string {
@@ -2297,19 +2353,20 @@ class MindMapApp {
     }
 
     const stageRect = this.refs.overlayLayer.getBoundingClientRect()
-    const estimatedWidth = 236
-    const estimatedHeight = 320
-    const left = clamp(this.state.contextMenu.clientX - stageRect.left, 12, Math.max(12, stageRect.width - estimatedWidth - 12))
-    const top = clamp(this.state.contextMenu.clientY - stageRect.top, 12, Math.max(12, stageRect.height - estimatedHeight - 12))
+    const left = Math.round(this.state.contextMenu.clientX - stageRect.left)
+    const top = Math.round(this.state.contextMenu.clientY - stageRect.top)
     const selectedIds = this.selectedNodeIds()
     const selectedCount = selectedIds.length
     const primaryNode = this.selectedNode()
-    const primaryChildren = primaryNode ? childrenOf(this.state.document, primaryNode.id).length : 0
-    const canUseSingleNodeActions = selectedCount === 1 && Boolean(primaryNode)
-    const canDelete = selectedIds.some((nodeId) => this.findNode(nodeId)?.kind !== 'root')
-    const heading = selectedCount > 1
-      ? this.t('context.selectionCount', { value: selectedCount })
-      : escapeHtml(primaryNode?.title ?? this.t('context.canvas'))
+    const isCanvasMenu = this.state.contextMenu.nodeId === null
+    const primaryChildren = !isCanvasMenu && primaryNode ? childrenOf(this.state.document, primaryNode.id).length : 0
+    const canUseSingleNodeActions = !isCanvasMenu && selectedCount === 1 && Boolean(primaryNode)
+    const canDelete = !isCanvasMenu && selectedIds.some((nodeId) => this.findNode(nodeId)?.kind !== 'root')
+    const heading = isCanvasMenu
+      ? this.t('context.canvas')
+      : selectedCount > 1
+        ? this.t('context.selectionCount', { value: selectedCount })
+        : escapeHtml(primaryNode?.title ?? this.t('context.canvas'))
 
     return `
       <section class="context-menu" data-context-menu style="left: ${Math.round(left)}px; top: ${Math.round(top)}px;">
@@ -2317,19 +2374,37 @@ class MindMapApp {
         <h3 class="context-menu-title">${heading}</h3>
         <button type="button" class="chip-button context-menu-button" data-command="new-child" ${canUseSingleNodeActions ? '' : 'disabled'}>${this.t('action.newChild')}</button>
         <button type="button" class="chip-button context-menu-button" data-command="new-sibling" ${canUseSingleNodeActions ? '' : 'disabled'}>${this.t('action.newSibling')}</button>
-        <button type="button" class="chip-button context-menu-button" data-command="new-floating" ${canUseSingleNodeActions ? '' : 'disabled'}>${this.t('action.newFloating')}</button>
+        <button type="button" class="chip-button context-menu-button" data-command="new-floating">${this.t('action.newFloating')}</button>
         <button type="button" class="chip-button context-menu-button" data-command="rename-selected" ${canUseSingleNodeActions ? '' : 'disabled'}>${this.t('action.rename')}</button>
         <button type="button" class="chip-button context-menu-button" data-command="toggle-collapse" ${canUseSingleNodeActions && primaryChildren > 0 ? '' : 'disabled'}>
           ${primaryNode?.collapsed ? this.t('action.expand') : this.t('action.collapse')}
         </button>
         <button type="button" class="chip-button context-menu-button" data-command="connect-selected" ${canUseSingleNodeActions ? '' : 'disabled'}>${this.t('action.linkRelation')}</button>
         <div class="context-menu-divider"></div>
-        <button type="button" class="chip-button context-menu-button" data-command="set-priority:P0">${this.t('context.priorityP0')}</button>
-        <button type="button" class="chip-button context-menu-button" data-command="set-priority:P1">${this.t('context.priorityP1')}</button>
-        <button type="button" class="chip-button context-menu-button" data-command="set-priority:">${this.t('context.clearPriority')}</button>
+        <button type="button" class="chip-button context-menu-button" data-command="set-priority:P0" ${canUseSingleNodeActions ? '' : 'disabled'}>${this.t('context.priorityP0')}</button>
+        <button type="button" class="chip-button context-menu-button" data-command="set-priority:P1" ${canUseSingleNodeActions ? '' : 'disabled'}>${this.t('context.priorityP1')}</button>
+        <button type="button" class="chip-button context-menu-button" data-command="set-priority:" ${canUseSingleNodeActions ? '' : 'disabled'}>${this.t('context.clearPriority')}</button>
         <button type="button" class="chip-button danger context-menu-button" data-command="delete-selected" ${canDelete ? '' : 'disabled'}>${this.t('action.delete')}</button>
       </section>
     `
+  }
+
+  private syncContextMenuPosition(): void {
+    if (!this.refs || !this.state.contextMenu) {
+      return
+    }
+
+    const menu = this.refs.overlayLayer.querySelector<HTMLElement>('[data-context-menu]')
+    if (!menu) {
+      return
+    }
+
+    const stageRect = this.refs.overlayLayer.getBoundingClientRect()
+    const menuRect = menu.getBoundingClientRect()
+    const left = clamp(this.state.contextMenu.clientX - stageRect.left, 12, Math.max(12, stageRect.width - menuRect.width - 12))
+    const top = clamp(this.state.contextMenu.clientY - stageRect.top, 12, Math.max(12, stageRect.height - menuRect.height - 12))
+    menu.style.left = `${Math.round(left)}px`
+    menu.style.top = `${Math.round(top)}px`
   }
 
   private renderAIWheel(): string {
@@ -2505,9 +2580,21 @@ class MindMapApp {
                 </select>
               </label>
               <label class="field-row">
-                <span>${this.t('settings.longPressAction')}</span>
-                <select class="settings-select" data-setting-field="interaction.longPressAction">
-                  ${this.renderGestureActionOptions(this.state.preferences.interaction.longPressAction)}
+                <span>${this.t('settings.leftLongPressAction')}</span>
+                <select class="settings-select" data-setting-field="interaction.leftLongPressAction">
+                  ${this.renderGestureActionOptions(this.state.preferences.interaction.leftLongPressAction)}
+                </select>
+              </label>
+              <label class="field-row">
+                <span>${this.t('settings.middleLongPressAction')}</span>
+                <select class="settings-select" data-setting-field="interaction.middleLongPressAction">
+                  ${this.renderGestureActionOptions(this.state.preferences.interaction.middleLongPressAction)}
+                </select>
+              </label>
+              <label class="field-row">
+                <span>${this.t('settings.rightLongPressAction')}</span>
+                <select class="settings-select" data-setting-field="interaction.rightLongPressAction">
+                  ${this.renderGestureActionOptions(this.state.preferences.interaction.rightLongPressAction)}
                 </select>
               </label>
               <label class="field-row">
@@ -3373,6 +3460,27 @@ class MindMapApp {
     }
 
     editor.style.height = `${Math.max(editor.scrollHeight, minHeight)}px`
+  }
+
+  private syncInspectorNoteInputs(): void {
+    if (!this.refs) {
+      return
+    }
+
+    for (const noteInput of this.refs.inspector.querySelectorAll<HTMLTextAreaElement>('[data-node-note]')) {
+      this.syncInspectorNoteInputHeight(noteInput)
+    }
+  }
+
+  private syncInspectorNoteInputHeight(input: HTMLTextAreaElement): void {
+    const computed = window.getComputedStyle(input)
+    const minHeight = Math.max(124, parsePixelValue(computed.minHeight))
+    const maxHeight = Math.max(minHeight, parsePixelValue(computed.maxHeight) || 320)
+
+    input.style.height = 'auto'
+    const nextHeight = clamp(input.scrollHeight, minHeight, maxHeight)
+    input.style.height = `${nextHeight}px`
+    input.style.overflowY = input.scrollHeight > maxHeight ? 'auto' : 'hidden'
   }
 
   private measureNodeEditorLineWidth(text: string, font: string): number {
@@ -5507,6 +5615,29 @@ class MindMapApp {
       case 'interaction.longPressAction':
         this.updatePreferences((preferences) => {
           preferences.interaction.longPressAction = normalizeGestureAction(value, preferences.interaction.longPressAction)
+          preferences.interaction.leftLongPressAction = preferences.interaction.longPressAction
+        })
+        this.setStatus('status.interactionUpdated')
+        this.render()
+        return
+      case 'interaction.leftLongPressAction':
+        this.updatePreferences((preferences) => {
+          preferences.interaction.leftLongPressAction = normalizeGestureAction(value, preferences.interaction.leftLongPressAction)
+          preferences.interaction.longPressAction = preferences.interaction.leftLongPressAction
+        })
+        this.setStatus('status.interactionUpdated')
+        this.render()
+        return
+      case 'interaction.middleLongPressAction':
+        this.updatePreferences((preferences) => {
+          preferences.interaction.middleLongPressAction = normalizeGestureAction(value, preferences.interaction.middleLongPressAction)
+        })
+        this.setStatus('status.interactionUpdated')
+        this.render()
+        return
+      case 'interaction.rightLongPressAction':
+        this.updatePreferences((preferences) => {
+          preferences.interaction.rightLongPressAction = normalizeGestureAction(value, preferences.interaction.rightLongPressAction)
         })
         this.setStatus('status.interactionUpdated')
         this.render()

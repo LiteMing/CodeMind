@@ -31,6 +31,9 @@ export function createDefaultPreferences(): AppPreferences {
       doubleClickAction: 'rename',
       tripleClickAction: 'ai-quick',
       longPressAction: 'ai-wheel',
+      leftLongPressAction: 'ai-wheel',
+      middleLongPressAction: 'none',
+      rightLongPressAction: 'none',
       spaceAction: 'edit-tail',
     },
     ai: {
@@ -53,6 +56,8 @@ export function loadPreferences(): AppPreferences {
 
   try {
     const parsed = JSON.parse(raw) as Partial<AppPreferences>
+    const parsedInteraction = (parsed.interaction ?? {}) as Partial<AppPreferences['interaction']>
+    const legacyLongPressAction = normalizeGestureAction(parsedInteraction.longPressAction, defaults.interaction.leftLongPressAction)
     return {
       locale: normalizeLocale(parsed.locale) ?? defaults.locale,
       onboardingCompleted: parsed.onboardingCompleted ?? defaults.onboardingCompleted,
@@ -63,18 +68,21 @@ export function loadPreferences(): AppPreferences {
         topPanelPosition: normalizeTopPanelPosition(parsed.appearance?.topPanelPosition),
       },
       interaction: {
-        dragSubtreeWithParent: normalizeBoolean(parsed.interaction?.dragSubtreeWithParent, defaults.interaction.dragSubtreeWithParent),
-        dragSnap: normalizeBoolean(parsed.interaction?.dragSnap, defaults.interaction.dragSnap),
-        autoLayoutOnCollapse: normalizeBoolean(parsed.interaction?.autoLayoutOnCollapse, defaults.interaction.autoLayoutOnCollapse),
-        autoSnapshots: normalizeBoolean(parsed.interaction?.autoSnapshots, defaults.interaction.autoSnapshots),
-        aiQuickChildren: normalizeBoolean(parsed.interaction?.aiQuickChildren, defaults.interaction.aiQuickChildren),
-        aiQuickSiblings: normalizeBoolean(parsed.interaction?.aiQuickSiblings, defaults.interaction.aiQuickSiblings),
-        aiQuickNotes: normalizeBoolean(parsed.interaction?.aiQuickNotes, defaults.interaction.aiQuickNotes),
-        aiQuickRelations: normalizeBoolean(parsed.interaction?.aiQuickRelations, defaults.interaction.aiQuickRelations),
-        doubleClickAction: normalizeGestureAction(parsed.interaction?.doubleClickAction, defaults.interaction.doubleClickAction),
-        tripleClickAction: normalizeGestureAction(parsed.interaction?.tripleClickAction, defaults.interaction.tripleClickAction),
-        longPressAction: normalizeGestureAction(parsed.interaction?.longPressAction, defaults.interaction.longPressAction),
-        spaceAction: normalizeGestureAction(parsed.interaction?.spaceAction, defaults.interaction.spaceAction),
+        dragSubtreeWithParent: normalizeBoolean(parsedInteraction.dragSubtreeWithParent, defaults.interaction.dragSubtreeWithParent),
+        dragSnap: normalizeBoolean(parsedInteraction.dragSnap, defaults.interaction.dragSnap),
+        autoLayoutOnCollapse: normalizeBoolean(parsedInteraction.autoLayoutOnCollapse, defaults.interaction.autoLayoutOnCollapse),
+        autoSnapshots: normalizeBoolean(parsedInteraction.autoSnapshots, defaults.interaction.autoSnapshots),
+        aiQuickChildren: normalizeBoolean(parsedInteraction.aiQuickChildren, defaults.interaction.aiQuickChildren),
+        aiQuickSiblings: normalizeBoolean(parsedInteraction.aiQuickSiblings, defaults.interaction.aiQuickSiblings),
+        aiQuickNotes: normalizeBoolean(parsedInteraction.aiQuickNotes, defaults.interaction.aiQuickNotes),
+        aiQuickRelations: normalizeBoolean(parsedInteraction.aiQuickRelations, defaults.interaction.aiQuickRelations),
+        doubleClickAction: normalizeGestureAction(parsedInteraction.doubleClickAction, defaults.interaction.doubleClickAction),
+        tripleClickAction: normalizeGestureAction(parsedInteraction.tripleClickAction, defaults.interaction.tripleClickAction),
+        longPressAction: legacyLongPressAction,
+        leftLongPressAction: normalizeGestureAction(parsedInteraction.leftLongPressAction, legacyLongPressAction),
+        middleLongPressAction: normalizeGestureAction(parsedInteraction.middleLongPressAction, defaults.interaction.middleLongPressAction),
+        rightLongPressAction: normalizeGestureAction(parsedInteraction.rightLongPressAction, defaults.interaction.rightLongPressAction),
+        spaceAction: normalizeGestureAction(parsedInteraction.spaceAction, defaults.interaction.spaceAction),
       },
       ai: {
         provider: parsed.ai?.provider === 'openai-compatible' ? 'openai-compatible' : 'lmstudio',

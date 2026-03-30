@@ -104,6 +104,9 @@ export interface InteractionSettings {
   doubleClickAction: GestureAction
   tripleClickAction: GestureAction
   longPressAction: GestureAction
+  leftLongPressAction: GestureAction
+  middleLongPressAction: GestureAction
+  rightLongPressAction: GestureAction
   spaceAction: GestureAction
 }
 

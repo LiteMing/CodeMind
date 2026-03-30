@@ -673,19 +673,26 @@ kbd {
 .inspector {
   position: absolute;
   top: 0;
+  bottom: 16px;
   right: 16px;
   z-index: 5;
   width: min(340px, calc(100% - 32px));
-  overflow: visible;
+  overflow-x: visible;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   display: flex;
   flex-direction: column;
   gap: 12px;
+  padding-right: 4px;
 }
 
 .inspector.is-collapsed {
   width: fit-content;
   max-width: min(240px, calc(100% - 32px));
   align-items: flex-end;
+  bottom: auto;
+  overflow: visible;
+  padding-right: 0;
 }
 
 .overlay-layer {
@@ -896,8 +903,10 @@ kbd {
 
 .inspector-note-input {
   min-height: 124px;
+  max-height: 320px;
   margin-top: 8px;
-  resize: vertical;
+  resize: none;
+  overflow-y: auto;
   line-height: 1.5;
 }
 
@@ -1838,6 +1847,9 @@ code {
     position: static;
     width: auto;
     margin: 12px;
+    max-height: none;
+    overflow: visible;
+    padding-right: 0;
   }
 
   .home-hero {
