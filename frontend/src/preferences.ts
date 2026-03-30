@@ -1,4 +1,4 @@
-import type { AppPreferences, EdgeStyle, LayoutMode, Locale, TopPanelPosition } from './types'
+import type { AppPreferences, ChromeLayout, EdgeStyle, GestureAction, LayoutMode, Locale, TopPanelPosition } from './types'
 
 const STORAGE_KEY = 'code-mind.preferences'
 export const DEFAULT_LM_STUDIO_URL = 'http://127.0.0.1:1234/v1'
@@ -16,6 +16,7 @@ export function createDefaultPreferences(): AppPreferences {
     appearance: {
       edgeStyle: 'curve',
       layoutMode: 'balanced',
+      chromeLayout: 'floating',
       topPanelPosition: 'left',
     },
     interaction: {
@@ -23,6 +24,14 @@ export function createDefaultPreferences(): AppPreferences {
       dragSnap: true,
       autoLayoutOnCollapse: true,
       autoSnapshots: true,
+      aiQuickChildren: true,
+      aiQuickSiblings: false,
+      aiQuickNotes: false,
+      aiQuickRelations: false,
+      doubleClickAction: 'rename',
+      tripleClickAction: 'ai-quick',
+      longPressAction: 'ai-wheel',
+      spaceAction: 'edit-tail',
     },
     ai: {
       provider: 'lmstudio',
@@ -50,6 +59,7 @@ export function loadPreferences(): AppPreferences {
       appearance: {
         edgeStyle: normalizeEdgeStyle(parsed.appearance?.edgeStyle),
         layoutMode: normalizeLayoutMode(parsed.appearance?.layoutMode),
+        chromeLayout: normalizeChromeLayout(parsed.appearance?.chromeLayout),
         topPanelPosition: normalizeTopPanelPosition(parsed.appearance?.topPanelPosition),
       },
       interaction: {
@@ -57,6 +67,14 @@ export function loadPreferences(): AppPreferences {
         dragSnap: normalizeBoolean(parsed.interaction?.dragSnap, defaults.interaction.dragSnap),
         autoLayoutOnCollapse: normalizeBoolean(parsed.interaction?.autoLayoutOnCollapse, defaults.interaction.autoLayoutOnCollapse),
         autoSnapshots: normalizeBoolean(parsed.interaction?.autoSnapshots, defaults.interaction.autoSnapshots),
+        aiQuickChildren: normalizeBoolean(parsed.interaction?.aiQuickChildren, defaults.interaction.aiQuickChildren),
+        aiQuickSiblings: normalizeBoolean(parsed.interaction?.aiQuickSiblings, defaults.interaction.aiQuickSiblings),
+        aiQuickNotes: normalizeBoolean(parsed.interaction?.aiQuickNotes, defaults.interaction.aiQuickNotes),
+        aiQuickRelations: normalizeBoolean(parsed.interaction?.aiQuickRelations, defaults.interaction.aiQuickRelations),
+        doubleClickAction: normalizeGestureAction(parsed.interaction?.doubleClickAction, defaults.interaction.doubleClickAction),
+        tripleClickAction: normalizeGestureAction(parsed.interaction?.tripleClickAction, defaults.interaction.tripleClickAction),
+        longPressAction: normalizeGestureAction(parsed.interaction?.longPressAction, defaults.interaction.longPressAction),
+        spaceAction: normalizeGestureAction(parsed.interaction?.spaceAction, defaults.interaction.spaceAction),
       },
       ai: {
         provider: parsed.ai?.provider === 'openai-compatible' ? 'openai-compatible' : 'lmstudio',
@@ -96,11 +114,34 @@ export function normalizeLayoutMode(value: unknown): LayoutMode {
   return value === 'right' ? 'right' : 'balanced'
 }
 
+export function normalizeChromeLayout(value: unknown): ChromeLayout {
+  return value === 'fixed' ? 'fixed' : 'floating'
+}
+
 export function normalizeTopPanelPosition(value: unknown): TopPanelPosition {
   if (value === 'center' || value === 'right') {
     return value
   }
   return 'left'
+}
+
+export function normalizeGestureAction(value: unknown, fallback: GestureAction = 'none'): GestureAction {
+  switch (value) {
+    case 'rename':
+    case 'edit-tail':
+    case 'ai-quick':
+    case 'ai-suggest-children':
+    case 'ai-suggest-siblings':
+    case 'ai-wheel':
+    case 'new-child':
+    case 'new-sibling':
+    case 'new-floating':
+    case 'toggle-collapse':
+    case 'none':
+      return value
+    default:
+      return fallback
+  }
 }
 
 export function normalizeBoolean(value: unknown, fallback = false): boolean {

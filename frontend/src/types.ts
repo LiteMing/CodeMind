@@ -4,7 +4,20 @@ export type AIProvider = 'lmstudio' | 'openai-compatible'
 export type AITemplateId = 'concept-graph' | 'project-planning' | 'character-network'
 export type EdgeStyle = 'curve' | 'orthogonal'
 export type LayoutMode = 'balanced' | 'right'
+export type ChromeLayout = 'floating' | 'fixed'
 export type TopPanelPosition = 'left' | 'center' | 'right'
+export type GestureAction =
+  | 'none'
+  | 'rename'
+  | 'edit-tail'
+  | 'ai-quick'
+  | 'ai-suggest-children'
+  | 'ai-suggest-siblings'
+  | 'ai-wheel'
+  | 'new-child'
+  | 'new-sibling'
+  | 'new-floating'
+  | 'toggle-collapse'
 
 export type NodeKind = 'root' | 'topic' | 'floating'
 
@@ -75,6 +88,7 @@ export interface AISettings {
 export interface AppearanceSettings {
   edgeStyle: EdgeStyle
   layoutMode: LayoutMode
+  chromeLayout: ChromeLayout
   topPanelPosition: TopPanelPosition
 }
 
@@ -83,6 +97,14 @@ export interface InteractionSettings {
   dragSnap: boolean
   autoLayoutOnCollapse: boolean
   autoSnapshots: boolean
+  aiQuickChildren: boolean
+  aiQuickSiblings: boolean
+  aiQuickNotes: boolean
+  aiQuickRelations: boolean
+  doubleClickAction: GestureAction
+  tripleClickAction: GestureAction
+  longPressAction: GestureAction
+  spaceAction: GestureAction
 }
 
 export interface AIDebugRequest {

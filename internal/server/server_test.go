@@ -801,6 +801,159 @@ func TestAIGenerateEndpointRetriesAfterParseFailure(t *testing.T) {
 	}
 }
 
+func TestAIRelationsEndpointFocusFiltersSuggestions(t *testing.T) {
+	var captured openAIChatRequest
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/models":
+			_, _ = w.Write([]byte(`{"data":[{"id":"qwen-local"}]}`))
+		case "/v1/chat/completions":
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				t.Fatalf("failed to read upstream request body: %v", err)
+			}
+			if err := json.Unmarshal(body, &captured); err != nil {
+				t.Fatalf("failed to decode upstream request: %v", err)
+			}
+			writeOpenAIChatResponse(t, w, "qwen-local", `{"summary":"Focused relation scan","relations":[{"sourceId":"scope","targetId":"timeline","label":"影响排期","reason":"范围影响排期","confidence":0.94},{"sourceId":"risk","targetId":"timeline","label":"影响排期","reason":"风险也影响排期","confidence":0.76}]}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer upstream.Close()
+
+	server := newTestServer(t)
+	server.httpClient = upstream.Client()
+	handler := server.Handler()
+
+	doc := mindmap.NewDefaultDocument()
+	doc.Nodes = append(doc.Nodes,
+		mindmap.Node{ID: "scope", ParentID: "root", Kind: mindmap.NodeKindTopic, Title: "Scope", Position: mindmap.Position{X: 1080, Y: 280}},
+		mindmap.Node{ID: "timeline", ParentID: "root", Kind: mindmap.NodeKindTopic, Title: "Timeline", Position: mindmap.Position{X: 1080, Y: 400}},
+		mindmap.Node{ID: "risk", ParentID: "root", Kind: mindmap.NodeKindTopic, Title: "Risk", Position: mindmap.Position{X: 1080, Y: 520}},
+	)
+
+	payload, err := json.Marshal(map[string]any{
+		"settings": map[string]any{
+			"baseUrl": upstream.URL,
+			"model":   "",
+		},
+		"document":     doc,
+		"focusNodeIds": []string{"scope"},
+		"instructions": "Focus on practical dependency links.",
+	})
+	if err != nil {
+		t.Fatalf("failed to marshal request: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/ai/relations", bytes.NewReader(payload))
+	req.Header.Set("Content-Type", "application/json")
+	res := httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d with body %s", res.Code, res.Body.String())
+	}
+
+	var response aiRelationsResponse
+	if err := json.Unmarshal(res.Body.Bytes(), &response); err != nil {
+		t.Fatalf("failed to decode relation response: %v", err)
+	}
+	if len(response.Relations) != 1 {
+		t.Fatalf("expected focused filtering to keep 1 relation, got %+v", response.Relations)
+	}
+	if response.Relations[0].SourceID != "scope" && response.Relations[0].TargetID != "scope" {
+		t.Fatalf("expected focused relation to involve scope, got %+v", response.Relations[0])
+	}
+
+	joinedPrompt := make([]string, 0, len(captured.Messages))
+	for _, message := range captured.Messages {
+		joinedPrompt = append(joinedPrompt, message.Content)
+	}
+	promptText := strings.Join(joinedPrompt, "\n")
+	if !strings.Contains(promptText, "Focus nodes:") || !strings.Contains(promptText, `"scope"`) {
+		t.Fatalf("expected focused relation prompt block, got %q", promptText)
+	}
+}
+
+func TestAISuggestChildrenEndpointSupportsSiblingMode(t *testing.T) {
+	var captured openAIChatRequest
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/models":
+			_, _ = w.Write([]byte(`{"data":[{"id":"qwen-local"}]}`))
+		case "/v1/chat/completions":
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				t.Fatalf("failed to read upstream request body: %v", err)
+			}
+			if err := json.Unmarshal(body, &captured); err != nil {
+				t.Fatalf("failed to decode upstream request: %v", err)
+			}
+			writeOpenAIChatResponse(t, w, "qwen-local", `{"summary":"Added sibling ideas","suggestions":[{"title":"Data Model","note":"Clarify core entities and schema boundaries."}]}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer upstream.Close()
+
+	server := newTestServer(t)
+	server.httpClient = upstream.Client()
+	handler := server.Handler()
+
+	doc := mindmap.NewDefaultDocument()
+	doc.Nodes = append(doc.Nodes,
+		mindmap.Node{ID: "planning", ParentID: "root", Kind: mindmap.NodeKindTopic, Title: "Planning", Position: mindmap.Position{X: 1080, Y: 280}},
+		mindmap.Node{ID: "api", ParentID: "planning", Kind: mindmap.NodeKindTopic, Title: "API", Position: mindmap.Position{X: 1360, Y: 240}},
+		mindmap.Node{ID: "web", ParentID: "planning", Kind: mindmap.NodeKindTopic, Title: "Web", Position: mindmap.Position{X: 1360, Y: 340}},
+	)
+
+	payload, err := json.Marshal(map[string]any{
+		"settings": map[string]any{
+			"baseUrl": upstream.URL,
+			"model":   "",
+		},
+		"document":     doc,
+		"targetNodeId": "api",
+		"mode":         "siblings",
+		"instructions": "Keep the suggestions practical.",
+	})
+	if err != nil {
+		t.Fatalf("failed to marshal request: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/ai/suggest-children", bytes.NewReader(payload))
+	req.Header.Set("Content-Type", "application/json")
+	res := httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d with body %s", res.Code, res.Body.String())
+	}
+
+	var response aiSuggestChildrenResponse
+	if err := json.Unmarshal(res.Body.Bytes(), &response); err != nil {
+		t.Fatalf("failed to decode sibling suggestion response: %v", err)
+	}
+	if len(response.Suggestions) != 1 || response.Suggestions[0].Title != "Data Model" {
+		t.Fatalf("unexpected sibling suggestions: %+v", response.Suggestions)
+	}
+
+	joinedPrompt := make([]string, 0, len(captured.Messages))
+	for _, message := range captured.Messages {
+		joinedPrompt = append(joinedPrompt, message.Content)
+	}
+	promptText := strings.Join(joinedPrompt, "\n")
+	if !strings.Contains(promptText, "Target node to suggest siblings for") {
+		t.Fatalf("expected sibling mode prompt, got %q", promptText)
+	}
+	if !strings.Contains(promptText, "Existing sibling titles under the same parent") {
+		t.Fatalf("expected sibling duplicate guard, got %q", promptText)
+	}
+}
+
 func TestListMapsPreservesLastEditedAt(t *testing.T) {
 	storePath := t.TempDir()
 	handler := New(store.NewFileStore(storePath)).Handler()

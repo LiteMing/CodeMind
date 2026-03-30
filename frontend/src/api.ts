@@ -152,6 +152,7 @@ export const api = {
     document: MindMapDocument,
     settings: AISettings,
     instructions: string,
+    focusNodeIds?: string[],
     debug?: AIDebugRequest,
   ): Promise<AIRelationResponse> {
     const response = await fetch(`${API_BASE}/ai/relations`, {
@@ -161,6 +162,7 @@ export const api = {
         document,
         settings,
         instructions,
+        focusNodeIds,
         debug,
       }),
     })
@@ -222,6 +224,7 @@ export const api = {
     document: MindMapDocument
     settings: AISettings
     targetNodeId: string
+    mode?: 'children' | 'siblings'
     instructions: string
     debug?: AIDebugRequest
   }): Promise<AISuggestChildrenResponse> {

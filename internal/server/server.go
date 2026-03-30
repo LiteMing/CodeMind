@@ -72,6 +72,7 @@ type aiDebugRequest struct {
 type aiRelationsRequest struct {
 	Settings     aiSettingsRequest `json:"settings"`
 	Document     mindmap.Document  `json:"document"`
+	FocusNodeIDs []string          `json:"focusNodeIds"`
 	Instructions string            `json:"instructions"`
 	Debug        aiDebugRequest    `json:"debug"`
 }
@@ -163,6 +164,7 @@ type aiSuggestChildrenRequest struct {
 	Settings     aiSettingsRequest `json:"settings"`
 	Document     mindmap.Document  `json:"document"`
 	TargetNodeID string            `json:"targetNodeId"`
+	Mode         string            `json:"mode"`
 	Instructions string            `json:"instructions"`
 	Debug        aiDebugRequest    `json:"debug"`
 }
@@ -617,6 +619,8 @@ func (s *Server) suggestAIRelations(req aiRelationsRequest) (aiRelationsResponse
 		Relations []aiRelationSuggestion `json:"relations"`
 	}
 
+	focusTargets := resolveAIRelationFocusTargets(req.Document, req.FocusNodeIDs)
+
 	systemPrompt := strings.Join([]string{
 		"You analyze a mind map and propose semantic relation lines between nodes.",
 		"Only suggest non-hierarchical links that add useful context beyond the existing parent-child structure.",
@@ -633,8 +637,9 @@ func (s *Server) suggestAIRelations(req aiRelationsRequest) (aiRelationsResponse
 		"Mind map document:",
 		documentPayload,
 		"",
+		relationFocusPromptBlock(focusTargets),
 		"Task:",
-		"- Suggest up to 12 new semantic relations.",
+		fmt.Sprintf("- Suggest up to %d new semantic relations.", relationSuggestionLimit(focusTargets)),
 		"- Ignore relations that already exist.",
 		"- Ignore direct or indirect parent-child chains.",
 		"- Return labels in the same language as the node titles when possible.",
@@ -680,6 +685,7 @@ func (s *Server) suggestAIRelations(req aiRelationsRequest) (aiRelationsResponse
 	}
 
 	filtered := filterSuggestedRelations(req.Document, payload.Relations)
+	filtered = filterSuggestedRelationsForFocus(filtered, focusTargets)
 	return aiRelationsResponse{
 		Relations: filtered,
 		Summary:   strings.TrimSpace(payload.Summary),
@@ -1076,15 +1082,20 @@ func (s *Server) suggestAIChildren(req aiSuggestChildrenRequest) (aiSuggestChild
 		Suggestions []aiChildSuggestion `json:"suggestions"`
 	}
 
+	mode := normalizeAISuggestNodeMode(req.Mode)
 	nodeMap := req.Document.NodeMap()
 	targetNode, ok := nodeMap[strings.TrimSpace(req.TargetNodeID)]
 	if !ok {
 		return aiSuggestChildrenResponse{}, errors.New("target node not found")
 	}
+	promptNode := targetNode
+	requestLine := fmt.Sprintf("Target node to suggest children for: id=%s, title=%q", targetNode.ID, targetNode.Title)
+	taskLine := "- Suggest 3 to 6 child nodes for the target node."
+	duplicateLine := "Existing children titles (avoid duplicating these): %s"
 
 	systemPrompt := strings.Join([]string{
-		"You suggest child nodes for a specific node in a mind map.",
-		"Each suggestion should be a natural next-level subtopic or detail.",
+		"You suggest nearby nodes for a specific node in a mind map.",
+		"Each suggestion should be a natural next-level subtopic, sibling topic, or detail depending on the requested mode.",
 		"Keep titles short (under 30 characters preferred).",
 		"Notes should be 1 to 3 informative sentences.",
 		"Prefer the same language as the source mind map.",
@@ -1097,8 +1108,24 @@ func (s *Server) suggestAIChildren(req aiSuggestChildrenRequest) (aiSuggestChild
 	}
 
 	existingChildren := make([]string, 0)
+	if mode == "siblings" {
+		parentNode, hasParent := nodeMap[strings.TrimSpace(targetNode.ParentID)]
+		if !hasParent {
+			return aiSuggestChildrenResponse{}, errors.New("target node has no parent for sibling suggestions")
+		}
+		promptNode = parentNode
+		requestLine = fmt.Sprintf(
+			"Target node to suggest siblings for: id=%s, title=%q, parent=%q",
+			targetNode.ID,
+			targetNode.Title,
+			parentNode.Title,
+		)
+		taskLine = "- Suggest 3 to 6 sibling nodes that belong under the same parent as the target node."
+		duplicateLine = "Existing sibling titles under the same parent (avoid duplicating these): %s"
+	}
+
 	for _, node := range req.Document.Nodes {
-		if node.ParentID == targetNode.ID {
+		if node.ParentID == promptNode.ID {
 			existingChildren = append(existingChildren, strings.TrimSpace(node.Title))
 		}
 	}
@@ -1107,19 +1134,19 @@ func (s *Server) suggestAIChildren(req aiSuggestChildrenRequest) (aiSuggestChild
 		"Mind map document:",
 		documentPayload,
 		"",
-		fmt.Sprintf("Target node to suggest children for: id=%s, title=%q", targetNode.ID, targetNode.Title),
+		requestLine,
 	}
 	if len(existingChildren) > 0 {
 		existingJSON, _ := json.Marshal(existingChildren)
-		userPromptLines = append(userPromptLines, fmt.Sprintf("Existing children titles (avoid duplicating these): %s", string(existingJSON)))
+		userPromptLines = append(userPromptLines, fmt.Sprintf(duplicateLine, string(existingJSON)))
 	}
 	userPromptLines = append(userPromptLines,
 		"",
 		"Task:",
-		"- Suggest 3 to 6 child nodes for the target node.",
-		"- Each child should be a meaningful subtopic, detail, or related concept.",
+		taskLine,
+		"- Each suggestion should be a meaningful topic, detail, or related concept.",
 		"- Titles should be concise and informative.",
-		"- Notes should explain what the child node is about.",
+		"- Notes should explain what the suggested node is about.",
 	)
 	if extra := optionalInstructionBlock(req.Instructions); extra != "" {
 		userPromptLines = append(userPromptLines, extra)
@@ -1612,6 +1639,85 @@ func filterSuggestedRelations(doc mindmap.Document, relations []aiRelationSugges
 	return filtered
 }
 
+func resolveAIRelationFocusTargets(doc mindmap.Document, requested []string) []map[string]string {
+	if len(requested) == 0 {
+		return nil
+	}
+
+	nodeByID := doc.NodeMap()
+	targets := make([]map[string]string, 0, len(requested))
+	added := make(map[string]struct{}, len(requested))
+	for _, nodeID := range requested {
+		node, ok := nodeByID[strings.TrimSpace(nodeID)]
+		if !ok {
+			continue
+		}
+		if _, exists := added[node.ID]; exists {
+			continue
+		}
+		added[node.ID] = struct{}{}
+		targets = append(targets, map[string]string{
+			"id":       node.ID,
+			"title":    strings.TrimSpace(node.Title),
+			"parentId": strings.TrimSpace(node.ParentID),
+			"kind":     string(node.Kind),
+		})
+	}
+	return targets
+}
+
+func relationFocusPromptBlock(targets []map[string]string) string {
+	if len(targets) == 0 {
+		return ""
+	}
+
+	payload, err := json.MarshalIndent(targets, "", "  ")
+	if err != nil {
+		return ""
+	}
+
+	return strings.Join([]string{
+		"Focus nodes:",
+		string(payload),
+		"",
+		"Focus rules:",
+		"- Every returned relation must involve at least one focus node listed above.",
+		"- Prefer relations that connect the focus nodes to other branches rather than only to nearby siblings.",
+	}, "\n")
+}
+
+func relationSuggestionLimit(targets []map[string]string) int {
+	if len(targets) > 0 {
+		return 6
+	}
+	return 12
+}
+
+func filterSuggestedRelationsForFocus(relations []aiRelationSuggestion, targets []map[string]string) []aiRelationSuggestion {
+	if len(targets) == 0 {
+		return relations
+	}
+
+	validTargets := make(map[string]struct{}, len(targets))
+	for _, target := range targets {
+		if nodeID := strings.TrimSpace(target["id"]); nodeID != "" {
+			validTargets[nodeID] = struct{}{}
+		}
+	}
+
+	filtered := make([]aiRelationSuggestion, 0, len(relations))
+	for _, relation := range relations {
+		if _, ok := validTargets[relation.SourceID]; ok {
+			filtered = append(filtered, relation)
+			continue
+		}
+		if _, ok := validTargets[relation.TargetID]; ok {
+			filtered = append(filtered, relation)
+		}
+	}
+	return filtered
+}
+
 func resolveAINoteTargets(doc mindmap.Document, requested []string) []map[string]string {
 	nodeByID := doc.NodeMap()
 	targets := make([]map[string]string, 0)
@@ -2074,6 +2180,13 @@ func normalizeAIGenerateMode(mode string) string {
 		return "expand"
 	}
 	return "new"
+}
+
+func normalizeAISuggestNodeMode(mode string) string {
+	if strings.EqualFold(strings.TrimSpace(mode), "siblings") {
+		return "siblings"
+	}
+	return "children"
 }
 
 func documentTitleOrEmpty(doc *mindmap.Document) string {

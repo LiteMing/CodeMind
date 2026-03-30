@@ -34,7 +34,9 @@ import {
   loadPreferences,
   normalizeAIMaxTokens,
   normalizeAITimeoutSeconds,
+  normalizeChromeLayout,
   normalizeEdgeStyle,
+  normalizeGestureAction,
   normalizeLayoutMode,
   normalizeTopPanelPosition,
   savePreferences,
@@ -45,6 +47,7 @@ import type {
   AIDebugRequest,
   AppPreferences,
   AITemplateId,
+  GestureAction,
   EdgeStyle,
   Locale,
   MindMapDocument,
@@ -60,6 +63,7 @@ import type {
 type AppView = 'home' | 'map'
 type AIDebugAction = 'generate' | 'notes' | 'relations' | 'import' | ''
 type PendingImportMode = 'auto' | 'ai'
+type FixedMenuId = 'file' | 'node' | 'ai' | 'view' | ''
 
 interface DragState {
   nodeId: string
@@ -173,6 +177,13 @@ interface GraphOverlayState {
   zoom: number
 }
 
+interface AIWheelState {
+  open: boolean
+  nodeId: string | null
+  clientX: number
+  clientY: number
+}
+
 interface AppState {
   view: AppView
   maps: MindMapSummary[]
@@ -191,7 +202,9 @@ interface AppState {
   preferences: AppPreferences
   settingsOpen: boolean
   topPanelCollapsed: boolean
+  fixedMenu: FixedMenuId
   inspectorCollapsed: boolean
+  aiWheel: AIWheelState
   ai: AIWorkspaceState
   graph: GraphOverlayState
 }
@@ -199,6 +212,7 @@ interface AppState {
 interface ShellRefs {
   topChrome: HTMLElement
   topPanel: HTMLElement
+  fixedToolbar: HTMLElement
   eyebrow: HTMLParagraphElement
   title: HTMLHeadingElement
   status: HTMLParagraphElement
@@ -282,6 +296,9 @@ const GRAPH_DEFAULT_ZOOM = 1.16
 const GRAPH_MIN_ZOOM = 0.68
 const GRAPH_MAX_ZOOM = 1.92
 const GRAPH_ZOOM_SENSITIVITY = 0.0012
+const NODE_GESTURE_MULTI_CLICK_DELAY_MS = 240
+const NODE_LONG_PRESS_DELAY_MS = 520
+const NODE_LONG_PRESS_MOVE_THRESHOLD = 10
 const IMPORT_FILE_ACCEPT =
   '.md,.markdown,.txt,.json,.csv,.tsv,.html,.htm,.xml,.opml,.mermaid,.mmd,.yaml,.yml,.toml,.ini,.cfg,.log,.rst,text/plain,text/markdown,application/json,text/csv,text/html,application/xml,text/xml'
 const PRIORITY_VALUES: Priority[] = ['', 'P0', 'P1', 'P2', 'P3']
@@ -392,6 +409,20 @@ class MindMapApp {
   private graphHitNodes: GraphHitNode[] = []
   private copiedSubtree: CopiedSubtree | null = null
   private suppressContextMenuOnce = false
+  private pendingNodeGestureHandle: number | null = null
+  private pendingNodeGestureNodeId: string | null = null
+  private longPressHandle: number | null = null
+  private longPressState:
+    | {
+        pointerId: number
+        nodeId: string
+        startClientX: number
+        startClientY: number
+        clientX: number
+        clientY: number
+        activated: boolean
+      }
+    | null = null
   private pendingEditorOptions: EditorLaunchOptions | null = null
   private activeEditorAnchorLeft: number | null = null
   private nodeEditorMeasureCanvas: HTMLCanvasElement | null = null
@@ -426,7 +457,14 @@ class MindMapApp {
       preferences: loadPreferences(),
       settingsOpen: false,
       topPanelCollapsed: false,
+      fixedMenu: '',
       inspectorCollapsed: true,
+      aiWheel: {
+        open: false,
+        nodeId: null,
+        clientX: 0,
+        clientY: 0,
+      },
       ai: {
         open: false,
         busy: false,
@@ -506,8 +544,16 @@ class MindMapApp {
     }
 
     const closedContextMenu = Boolean(this.state.contextMenu) && !target.closest('[data-context-menu]')
+    const closedFixedMenu = this.state.fixedMenu !== '' && !target.closest('[data-fixed-menu-shell]')
+    const closedAIWheel = this.state.aiWheel.open && !target.closest('[data-ai-wheel]')
     if (closedContextMenu) {
       this.state.contextMenu = null
+    }
+    if (closedFixedMenu) {
+      this.state.fixedMenu = ''
+    }
+    if (closedAIWheel) {
+      this.closeAIWheel()
     }
 
     const settingsScrim = target.closest<HTMLElement>('[data-settings-scrim]')
@@ -539,6 +585,9 @@ class MindMapApp {
     const nodeButton = target.closest<HTMLElement>('[data-node-button]')
     const clickedWorkspace = target.closest<HTMLElement>('[data-workspace-scroll]')
     if (command) {
+      if (!command.startsWith('toggle-fixed-menu')) {
+        this.state.fixedMenu = ''
+      }
       if (this.state.editingNodeId && !clickedNodeEditor) {
         this.finishActiveNodeEditing()
       }
@@ -597,10 +646,21 @@ class MindMapApp {
         return
       }
 
-      if (!event.shiftKey && !event.ctrlKey && !event.metaKey && event.detail >= 2) {
+      if (!event.shiftKey && !event.ctrlKey && !event.metaKey && event.detail >= 3) {
+        event.preventDefault()
+        this.cancelPendingNodeGesture()
+        this.setSelection([nodeId], nodeId)
+        void this.runNodeGestureAction(this.state.preferences.interaction.tripleClickAction, nodeId, {
+          clientX: event.clientX,
+          clientY: event.clientY,
+        })
+        return
+      }
+
+      if (!event.shiftKey && !event.ctrlKey && !event.metaKey && event.detail === 2) {
         event.preventDefault()
         this.setSelection([nodeId], nodeId)
-        this.openNodeEditor(nodeId, { selection: 'all' })
+        this.scheduleNodeGestureAction(nodeId, event.clientX, event.clientY)
         return
       }
 
@@ -618,7 +678,7 @@ class MindMapApp {
       return
     }
 
-    if (closedContextMenu) {
+    if (closedContextMenu || closedFixedMenu || closedAIWheel) {
       this.renderOverlay()
       this.renderHeader()
     }
@@ -677,13 +737,7 @@ class MindMapApp {
       return
     }
 
-    if (this.state.editingNodeId === nodeButton.dataset.nodeButton) {
-      return
-    }
-
     event.preventDefault()
-    this.setSelection([nodeButton.dataset.nodeButton], nodeButton.dataset.nodeButton)
-    this.openNodeEditor(nodeButton.dataset.nodeButton, { selection: 'all' })
   }
 
   private readonly handlePointerDown = (event: PointerEvent): void => {
@@ -779,6 +833,7 @@ class MindMapApp {
     const nodeButton = target.closest<HTMLElement>('[data-node-button]')
     const nodeId = nodeButton?.dataset.nodeButton
     if (!nodeId) {
+      this.clearNodeLongPress()
       this.tryStartCanvasPan(event, target)
       return
     }
@@ -791,11 +846,18 @@ class MindMapApp {
     const selectedDragIds = this.state.selectedNodeIds.includes(nodeId) ? this.state.selectedNodeIds : [nodeId]
     const dragNodeIds = this.resolveDragNodeIds(selectedDragIds)
 
+    if (!event.shiftKey && !event.ctrlKey && !event.metaKey && event.detail === 1) {
+      this.armNodeLongPress(nodeId, event)
+    } else {
+      this.clearNodeLongPress()
+    }
+
     if (event.detail >= 2) {
       return
     }
 
     if (!node || dragNodeIds.length === 0 || this.state.editingNodeId === nodeId || this.state.connectSourceNodeId !== null) {
+      this.clearNodeLongPress()
       this.tryStartCanvasPan(event, target)
       return
     }
@@ -870,6 +932,17 @@ class MindMapApp {
 
     if (this.state.view !== 'map') {
       return
+    }
+
+    if (this.longPressState && event.pointerId === this.longPressState.pointerId) {
+      this.longPressState.clientX = event.clientX
+      this.longPressState.clientY = event.clientY
+      if (
+        !this.longPressState.activated &&
+        Math.hypot(event.clientX - this.longPressState.startClientX, event.clientY - this.longPressState.startClientY) > NODE_LONG_PRESS_MOVE_THRESHOLD
+      ) {
+        this.clearNodeLongPress()
+      }
     }
 
     if (this.state.marquee && event.pointerId === this.state.marquee.pointerId) {
@@ -1047,6 +1120,10 @@ class MindMapApp {
 
     if (this.state.view !== 'map') {
       return
+    }
+
+    if (this.longPressState && event.pointerId === this.longPressState.pointerId) {
+      this.clearNodeLongPress()
     }
 
     if (this.state.marquee && event.pointerId === this.state.marquee.pointerId) {
@@ -1230,7 +1307,7 @@ class MindMapApp {
 
     if (event.key === ' ') {
       event.preventDefault()
-      this.startEditingSelected({ selection: 'end' })
+      void this.runNodeGestureAction(this.state.preferences.interaction.spaceAction, selectedNode.id)
       return
     }
   }
@@ -1286,6 +1363,145 @@ class MindMapApp {
     if (target instanceof HTMLInputElement && target.dataset.snapshotName !== undefined && event.key === 'Enter') {
       event.preventDefault()
       this.saveSnapshot('manual')
+    }
+  }
+
+  private scheduleNodeGestureAction(nodeId: string, clientX: number, clientY: number): void {
+    this.cancelPendingNodeGesture()
+    this.pendingNodeGestureNodeId = nodeId
+    this.pendingNodeGestureHandle = window.setTimeout(() => {
+      const nextNodeId = this.pendingNodeGestureNodeId
+      this.cancelPendingNodeGesture()
+      if (!nextNodeId) {
+        return
+      }
+      void this.runNodeGestureAction(this.state.preferences.interaction.doubleClickAction, nextNodeId, { clientX, clientY })
+    }, NODE_GESTURE_MULTI_CLICK_DELAY_MS)
+  }
+
+  private cancelPendingNodeGesture(): void {
+    if (this.pendingNodeGestureHandle !== null) {
+      window.clearTimeout(this.pendingNodeGestureHandle)
+      this.pendingNodeGestureHandle = null
+    }
+    this.pendingNodeGestureNodeId = null
+  }
+
+  private armNodeLongPress(nodeId: string, event: PointerEvent): void {
+    this.clearNodeLongPress()
+    this.longPressState = {
+      pointerId: event.pointerId,
+      nodeId,
+      startClientX: event.clientX,
+      startClientY: event.clientY,
+      clientX: event.clientX,
+      clientY: event.clientY,
+      activated: false,
+    }
+    this.longPressHandle = window.setTimeout(() => {
+      if (!this.longPressState || this.longPressState.nodeId !== nodeId) {
+        return
+      }
+      this.longPressState.activated = true
+      this.state.drag = null
+      void this.runNodeGestureAction(this.state.preferences.interaction.longPressAction, nodeId, {
+        clientX: this.longPressState.clientX,
+        clientY: this.longPressState.clientY,
+      })
+    }, NODE_LONG_PRESS_DELAY_MS)
+  }
+
+  private clearNodeLongPress(): void {
+    if (this.longPressHandle !== null) {
+      window.clearTimeout(this.longPressHandle)
+      this.longPressHandle = null
+    }
+    this.longPressState = null
+  }
+
+  private async runNodeGestureAction(
+    action: GestureAction,
+    nodeId: string,
+    origin?: { clientX?: number; clientY?: number },
+  ): Promise<void> {
+    const node = this.findNode(nodeId)
+    if (!node) {
+      return
+    }
+
+    this.setSelection([nodeId], nodeId)
+
+    switch (action) {
+      case 'rename':
+        this.openNodeEditor(nodeId, { selection: 'all' })
+        return
+      case 'edit-tail':
+        this.openNodeEditor(nodeId, { selection: 'end' })
+        return
+      case 'ai-quick':
+        await this.applyAIQuickAssist(nodeId)
+        return
+      case 'ai-suggest-children':
+        await this.applyAISuggestNodes(nodeId, 'children')
+        return
+      case 'ai-suggest-siblings':
+        await this.applyAISuggestNodes(nodeId, 'siblings')
+        return
+      case 'ai-wheel':
+        this.openAIWheel(nodeId, origin?.clientX, origin?.clientY)
+        return
+      case 'new-child':
+        this.createChildNode(nodeId)
+        return
+      case 'new-sibling':
+        this.createSiblingNode(nodeId)
+        return
+      case 'new-floating':
+        this.createFloatingNode(nodeId)
+        return
+      case 'toggle-collapse':
+        this.toggleNodeCollapse(nodeId)
+        return
+      case 'none':
+      default:
+        return
+    }
+  }
+
+  private openAIWheel(nodeId: string, clientX?: number, clientY?: number): void {
+    this.state.fixedMenu = ''
+    const fallback = this.nodeClientCenter(nodeId)
+    this.state.aiWheel = {
+      open: true,
+      nodeId,
+      clientX: Math.round(clientX ?? fallback.x),
+      clientY: Math.round(clientY ?? fallback.y),
+    }
+    this.renderHeader()
+    this.renderOverlay()
+  }
+
+  private closeAIWheel(): void {
+    if (!this.state.aiWheel.open) {
+      return
+    }
+    this.state.aiWheel = {
+      open: false,
+      nodeId: null,
+      clientX: 0,
+      clientY: 0,
+    }
+  }
+
+  private nodeClientCenter(nodeId: string): { x: number; y: number } {
+    const element = this.rootEl.querySelector<HTMLElement>(`[data-node-id="${nodeId}"]`)
+    if (!element) {
+      return { x: window.innerWidth / 2, y: window.innerHeight / 2 }
+    }
+    const rect = element.getBoundingClientRect()
+    return {
+      x: rect.left + rect.width / 2,
+      y: rect.top + rect.height / 2,
     }
   }
 
@@ -1522,6 +1738,7 @@ class MindMapApp {
       <div class="app-shell">
         <div class="workspace-stage">
           <header class="top-chrome" data-top-chrome>
+            <div class="fixed-toolbar" data-fixed-toolbar></div>
             <section class="panel-shell top-panel" data-top-panel>
               <div class="top-panel-header">
                 <div class="project-copy top-panel-copy">
@@ -1584,6 +1801,7 @@ class MindMapApp {
     this.refs = {
       topChrome: requiredElement(this.rootEl, '[data-top-chrome]'),
       topPanel: requiredElement(this.rootEl, '[data-top-panel]'),
+      fixedToolbar: requiredElement(this.rootEl, '[data-fixed-toolbar]'),
       eyebrow: requiredElement(this.rootEl, '[data-app-eyebrow]'),
       title: requiredElement(this.rootEl, '[data-app-title]'),
       status: requiredElement(this.rootEl, '[data-app-status]'),
@@ -1623,8 +1841,13 @@ class MindMapApp {
     }
 
     const locale = this.state.preferences.locale
+    const chromeLayout = this.state.preferences.appearance.chromeLayout
     this.refs.topChrome.dataset.panelPosition = this.state.preferences.appearance.topPanelPosition
+    this.refs.topChrome.dataset.chromeLayout = chromeLayout
     this.refs.topPanel.classList.toggle('is-collapsed', this.state.topPanelCollapsed)
+    this.refs.topPanel.classList.toggle('is-hidden', chromeLayout === 'fixed')
+    this.refs.fixedToolbar.classList.toggle('is-visible', chromeLayout === 'fixed')
+    this.refs.fixedToolbar.innerHTML = chromeLayout === 'fixed' ? this.renderFixedToolbar() : ''
     this.refs.eyebrow.textContent = this.t('app.eyebrow')
     this.refs.title.textContent = this.state.document.title
     this.refs.status.textContent = this.t(this.state.status.key, this.state.status.values)
@@ -1656,6 +1879,203 @@ class MindMapApp {
     this.refs.panelButton.classList.toggle('is-active', !this.state.inspectorCollapsed)
     this.refs.topPanelButton.setAttribute('aria-pressed', String(!this.state.topPanelCollapsed))
     document.title = `${this.state.document.title} - Code Mind`
+  }
+
+  private renderFixedToolbar(): string {
+    const locale = this.state.preferences.locale
+    const selectedNode = this.selectedNode()
+    const hasSelection = Boolean(selectedNode)
+    const childCount = selectedNode ? childrenOf(this.state.document, selectedNode.id).length : 0
+    const canDeleteSelection = this.selectedNodeIds().some((nodeId) => this.findNode(nodeId)?.kind !== 'root')
+    const aiBusy = this.state.ai.busy
+    const labels =
+      locale === 'zh-CN'
+        ? {
+            file: '文件',
+            node: '节点',
+            ai: 'AI',
+            view: '视图',
+          }
+        : {
+            file: 'File',
+            node: 'Node',
+            ai: 'AI',
+            view: 'View',
+          }
+
+    const renderMenuItem = (command: string, label: string, disabled = false, tone: '' | 'danger' = ''): string => {
+      return `
+        <button type="button" class="fixed-menu-item ${tone}" data-command="${command}" ${disabled ? 'disabled' : ''}>
+          ${escapeHtml(label)}
+        </button>
+      `
+    }
+
+    const renderMenu = (menuId: FixedMenuId, label: string, content: string): string => {
+      const open = this.state.fixedMenu === menuId
+      return `
+        <div class="fixed-menu-group ${open ? 'is-open' : ''}">
+          <button
+            type="button"
+            class="fixed-toolbar-tab ${open ? 'is-active' : ''}"
+            data-command="toggle-fixed-menu:${menuId}"
+            aria-expanded="${open ? 'true' : 'false'}"
+          >
+            ${escapeHtml(label)}
+          </button>
+          ${
+            open
+              ? `
+                <div class="fixed-menu-popup">
+                  ${content}
+                </div>
+              `
+              : ''
+          }
+        </div>
+      `
+    }
+
+    return `
+      <div class="fixed-toolbar-shell" data-fixed-menu-shell>
+        <div class="fixed-toolbar-main">
+          <button type="button" class="chip-button fixed-toolbar-home" data-command="go-home">${this.t('toolbar.home')}</button>
+          <div class="fixed-toolbar-copy">
+            <p class="eyebrow">${this.t('app.eyebrow')}</p>
+            <strong>${escapeHtml(this.state.document.title)}</strong>
+          </div>
+          <p class="fixed-toolbar-status">${escapeHtml(this.t(this.state.status.key, this.state.status.values))}</p>
+        </div>
+
+        <div class="fixed-toolbar-menus">
+          ${renderMenu(
+            'file',
+            labels.file,
+            [
+              renderMenuItem('save', this.t('toolbar.save')),
+              renderMenuItem('import-file', this.t('toolbar.import')),
+              renderMenuItem('export-markdown', this.t('toolbar.exportMarkdown')),
+              renderMenuItem('rename-map', this.t('toolbar.renameMap')),
+              renderMenuItem('delete-map', this.t('toolbar.deleteMap'), false, 'danger'),
+            ].join(''),
+          )}
+          ${renderMenu(
+            'node',
+            labels.node,
+            [
+              renderMenuItem('new-child', this.t('action.newChild'), !hasSelection),
+              renderMenuItem('new-sibling', this.t('action.newSibling'), !hasSelection),
+              renderMenuItem('new-floating', this.t('action.newFloating')),
+              renderMenuItem(
+                'toggle-collapse',
+                selectedNode?.collapsed ? this.t('action.expand') : this.t('action.collapse'),
+                !hasSelection || childCount === 0,
+              ),
+              renderMenuItem('connect-selected', this.t('action.linkRelation'), !hasSelection),
+              renderMenuItem('delete-selected', this.t('action.delete'), !canDeleteSelection, 'danger'),
+            ].join(''),
+          )}
+          ${renderMenu(
+            'ai',
+            labels.ai,
+            [
+              renderMenuItem('open-ai-workspace', this.t('toolbar.ai'), aiBusy),
+              renderMenuItem('ai-suggest-children', this.t('ai.suggestChildrenAction'), aiBusy || !hasSelection),
+              renderMenuItem('ai-suggest-siblings', this.t('ai.suggestSiblingsAction'), aiBusy || !this.canSuggestSiblings()),
+              renderMenuItem('ai-complete-node-notes', this.t('ai.notesAction'), aiBusy),
+              renderMenuItem('ai-connect-relations', this.t('ai.connectAction'), aiBusy),
+            ].join(''),
+          )}
+          ${renderMenu(
+            'view',
+            labels.view,
+            [
+              renderMenuItem('auto-layout', this.t('toolbar.autoLayout')),
+              renderMenuItem('toggle-inspector', this.t(this.state.inspectorCollapsed ? 'panel.side.show' : 'panel.side.hide')),
+              renderMenuItem('open-graph-overlay', this.t('toolbar.graph3d')),
+              renderMenuItem('theme-toggle', this.t('toolbar.theme', { theme: themeLabel(locale, this.state.document.theme) })),
+              renderMenuItem('toggle-settings', this.t('toolbar.settings')),
+            ].join(''),
+          )}
+        </div>
+
+        <div class="fixed-toolbar-quick">
+          <button type="button" class="chip-button" data-command="undo" ${this.canUndo() ? '' : 'disabled'}>${this.t('toolbar.undo')}</button>
+          <button type="button" class="chip-button" data-command="redo" ${this.canRedo() ? '' : 'disabled'}>${this.t('toolbar.redo')}</button>
+          <button type="button" class="chip-button" data-command="save">${this.t('toolbar.save')}</button>
+        </div>
+      </div>
+    `
+  }
+
+  private toggleFixedMenu(menuId: FixedMenuId): void {
+    if (this.state.preferences.appearance.chromeLayout !== 'fixed') {
+      return
+    }
+    this.state.fixedMenu = this.state.fixedMenu === menuId ? '' : menuId
+    this.renderHeader()
+  }
+
+  private renderGestureActionOptions(selected: GestureAction): string {
+    const options =
+      this.state.preferences.locale === 'zh-CN'
+        ? [
+            { value: 'none' as const, label: '无操作' },
+            { value: 'rename' as const, label: '重命名节点' },
+            { value: 'edit-tail' as const, label: '在标题末尾编辑' },
+            { value: 'ai-quick' as const, label: 'AI 快捷请求' },
+            { value: 'ai-suggest-children' as const, label: '建议子节点' },
+            { value: 'ai-suggest-siblings' as const, label: '建议同级节点' },
+            { value: 'ai-wheel' as const, label: 'AI 轮盘' },
+            { value: 'new-child' as const, label: '新建子节点' },
+            { value: 'new-sibling' as const, label: '新建同级节点' },
+            { value: 'new-floating' as const, label: '新建自由节点' },
+            { value: 'toggle-collapse' as const, label: '折叠 / 展开分支' },
+          ]
+        : [
+            { value: 'none' as const, label: 'No action' },
+            { value: 'rename' as const, label: 'Rename node' },
+            { value: 'edit-tail' as const, label: 'Edit title tail' },
+            { value: 'ai-quick' as const, label: 'AI quick assist' },
+            { value: 'ai-suggest-children' as const, label: 'Suggest children' },
+            { value: 'ai-suggest-siblings' as const, label: 'Suggest siblings' },
+            { value: 'ai-wheel' as const, label: 'AI wheel' },
+            { value: 'new-child' as const, label: 'New child' },
+            { value: 'new-sibling' as const, label: 'New sibling' },
+            { value: 'new-floating' as const, label: 'New floating node' },
+            { value: 'toggle-collapse' as const, label: 'Toggle collapse' },
+          ]
+
+    return options
+      .map((option) => `<option value="${option.value}" ${selected === option.value ? 'selected' : ''}>${escapeHtml(option.label)}</option>`)
+      .join('')
+  }
+
+  private canSuggestSiblings(nodeId?: string): boolean {
+    const targetId = nodeId ?? this.selectedNode()?.id
+    if (!targetId) {
+      return false
+    }
+    const node = this.findNode(targetId)
+    if (!node?.parentId) {
+      return false
+    }
+    return Boolean(this.findNode(node.parentId))
+  }
+
+  private aiQuickKindLabel(kind: 'children' | 'siblings' | 'notes' | 'relations'): string {
+    switch (kind) {
+      case 'children':
+        return this.t('ai.suggestChildrenAction')
+      case 'siblings':
+        return this.t('ai.suggestSiblingsAction')
+      case 'notes':
+        return this.t('ai.notesAction')
+      case 'relations':
+        return this.t('ai.connectAction')
+      default:
+        return kind
+    }
   }
 
   private renderWorkspace(): void {
@@ -1787,6 +2207,7 @@ class MindMapApp {
           <div class="action-grid">
             <button type="button" class="chip-button" data-command="new-child" ${singleSelection ? '' : 'disabled'}>${this.t('action.newChild')}</button>
             <button type="button" class="chip-button" data-command="new-sibling" ${singleSelection ? '' : 'disabled'}>${this.t('action.newSibling')}</button>
+            <button type="button" class="chip-button" data-command="new-floating" ${singleSelection ? '' : 'disabled'}>${this.t('action.newFloating')}</button>
             <button type="button" class="chip-button" data-command="rename-selected" ${singleSelection ? '' : 'disabled'}>${this.t('action.rename')}</button>
             <button type="button" class="chip-button" data-command="toggle-collapse" ${singleSelection && directChildren.length > 0 ? '' : 'disabled'}>
               ${selectedNode.collapsed ? this.t('action.expand') : this.t('action.collapse')}
@@ -1846,9 +2267,10 @@ class MindMapApp {
 
     const marqueeMarkup = this.state.marquee?.active ? this.renderMarqueeBox(this.state.marquee) : ''
     const contextMenuMarkup = this.state.contextMenu ? this.renderContextMenu() : ''
+    const aiWheelMarkup = this.state.aiWheel.open ? this.renderAIWheel() : ''
 
-    this.refs.overlayLayer.classList.toggle('is-visible', Boolean(marqueeMarkup || contextMenuMarkup))
-    this.refs.overlayLayer.innerHTML = `${marqueeMarkup}${contextMenuMarkup}`
+    this.refs.overlayLayer.classList.toggle('is-visible', Boolean(marqueeMarkup || contextMenuMarkup || aiWheelMarkup))
+    this.refs.overlayLayer.innerHTML = `${marqueeMarkup}${contextMenuMarkup}${aiWheelMarkup}`
   }
 
   private renderMarqueeBox(marquee: MarqueeState): string {
@@ -1895,6 +2317,7 @@ class MindMapApp {
         <h3 class="context-menu-title">${heading}</h3>
         <button type="button" class="chip-button context-menu-button" data-command="new-child" ${canUseSingleNodeActions ? '' : 'disabled'}>${this.t('action.newChild')}</button>
         <button type="button" class="chip-button context-menu-button" data-command="new-sibling" ${canUseSingleNodeActions ? '' : 'disabled'}>${this.t('action.newSibling')}</button>
+        <button type="button" class="chip-button context-menu-button" data-command="new-floating" ${canUseSingleNodeActions ? '' : 'disabled'}>${this.t('action.newFloating')}</button>
         <button type="button" class="chip-button context-menu-button" data-command="rename-selected" ${canUseSingleNodeActions ? '' : 'disabled'}>${this.t('action.rename')}</button>
         <button type="button" class="chip-button context-menu-button" data-command="toggle-collapse" ${canUseSingleNodeActions && primaryChildren > 0 ? '' : 'disabled'}>
           ${primaryNode?.collapsed ? this.t('action.expand') : this.t('action.collapse')}
@@ -1905,6 +2328,30 @@ class MindMapApp {
         <button type="button" class="chip-button context-menu-button" data-command="set-priority:P1">${this.t('context.priorityP1')}</button>
         <button type="button" class="chip-button context-menu-button" data-command="set-priority:">${this.t('context.clearPriority')}</button>
         <button type="button" class="chip-button danger context-menu-button" data-command="delete-selected" ${canDelete ? '' : 'disabled'}>${this.t('action.delete')}</button>
+      </section>
+    `
+  }
+
+  private renderAIWheel(): string {
+    if (!this.refs || !this.state.aiWheel.open || !this.state.aiWheel.nodeId) {
+      return ''
+    }
+
+    const stageRect = this.refs.overlayLayer.getBoundingClientRect()
+    const left = this.state.aiWheel.clientX - stageRect.left
+    const top = this.state.aiWheel.clientY - stageRect.top
+    const labels = {
+      children: this.state.preferences.locale === 'zh-CN' ? '只生成子节点' : 'Children Only',
+      notes: this.state.preferences.locale === 'zh-CN' ? '只生成注释' : 'Notes Only',
+      relations: this.state.preferences.locale === 'zh-CN' ? '只生成连线' : 'Relations Only',
+    }
+
+    return `
+      <section class="ai-wheel" data-ai-wheel style="left: ${Math.round(left)}px; top: ${Math.round(top)}px;">
+        <button type="button" class="ai-wheel-button ai-wheel-button-top" data-command="ai-wheel-children">${labels.children}</button>
+        <button type="button" class="ai-wheel-button ai-wheel-button-left" data-command="ai-wheel-notes">${labels.notes}</button>
+        <button type="button" class="ai-wheel-button ai-wheel-button-right" data-command="ai-wheel-relations">${labels.relations}</button>
+        <button type="button" class="ai-wheel-center" data-command="close-ai-wheel" aria-label="Close AI wheel">AI</button>
       </section>
     `
   }
@@ -1966,6 +2413,13 @@ class MindMapApp {
               </select>
             </label>
             <label class="field-row">
+              <span>${this.t('settings.chromeLayout')}</span>
+              <select class="settings-select" data-setting-field="appearance.chromeLayout">
+                <option value="floating" ${appearance.chromeLayout === 'floating' ? 'selected' : ''}>${this.t('settings.chromeLayout.floating')}</option>
+                <option value="fixed" ${appearance.chromeLayout === 'fixed' ? 'selected' : ''}>${this.t('settings.chromeLayout.fixed')}</option>
+              </select>
+            </label>
+            <label class="field-row">
               <span>${this.t('settings.topPanelPosition')}</span>
               <select class="settings-select" data-setting-field="appearance.topPanelPosition">
                 <option value="left" ${appearance.topPanelPosition === 'left' ? 'selected' : ''}>${this.t('settings.topPanelPosition.left')}</option>
@@ -2005,6 +2459,64 @@ class MindMapApp {
                 <option value="false" ${this.state.preferences.interaction.autoSnapshots ? '' : 'selected'}>${this.t('common.off')}</option>
               </select>
             </label>
+            <div class="settings-subsection">
+              <p class="section-label">${this.t('settings.aiQuickRequests')}</p>
+              <label class="field-row">
+                <span>${this.t('settings.aiQuickChildren')}</span>
+                <select class="settings-select" data-setting-field="interaction.aiQuickChildren">
+                  <option value="true" ${this.state.preferences.interaction.aiQuickChildren ? 'selected' : ''}>${this.t('common.on')}</option>
+                  <option value="false" ${this.state.preferences.interaction.aiQuickChildren ? '' : 'selected'}>${this.t('common.off')}</option>
+                </select>
+              </label>
+              <label class="field-row">
+                <span>${this.t('settings.aiQuickSiblings')}</span>
+                <select class="settings-select" data-setting-field="interaction.aiQuickSiblings">
+                  <option value="true" ${this.state.preferences.interaction.aiQuickSiblings ? 'selected' : ''}>${this.t('common.on')}</option>
+                  <option value="false" ${this.state.preferences.interaction.aiQuickSiblings ? '' : 'selected'}>${this.t('common.off')}</option>
+                </select>
+              </label>
+              <label class="field-row">
+                <span>${this.t('settings.aiQuickNotes')}</span>
+                <select class="settings-select" data-setting-field="interaction.aiQuickNotes">
+                  <option value="true" ${this.state.preferences.interaction.aiQuickNotes ? 'selected' : ''}>${this.t('common.on')}</option>
+                  <option value="false" ${this.state.preferences.interaction.aiQuickNotes ? '' : 'selected'}>${this.t('common.off')}</option>
+                </select>
+              </label>
+              <label class="field-row">
+                <span>${this.t('settings.aiQuickRelations')}</span>
+                <select class="settings-select" data-setting-field="interaction.aiQuickRelations">
+                  <option value="true" ${this.state.preferences.interaction.aiQuickRelations ? 'selected' : ''}>${this.t('common.on')}</option>
+                  <option value="false" ${this.state.preferences.interaction.aiQuickRelations ? '' : 'selected'}>${this.t('common.off')}</option>
+                </select>
+              </label>
+            </div>
+            <div class="settings-subsection">
+              <p class="section-label">${this.t('settings.actionBindings')}</p>
+              <label class="field-row">
+                <span>${this.t('settings.doubleClickAction')}</span>
+                <select class="settings-select" data-setting-field="interaction.doubleClickAction">
+                  ${this.renderGestureActionOptions(this.state.preferences.interaction.doubleClickAction)}
+                </select>
+              </label>
+              <label class="field-row">
+                <span>${this.t('settings.tripleClickAction')}</span>
+                <select class="settings-select" data-setting-field="interaction.tripleClickAction">
+                  ${this.renderGestureActionOptions(this.state.preferences.interaction.tripleClickAction)}
+                </select>
+              </label>
+              <label class="field-row">
+                <span>${this.t('settings.longPressAction')}</span>
+                <select class="settings-select" data-setting-field="interaction.longPressAction">
+                  ${this.renderGestureActionOptions(this.state.preferences.interaction.longPressAction)}
+                </select>
+              </label>
+              <label class="field-row">
+                <span>${this.t('settings.spaceAction')}</span>
+                <select class="settings-select" data-setting-field="interaction.spaceAction">
+                  ${this.renderGestureActionOptions(this.state.preferences.interaction.spaceAction)}
+                </select>
+              </label>
+            </div>
           </section>
 
           <section class="settings-card">
@@ -2185,6 +2697,7 @@ class MindMapApp {
             })}</p>
             <div class="ai-action-row">
               <button type="button" class="action-button" data-command="ai-suggest-children" ${this.state.ai.busy || !this.selectedNode() ? 'disabled' : ''}>${this.t('ai.suggestChildrenAction')}</button>
+              <button type="button" class="chip-button" data-command="ai-suggest-siblings" ${this.state.ai.busy || !this.canSuggestSiblings() ? 'disabled' : ''}>${this.t('ai.suggestSiblingsAction')}</button>
             </div>
           </section>
 
@@ -3315,6 +3828,28 @@ class MindMapApp {
     this.scheduleAutosave('status.siblingSaveScheduled')
   }
 
+  private createFloatingNode(nodeId: string): void {
+    const node = this.findNode(nodeId)
+    if (!node) {
+      return
+    }
+
+    this.captureHistory()
+    const newNode = createNode({
+      kind: 'floating',
+      position: nextFloatingPosition(this.state.document),
+      title: this.t('node.newFloating'),
+      color: normalizeNodeColor(node.color) || undefined,
+    })
+
+    this.state.document.nodes.push(newNode)
+    this.setSelection([newNode.id], newNode.id)
+    this.state.editingNodeId = newNode.id
+    touchDocument(this.state.document)
+    this.render()
+    this.scheduleAutosave('status.siblingSaveScheduled')
+  }
+
   private createRelation(sourceId: string, targetId: string): void {
     if (sourceId === targetId) {
       this.state.connectSourceNodeId = null
@@ -3758,7 +4293,11 @@ class MindMapApp {
           await this.exportMarkdown()
           return
         case 'import-file':
+          this.pendingImportMode = 'auto'
           this.refs?.importInput.click()
+          return
+        case 'new-floating':
+          this.createFloatingNode(this.selectedNode()?.id ?? 'root')
           return
         case 'connect-selected':
           this.startRelationMode()
@@ -3783,10 +4322,38 @@ class MindMapApp {
           this.refs?.importInput.click()
           return
         case 'ai-suggest-children':
-          await this.applyAISuggestChildren()
+          await this.applyAISuggestNodes(this.selectedNode()?.id ?? '', 'children')
+          return
+        case 'ai-suggest-siblings':
+          await this.applyAISuggestNodes(this.selectedNode()?.id ?? '', 'siblings')
+          return
+        case 'ai-wheel-children': {
+          const targetNodeId = this.state.aiWheel.nodeId ?? this.selectedNode()?.id ?? ''
+          this.closeAIWheel()
+          await this.applyAISuggestNodes(targetNodeId, 'children')
+          return
+        }
+        case 'ai-wheel-notes': {
+          const targetNodeId = this.state.aiWheel.nodeId ?? this.selectedNode()?.id ?? ''
+          this.closeAIWheel()
+          await this.applyAINodeNotesForTargets([targetNodeId], 'replace')
+          return
+        }
+        case 'ai-wheel-relations': {
+          const targetNodeId = this.state.aiWheel.nodeId ?? this.selectedNode()?.id ?? ''
+          this.closeAIWheel()
+          await this.applyAIRelationsForFocus([targetNodeId])
+          return
+        }
+        case 'close-ai-wheel':
+          this.closeAIWheel()
+          this.renderOverlay()
           return
         case 'create-template-map':
           await this.createTemplateMap(normalizeAITemplateId(argument))
+          return
+        case 'toggle-fixed-menu':
+          this.toggleFixedMenu((argument as FixedMenuId) || '')
           return
         case 'focus-graph-selected':
           if (this.state.graph.selectedNodeId) {
@@ -4317,15 +4884,22 @@ class MindMapApp {
   }
 
   private async applyAINodeNotes(mode: 'replace' | 'children' = 'replace'): Promise<void> {
-    if (this.state.ai.busy) {
-      return
-    }
-
     const targets = this.resolveAINoteTargets()
     if (targets.nodes.length === 0) {
       this.setStatus('status.aiNoNoteTargets')
       this.render()
       return
+    }
+
+    await this.applyAINodeNotesForTargets(
+      targets.nodes.map((node) => node.id),
+      mode,
+    )
+  }
+
+  private async applyAINodeNotesForTargets(targetNodeIds: string[], mode: 'replace' | 'children' = 'replace'): Promise<number> {
+    if (this.state.ai.busy) {
+      return 0
     }
 
     this.state.ai.busy = true
@@ -4337,7 +4911,7 @@ class MindMapApp {
       const result = await api.completeNodeNotes({
         document: this.state.document,
         settings: this.state.preferences.ai,
-        targetNodeIds: targets.nodes.map((node) => node.id),
+        targetNodeIds,
         instructions: this.state.ai.noteInstructions,
         debug: this.buildAIDebugRequest(this.state.ai.noteRawRequest),
       })
@@ -4348,7 +4922,7 @@ class MindMapApp {
       const nextNotes = result.notes.filter((item) => Boolean(this.findNode(item.id)) && item.note.trim() !== '')
       if (nextNotes.length === 0) {
         this.setStatus('status.aiNoNotes')
-        return
+        return 0
       }
 
       let appliedCount = 0
@@ -4368,7 +4942,7 @@ class MindMapApp {
 
         if (preparedChildren.length === 0) {
           this.setStatus('status.aiNoNotes')
-          return
+          return 0
         }
 
         this.captureHistory()
@@ -4395,7 +4969,7 @@ class MindMapApp {
         const changes = nextNotes.filter((item) => normalizeNodeNote(this.findNode(item.id)?.note) !== normalizeNodeNote(item.note))
         if (changes.length === 0) {
           this.setStatus('status.aiNoNotes')
-          return
+          return 0
         }
 
         this.captureHistory()
@@ -4411,10 +4985,12 @@ class MindMapApp {
       this.setStatus('status.aiNotesApplied', { count: appliedCount })
       this.render()
       this.scheduleAutosave(mode === 'children' ? 'status.childSaveScheduled' : 'status.noteSaveScheduled')
+      return appliedCount
     } catch (error) {
       const reason = getErrorMessage(error)
       this.captureAIDebug('notes', getAIDebugInfo(error), reason)
       this.setStatus('status.aiFailed', { reason })
+      return 0
     } finally {
       this.state.ai.busy = false
       this.render()
@@ -4422,8 +4998,12 @@ class MindMapApp {
   }
 
   private async applyAIRelations(): Promise<void> {
+    await this.applyAIRelationsForFocus()
+  }
+
+  private async applyAIRelationsForFocus(focusNodeIds?: string[]): Promise<number> {
     if (this.state.ai.busy) {
-      return
+      return 0
     }
 
     this.state.ai.busy = true
@@ -4436,6 +5016,7 @@ class MindMapApp {
         this.state.document,
         this.state.preferences.ai,
         this.state.ai.relationInstructions,
+        focusNodeIds,
         this.buildAIDebugRequest(this.state.ai.relationRawRequest),
       )
       this.state.ai.lastSummary = result.summary
@@ -4447,7 +5028,7 @@ class MindMapApp {
       })
       if (nextRelations.length === 0) {
         this.setStatus('status.aiNoRelations')
-        return
+        return 0
       }
 
       this.captureHistory()
@@ -4473,17 +5054,19 @@ class MindMapApp {
 
       if (added === 0) {
         this.setStatus('status.aiNoRelations')
-        return
+        return 0
       }
 
       touchDocument(this.state.document)
       this.setStatus('status.aiRelationsApplied', { count: added })
       this.render()
       this.scheduleAutosave('status.relationSaveScheduled')
+      return added
     } catch (error) {
       const reason = getErrorMessage(error)
       this.captureAIDebug('relations', getAIDebugInfo(error), reason)
       this.setStatus('status.aiFailed', { reason })
+      return 0
     } finally {
       this.state.ai.busy = false
       this.render()
@@ -4574,15 +5157,20 @@ class MindMapApp {
     }
   }
 
-  private async applyAISuggestChildren(): Promise<void> {
-    const selectedNode = this.selectedNode()
+  private async applyAISuggestNodes(targetNodeId: string, mode: 'children' | 'siblings' = 'children'): Promise<number> {
+    const selectedNode = this.findNode(targetNodeId)
     if (!selectedNode) {
       this.setStatus('status.aiNoSelection')
       this.render()
-      return
+      return 0
+    }
+    if (mode === 'siblings' && !this.canSuggestSiblings(selectedNode.id)) {
+      this.setStatus('status.aiNoSiblingTarget')
+      this.render()
+      return 0
     }
     if (this.state.ai.busy) {
-      return
+      return 0
     }
 
     this.state.ai.busy = true
@@ -4594,6 +5182,7 @@ class MindMapApp {
         document: this.state.document,
         settings: this.state.preferences.ai,
         targetNodeId: selectedNode.id,
+        mode,
         instructions: this.state.ai.noteInstructions,
         debug: this.buildAIDebugRequest(this.state.ai.noteRawRequest),
       })
@@ -4604,20 +5193,29 @@ class MindMapApp {
       const suggestions = result.suggestions.filter((item) => item.title.trim() !== '')
       if (suggestions.length === 0) {
         this.setStatus('status.aiNoSuggestions')
-        return
+        return 0
       }
 
       this.captureHistory()
+      const createdIds: string[] = []
+      const parentId = mode === 'siblings' ? selectedNode.parentId ?? '' : selectedNode.id
+      const parentNode = this.findNode(parentId)
+      if (parentNode) {
+        parentNode.collapsed = false
+        parentNode.updatedAt = new Date().toISOString()
+      }
       selectedNode.collapsed = false
       selectedNode.updatedAt = new Date().toISOString()
-      const createdIds: string[] = []
       for (const suggestion of suggestions) {
         const childNode = createNode({
-          parentId: selectedNode.id,
+          parentId,
           kind: 'topic',
-          position: nextChildPosition(this.state.document, selectedNode.id, this.state.preferences.appearance.layoutMode),
+          position:
+            mode === 'siblings'
+              ? nextSiblingPosition(this.state.document, selectedNode, this.state.preferences.appearance.layoutMode)
+              : nextChildPosition(this.state.document, selectedNode.id, this.state.preferences.appearance.layoutMode),
           title: suggestion.title,
-          color: normalizeNodeColor(selectedNode.color) || undefined,
+          color: normalizeNodeColor((parentNode ?? selectedNode).color) || undefined,
         })
         childNode.note = suggestion.note
         this.state.document.nodes.push(childNode)
@@ -4630,14 +5228,61 @@ class MindMapApp {
       this.setStatus('status.aiSuggestionsApplied', { count: createdIds.length })
       this.render()
       this.scheduleAutosave('status.childSaveScheduled')
+      return createdIds.length
     } catch (error) {
       const reason = getErrorMessage(error)
       this.captureAIDebug('notes', getAIDebugInfo(error), reason)
       this.setStatus('status.aiFailed', { reason })
+      return 0
     } finally {
       this.state.ai.busy = false
       this.render()
     }
+  }
+
+  private async applyAIQuickAssist(nodeId: string): Promise<void> {
+    const selectedNode = this.findNode(nodeId)
+    if (!selectedNode) {
+      this.setStatus('status.aiNoSelection')
+      this.render()
+      return
+    }
+    if (this.state.ai.busy) {
+      return
+    }
+
+    const quickConfig = this.state.preferences.interaction
+    if (!quickConfig.aiQuickChildren && !quickConfig.aiQuickSiblings && !quickConfig.aiQuickNotes && !quickConfig.aiQuickRelations) {
+      this.setStatus('status.aiQuickDisabled')
+      this.render()
+      return
+    }
+
+    const applied: Array<{ kind: 'children' | 'siblings' | 'notes' | 'relations'; count: number }> = []
+    if (quickConfig.aiQuickChildren) {
+      applied.push({ kind: 'children', count: await this.applyAISuggestNodes(nodeId, 'children') })
+    }
+    if (quickConfig.aiQuickSiblings && this.canSuggestSiblings(nodeId)) {
+      applied.push({ kind: 'siblings', count: await this.applyAISuggestNodes(nodeId, 'siblings') })
+    }
+    if (quickConfig.aiQuickNotes) {
+      applied.push({ kind: 'notes', count: await this.applyAINodeNotesForTargets([nodeId], 'replace') })
+    }
+    if (quickConfig.aiQuickRelations) {
+      applied.push({ kind: 'relations', count: await this.applyAIRelationsForFocus([nodeId]) })
+    }
+
+    const summary = applied.filter((item) => item.count > 0)
+    if (summary.length === 0) {
+      this.setStatus('status.aiQuickNoChanges')
+      this.render()
+      return
+    }
+
+    this.setStatus('status.aiQuickApplied', {
+      summary: summary.map((item) => `${this.aiQuickKindLabel(item.kind)} ${item.count}`).join(' / '),
+    })
+    this.render()
   }
 
   private async createTemplateMap(templateId: AITemplateId): Promise<void> {
@@ -4772,6 +5417,16 @@ class MindMapApp {
         this.setStatus('status.appearanceUpdated')
         this.render()
         return
+      case 'appearance.chromeLayout':
+        this.updatePreferences((preferences) => {
+          preferences.appearance.chromeLayout = normalizeChromeLayout(value)
+        })
+        if (value !== 'fixed') {
+          this.state.fixedMenu = ''
+        }
+        this.setStatus('status.appearanceUpdated')
+        this.render()
+        return
       case 'appearance.topPanelPosition':
         this.updatePreferences((preferences) => {
           preferences.appearance.topPanelPosition = normalizeTopPanelPosition(value)
@@ -4803,6 +5458,62 @@ class MindMapApp {
       case 'interaction.autoSnapshots':
         this.updatePreferences((preferences) => {
           preferences.interaction.autoSnapshots = value === 'true'
+        })
+        this.setStatus('status.interactionUpdated')
+        this.render()
+        return
+      case 'interaction.aiQuickChildren':
+        this.updatePreferences((preferences) => {
+          preferences.interaction.aiQuickChildren = value === 'true'
+        })
+        this.setStatus('status.interactionUpdated')
+        this.render()
+        return
+      case 'interaction.aiQuickSiblings':
+        this.updatePreferences((preferences) => {
+          preferences.interaction.aiQuickSiblings = value === 'true'
+        })
+        this.setStatus('status.interactionUpdated')
+        this.render()
+        return
+      case 'interaction.aiQuickNotes':
+        this.updatePreferences((preferences) => {
+          preferences.interaction.aiQuickNotes = value === 'true'
+        })
+        this.setStatus('status.interactionUpdated')
+        this.render()
+        return
+      case 'interaction.aiQuickRelations':
+        this.updatePreferences((preferences) => {
+          preferences.interaction.aiQuickRelations = value === 'true'
+        })
+        this.setStatus('status.interactionUpdated')
+        this.render()
+        return
+      case 'interaction.doubleClickAction':
+        this.updatePreferences((preferences) => {
+          preferences.interaction.doubleClickAction = normalizeGestureAction(value, preferences.interaction.doubleClickAction)
+        })
+        this.setStatus('status.interactionUpdated')
+        this.render()
+        return
+      case 'interaction.tripleClickAction':
+        this.updatePreferences((preferences) => {
+          preferences.interaction.tripleClickAction = normalizeGestureAction(value, preferences.interaction.tripleClickAction)
+        })
+        this.setStatus('status.interactionUpdated')
+        this.render()
+        return
+      case 'interaction.longPressAction':
+        this.updatePreferences((preferences) => {
+          preferences.interaction.longPressAction = normalizeGestureAction(value, preferences.interaction.longPressAction)
+        })
+        this.setStatus('status.interactionUpdated')
+        this.render()
+        return
+      case 'interaction.spaceAction':
+        this.updatePreferences((preferences) => {
+          preferences.interaction.spaceAction = normalizeGestureAction(value, preferences.interaction.spaceAction)
         })
         this.setStatus('status.interactionUpdated')
         this.render()
