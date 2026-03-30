@@ -134,6 +134,26 @@ export interface AIGenerateResponse {
   debug?: AIDebugInfo
 }
 
+export interface AIImportResponse {
+  document: MindMapDocument
+  summary: string
+  prompt: string
+  model: string
+  debug?: AIDebugInfo
+}
+
+export interface AIChildSuggestion {
+  title: string
+  note: string
+}
+
+export interface AISuggestChildrenResponse {
+  suggestions: AIChildSuggestion[]
+  summary: string
+  model: string
+  debug?: AIDebugInfo
+}
+
 export interface AITestResponse {
   ok: boolean
   model: string

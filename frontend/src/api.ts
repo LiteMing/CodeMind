@@ -2,8 +2,10 @@ import type {
   AIDebugInfo,
   AIDebugRequest,
   AIGenerateResponse,
+  AIImportResponse,
   AINodeNotesResponse,
   AIRelationResponse,
+  AISuggestChildrenResponse,
   AITestResponse,
   AITemplateId,
   AISettings,
@@ -121,6 +123,31 @@ export const api = {
     return normalizeDocument(await readJSON<MindMapDocument>(response, '/api/import'))
   },
 
+  async importDocumentWithAI(input: {
+    fileName: string
+    format: string
+    content: string
+    instructions: string
+    settings: AISettings
+    debug?: AIDebugRequest
+  }): Promise<AIImportResponse> {
+    const response = await fetch(`${API_BASE}/ai/import`, {
+      method: 'POST',
+      headers: JSON_HEADERS,
+      body: JSON.stringify(input),
+    })
+
+    if (!response.ok) {
+      throw await createAPIError(response)
+    }
+
+    const payload = await readJSON<AIImportResponse>(response, '/api/ai/import')
+    return {
+      ...payload,
+      document: normalizeDocument(payload.document),
+    }
+  },
+
   async suggestRelations(
     document: MindMapDocument,
     settings: AISettings,
@@ -189,6 +216,26 @@ export const api = {
       ...payload,
       document: normalizeDocument(payload.document),
     }
+  },
+
+  async suggestChildren(input: {
+    document: MindMapDocument
+    settings: AISettings
+    targetNodeId: string
+    instructions: string
+    debug?: AIDebugRequest
+  }): Promise<AISuggestChildrenResponse> {
+    const response = await fetch(`${API_BASE}/ai/suggest-children`, {
+      method: 'POST',
+      headers: JSON_HEADERS,
+      body: JSON.stringify(input),
+    })
+
+    if (!response.ok) {
+      throw await createAPIError(response)
+    }
+
+    return await readJSON<AISuggestChildrenResponse>(response, '/api/ai/suggest-children')
   },
 
   async testAIConnection(settings: AISettings): Promise<AITestResponse> {

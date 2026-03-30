@@ -142,6 +142,43 @@ type aiGenerateResponse struct {
 	Debug    aiDebugInfo      `json:"debug"`
 }
 
+type aiImportRequest struct {
+	Settings     aiSettingsRequest `json:"settings"`
+	FileName     string            `json:"fileName"`
+	Format       string            `json:"format"`
+	Content      string            `json:"content"`
+	Instructions string            `json:"instructions"`
+	Debug        aiDebugRequest    `json:"debug"`
+}
+
+type aiImportResponse struct {
+	Document mindmap.Document `json:"document"`
+	Summary  string           `json:"summary"`
+	Prompt   string           `json:"prompt"`
+	Model    string           `json:"model"`
+	Debug    aiDebugInfo      `json:"debug"`
+}
+
+type aiSuggestChildrenRequest struct {
+	Settings     aiSettingsRequest `json:"settings"`
+	Document     mindmap.Document  `json:"document"`
+	TargetNodeID string            `json:"targetNodeId"`
+	Instructions string            `json:"instructions"`
+	Debug        aiDebugRequest    `json:"debug"`
+}
+
+type aiSuggestChildrenResponse struct {
+	Suggestions []aiChildSuggestion `json:"suggestions"`
+	Summary     string              `json:"summary"`
+	Model       string              `json:"model"`
+	Debug       aiDebugInfo         `json:"debug"`
+}
+
+type aiChildSuggestion struct {
+	Title string `json:"title"`
+	Note  string `json:"note"`
+}
+
 type aiTestResponse struct {
 	OK      bool   `json:"ok"`
 	Model   string `json:"model"`
@@ -265,6 +302,8 @@ func (s *Server) registerAPI(mux *http.ServeMux) {
 	mux.HandleFunc("/api/ai/relations", s.handleAIRelations)
 	mux.HandleFunc("/api/ai/node-notes", s.handleAINodeNotes)
 	mux.HandleFunc("/api/ai/generate", s.handleAIGenerate)
+	mux.HandleFunc("/api/ai/import", s.handleAIImport)
+	mux.HandleFunc("/api/ai/suggest-children", s.handleAISuggestChildren)
 }
 
 func (s *Server) handleMaps(w http.ResponseWriter, r *http.Request) {
@@ -516,6 +555,62 @@ func (s *Server) handleAIGenerate(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, result)
 }
 
+func (s *Server) handleAIImport(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", "POST")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req aiImportRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if strings.TrimSpace(req.Content) == "" {
+		writeError(w, http.StatusBadRequest, errors.New("content is required"))
+		return
+	}
+
+	result, err := s.importDocumentWithAI(req)
+	if err != nil {
+		writeAIError(w, http.StatusBadGateway, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (s *Server) handleAISuggestChildren(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", "POST")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req aiSuggestChildrenRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if err := req.Document.Validate(); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if strings.TrimSpace(req.TargetNodeID) == "" {
+		writeError(w, http.StatusBadRequest, errors.New("targetNodeId is required"))
+		return
+	}
+
+	result, err := s.suggestAIChildren(req)
+	if err != nil {
+		writeAIError(w, http.StatusBadGateway, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, result)
+}
+
 func (s *Server) suggestAIRelations(req aiRelationsRequest) (aiRelationsResponse, error) {
 	type relationPayload struct {
 		Summary   string                 `json:"summary"`
@@ -688,9 +783,16 @@ func (s *Server) generateAIDocument(req aiGenerateRequest) (aiGenerateResponse, 
 		"Every node must also include a useful explanatory note in plain text.",
 		"Default to a 2 to 3 level hierarchy instead of a flat root-level list.",
 		"Prefer richer notes over adding many shallow branches with no explanation.",
-		"If response_format is ignored, still return strict JSON with the exact top-level keys title, summary, nodes, relations.",
-		"Never wrap the JSON in markdown fences, a content string, or any extra commentary.",
-		"Do not invent alternate top-level shapes like root/children/crossLinks.",
+		"CRITICAL FORMAT RULES (you MUST follow these exactly):",
+		"- The top-level JSON object MUST have exactly four keys: title, summary, nodes, relations.",
+		"- Do NOT invent alternate top-level shapes such as root, children, crossLinks, mindmap, graph, or any other key.",
+		"- Do NOT wrap the JSON in markdown fences (```), a content string, or any commentary.",
+		"- If response_format is ignored, still return strict JSON with only the four keys above.",
+		"- The first element of the nodes array MUST be the root node with kind=root and an empty parentId.",
+		"- Every non-root node MUST have all six fields: id, title, note, parentId, kind, priority.",
+		"- parentId must refer to an existing node id in the same array; never leave it empty for non-root nodes.",
+		"- kind must be one of: root, topic, floating.  priority must be one of: (empty string), P0, P1, P2, P3.",
+		"- relations is an array of {sourceId, targetId, label} for semantic cross-links only, not hierarchy.",
 	}, "\n")
 
 	templatePrompt := promptTemplateForGraph(req.Template)
@@ -837,6 +939,242 @@ func (s *Server) generateAIDocument(req aiGenerateRequest) (aiGenerateResponse, 
 		Mode:     mode,
 		Model:    taskResult.Model,
 		Debug:    taskResult.Debug,
+	}, nil
+}
+
+func (s *Server) importDocumentWithAI(req aiImportRequest) (aiImportResponse, error) {
+	systemPrompt := strings.Join([]string{
+		"You convert arbitrary text-format content into a structured mind-map document.",
+		"Read the source content carefully and extract the hierarchy of topics, subtopics, and details.",
+		"Organize it as a tree with a root node representing the overall document.",
+		"CRITICAL FORMAT RULES (you MUST follow these exactly):",
+		"- The top-level JSON object MUST have exactly four keys: title, summary, nodes, relations.",
+		"- Do NOT invent alternate top-level shapes such as root, children, crossLinks, mindmap, graph, or any other key.",
+		"- Do NOT wrap the JSON in markdown fences, a content string, or any commentary.",
+		"- The first element of the nodes array MUST be the root node with kind=root and an empty parentId.",
+		"- Every non-root node MUST have all six fields: id, title, note, parentId, kind, priority.",
+		"- parentId must refer to an existing node id in the same array; never leave it empty for non-root nodes.",
+		"- kind must be one of: root, topic, floating.  priority must be one of: (empty string), P0, P1, P2, P3.",
+		"- relations is an array of {sourceId, targetId, label} for semantic cross-links only, not hierarchy.",
+		"- Preserve the original structure and hierarchy of the source content as faithfully as possible.",
+		"- Keep node titles short and put details in the note field.",
+		"- Use the same language as the source content for titles and notes.",
+	}, "\n")
+
+	fileName := strings.TrimSpace(req.FileName)
+	format := strings.TrimSpace(req.Format)
+	if format == "" {
+		format = path.Ext(fileName)
+	}
+
+	contentPreview := strings.TrimSpace(req.Content)
+	if len(contentPreview) > 12000 {
+		contentPreview = contentPreview[:12000] + "\n... (content truncated for token budget)"
+	}
+
+	userPromptLines := []string{
+		fmt.Sprintf("Source file: %s (format: %s)", fileName, format),
+		"",
+		"Source content:",
+		contentPreview,
+		"",
+		"Task:",
+		"- Convert this content into a hierarchical mind-map.",
+		"- Derive a clear title from the content.",
+		"- Create a proper tree structure with meaningful groupings.",
+		"- Prefer 2 to 4 levels of hierarchy when the content supports it.",
+		"- Every node must include id, title, note, parentId, kind, priority.",
+		"- Root and first-level branches should have especially detailed notes.",
+		"- Use relation lines only for semantic cross-links between distant branches.",
+	}
+	if extra := optionalInstructionBlock(req.Instructions); extra != "" {
+		userPromptLines = append(userPromptLines, extra)
+	}
+	userPrompt := strings.Join(userPromptLines, "\n")
+
+	schema := map[string]any{
+		"type": "json_schema",
+		"json_schema": map[string]any{
+			"name":   "mind_map_generation",
+			"strict": true,
+			"schema": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"title":   map[string]any{"type": "string"},
+					"summary": map[string]any{"type": "string"},
+					"nodes": map[string]any{
+						"type": "array",
+						"items": map[string]any{
+							"type": "object",
+							"properties": map[string]any{
+								"id":       map[string]any{"type": "string"},
+								"title":    map[string]any{"type": "string"},
+								"note":     map[string]any{"type": "string"},
+								"parentId": map[string]any{"type": "string"},
+								"kind":     map[string]any{"type": "string"},
+								"priority": map[string]any{"type": "string"},
+							},
+							"required":             []string{"id", "title", "note", "parentId", "kind", "priority"},
+							"additionalProperties": false,
+						},
+					},
+					"relations": map[string]any{
+						"type": "array",
+						"items": map[string]any{
+							"type": "object",
+							"properties": map[string]any{
+								"sourceId": map[string]any{"type": "string"},
+								"targetId": map[string]any{"type": "string"},
+								"label":    map[string]any{"type": "string"},
+							},
+							"required":             []string{"sourceId", "targetId", "label"},
+							"additionalProperties": false,
+						},
+					},
+				},
+				"required":             []string{"title", "summary", "nodes", "relations"},
+				"additionalProperties": false,
+			},
+		},
+	}
+
+	var payload aiGeneratedGraph
+	taskResult, err := s.runJSONTask(req.Settings, systemPrompt, userPrompt, schema, req.Debug, &payload)
+	if err != nil {
+		return aiImportResponse{}, err
+	}
+	payload, err = normalizeGeneratedGraphPayload(taskResult.Content, payload)
+	if err != nil {
+		return aiImportResponse{}, err
+	}
+
+	title := strings.TrimSpace(payload.Title)
+	if title == "" {
+		title = strings.TrimSuffix(fileName, filepath.Ext(fileName))
+	}
+	if title == "" {
+		title = "AI Import"
+	}
+
+	document, err := generatedGraphToDocument(title, payload)
+	if err != nil {
+		return aiImportResponse{}, err
+	}
+
+	return aiImportResponse{
+		Document: document,
+		Summary:  strings.TrimSpace(payload.Summary),
+		Prompt:   userPrompt,
+		Model:    taskResult.Model,
+		Debug:    taskResult.Debug,
+	}, nil
+}
+
+func (s *Server) suggestAIChildren(req aiSuggestChildrenRequest) (aiSuggestChildrenResponse, error) {
+	type suggestionPayload struct {
+		Summary     string              `json:"summary"`
+		Suggestions []aiChildSuggestion `json:"suggestions"`
+	}
+
+	nodeMap := req.Document.NodeMap()
+	targetNode, ok := nodeMap[strings.TrimSpace(req.TargetNodeID)]
+	if !ok {
+		return aiSuggestChildrenResponse{}, errors.New("target node not found")
+	}
+
+	systemPrompt := strings.Join([]string{
+		"You suggest child nodes for a specific node in a mind map.",
+		"Each suggestion should be a natural next-level subtopic or detail.",
+		"Keep titles short (under 30 characters preferred).",
+		"Notes should be 1 to 3 informative sentences.",
+		"Prefer the same language as the source mind map.",
+		"Avoid duplicating existing children or sibling topics.",
+	}, "\n")
+
+	documentPayload, err := marshalMindMapForPrompt(req.Document)
+	if err != nil {
+		return aiSuggestChildrenResponse{}, err
+	}
+
+	existingChildren := make([]string, 0)
+	for _, node := range req.Document.Nodes {
+		if node.ParentID == targetNode.ID {
+			existingChildren = append(existingChildren, strings.TrimSpace(node.Title))
+		}
+	}
+
+	userPromptLines := []string{
+		"Mind map document:",
+		documentPayload,
+		"",
+		fmt.Sprintf("Target node to suggest children for: id=%s, title=%q", targetNode.ID, targetNode.Title),
+	}
+	if len(existingChildren) > 0 {
+		existingJSON, _ := json.Marshal(existingChildren)
+		userPromptLines = append(userPromptLines, fmt.Sprintf("Existing children titles (avoid duplicating these): %s", string(existingJSON)))
+	}
+	userPromptLines = append(userPromptLines,
+		"",
+		"Task:",
+		"- Suggest 3 to 6 child nodes for the target node.",
+		"- Each child should be a meaningful subtopic, detail, or related concept.",
+		"- Titles should be concise and informative.",
+		"- Notes should explain what the child node is about.",
+	)
+	if extra := optionalInstructionBlock(req.Instructions); extra != "" {
+		userPromptLines = append(userPromptLines, extra)
+	}
+	userPrompt := strings.Join(userPromptLines, "\n")
+
+	schema := map[string]any{
+		"type": "json_schema",
+		"json_schema": map[string]any{
+			"name":   "mind_map_child_suggestions",
+			"strict": true,
+			"schema": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"summary": map[string]any{"type": "string"},
+					"suggestions": map[string]any{
+						"type": "array",
+						"items": map[string]any{
+							"type": "object",
+							"properties": map[string]any{
+								"title": map[string]any{"type": "string"},
+								"note":  map[string]any{"type": "string"},
+							},
+							"required":             []string{"title", "note"},
+							"additionalProperties": false,
+						},
+					},
+				},
+				"required":             []string{"summary", "suggestions"},
+				"additionalProperties": false,
+			},
+		},
+	}
+
+	var payload suggestionPayload
+	taskResult, err := s.runJSONTask(req.Settings, systemPrompt, userPrompt, schema, req.Debug, &payload)
+	if err != nil {
+		return aiSuggestChildrenResponse{}, err
+	}
+
+	filtered := make([]aiChildSuggestion, 0, len(payload.Suggestions))
+	for _, suggestion := range payload.Suggestions {
+		suggestion.Title = strings.TrimSpace(suggestion.Title)
+		suggestion.Note = strings.TrimSpace(suggestion.Note)
+		if suggestion.Title == "" {
+			continue
+		}
+		filtered = append(filtered, suggestion)
+	}
+
+	return aiSuggestChildrenResponse{
+		Suggestions: filtered,
+		Summary:     strings.TrimSpace(payload.Summary),
+		Model:       taskResult.Model,
+		Debug:       taskResult.Debug,
 	}, nil
 }
 

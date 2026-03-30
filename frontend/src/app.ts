@@ -58,7 +58,8 @@ import type {
 } from './types'
 
 type AppView = 'home' | 'map'
-type AIDebugAction = 'generate' | 'notes' | 'relations' | ''
+type AIDebugAction = 'generate' | 'notes' | 'relations' | 'import' | ''
+type PendingImportMode = 'auto' | 'ai'
 
 interface DragState {
   nodeId: string
@@ -140,9 +141,11 @@ interface AIWorkspaceState {
   template: AITemplateId
   topic: string
   generationInstructions: string
+  importInstructions: string
   noteInstructions: string
   relationInstructions: string
   generateRawRequest: string
+  importRawRequest: string
   noteRawRequest: string
   relationRawRequest: string
   lastSummary: string
@@ -279,6 +282,8 @@ const GRAPH_DEFAULT_ZOOM = 1.16
 const GRAPH_MIN_ZOOM = 0.68
 const GRAPH_MAX_ZOOM = 1.92
 const GRAPH_ZOOM_SENSITIVITY = 0.0012
+const IMPORT_FILE_ACCEPT =
+  '.md,.markdown,.txt,.json,.csv,.tsv,.html,.htm,.xml,.opml,.mermaid,.mmd,.yaml,.yml,.toml,.ini,.cfg,.log,.rst,text/plain,text/markdown,application/json,text/csv,text/html,application/xml,text/xml'
 const PRIORITY_VALUES: Priority[] = ['', 'P0', 'P1', 'P2', 'P3']
 const NODE_COLOR_VALUES: NodeColor[] = ['', 'slate', 'blue', 'teal', 'green', 'amber', 'rose', 'violet']
 const AI_TEMPLATES: Array<{ id: AITemplateId }> = [
@@ -390,6 +395,7 @@ class MindMapApp {
   private pendingEditorOptions: EditorLaunchOptions | null = null
   private activeEditorAnchorLeft: number | null = null
   private nodeEditorMeasureCanvas: HTMLCanvasElement | null = null
+  private pendingImportMode: PendingImportMode = 'auto'
   private workspaceBounds: WorkspaceBounds = {
     minX: 0,
     minY: 0,
@@ -430,9 +436,11 @@ class MindMapApp {
         template: 'concept-graph',
         topic: '',
         generationInstructions: '',
+        importInstructions: '',
         noteInstructions: '',
         relationInstructions: '',
         generateRawRequest: '',
+        importRawRequest: '',
         noteRawRequest: '',
         relationRawRequest: '',
         lastSummary: '',
@@ -1335,6 +1343,9 @@ class MindMapApp {
         case 'generationInstructions':
           this.state.ai.generationInstructions = target.value
           break
+        case 'importInstructions':
+          this.state.ai.importInstructions = target.value
+          break
         case 'noteInstructions':
           this.state.ai.noteInstructions = target.value
           break
@@ -1343,6 +1354,9 @@ class MindMapApp {
           break
         case 'generateRawRequest':
           this.state.ai.generateRawRequest = target.value
+          break
+        case 'importRawRequest':
+          this.state.ai.importRawRequest = target.value
           break
         case 'noteRawRequest':
           this.state.ai.noteRawRequest = target.value
@@ -1384,7 +1398,8 @@ class MindMapApp {
         return
       }
 
-      void this.importFile(file)
+      void this.importFile(file, this.pendingImportMode)
+      this.pendingImportMode = 'auto'
       target.value = ''
       return
     }
@@ -1541,7 +1556,7 @@ class MindMapApp {
                   <button type="button" class="action-button" data-role="theme-button" data-command="theme-toggle"></button>
                   <button type="button" class="action-button" data-role="settings-button" data-command="toggle-settings"></button>
                   <button type="button" class="action-button" data-role="import-button" data-command="import-file"></button>
-                  <input type="file" accept=".md,.markdown,.txt,text/plain,text/markdown" data-role="import-input" data-import-input hidden />
+                  <input type="file" accept="${IMPORT_FILE_ACCEPT}" data-role="import-input" data-import-input hidden />
                 </section>
               </div>
             </section>
@@ -2135,6 +2150,19 @@ class MindMapApp {
           </section>
 
           <section class="settings-card">
+            <p class="section-label">${this.t('ai.import')}</p>
+            <p class="inspector-copy">${this.t('ai.importHint')}</p>
+            <label class="field-stack">
+              <span>${this.t('ai.instructions')}</span>
+              <textarea class="settings-input ai-textarea" data-ai-field="importInstructions" placeholder="${escapeAttribute(this.t('ai.importPlaceholder'))}">${escapeHtml(this.state.ai.importInstructions)}</textarea>
+            </label>
+            <div class="ai-action-row">
+              <button type="button" class="action-button" data-command="ai-import-file" ${this.state.ai.busy ? 'disabled' : ''}>${this.t('ai.importAction')}</button>
+            </div>
+            ${this.renderAIRawEditor('importRawRequest', this.state.ai.importRawRequest)}
+          </section>
+
+          <section class="settings-card">
             <p class="section-label">${this.t('ai.notes')}</p>
             <p class="inspector-copy">${this.t(noteTargets.mode === 'selection' ? 'ai.notesSelectionHint' : 'ai.notesAllHint', {
               value: noteTargets.nodes.length,
@@ -2148,6 +2176,16 @@ class MindMapApp {
               <button type="button" class="chip-button" data-command="ai-complete-node-notes-as-children" ${this.state.ai.busy ? 'disabled' : ''}>${this.aiNoteChildActionLabel()}</button>
             </div>
             ${this.renderAIRawEditor('noteRawRequest', this.state.ai.noteRawRequest)}
+          </section>
+
+          <section class="settings-card">
+            <p class="section-label">${this.t('ai.suggestChildren')}</p>
+            <p class="inspector-copy">${this.t(this.selectedNode() ? 'ai.suggestChildrenHint' : 'ai.suggestChildrenNoSelection', {
+              title: this.selectedNode()?.title ?? '',
+            })}</p>
+            <div class="ai-action-row">
+              <button type="button" class="action-button" data-command="ai-suggest-children" ${this.state.ai.busy || !this.selectedNode() ? 'disabled' : ''}>${this.t('ai.suggestChildrenAction')}</button>
+            </div>
           </section>
 
           <section class="settings-card">
@@ -2193,7 +2231,10 @@ class MindMapApp {
     `
   }
 
-  private renderAIRawEditor(field: 'generateRawRequest' | 'noteRawRequest' | 'relationRawRequest', value: string): string {
+  private renderAIRawEditor(
+    field: 'generateRawRequest' | 'importRawRequest' | 'noteRawRequest' | 'relationRawRequest',
+    value: string,
+  ): string {
     if (!this.state.ai.debugOpen && !this.state.ai.rawMode) {
       return ''
     }
@@ -2254,6 +2295,8 @@ class MindMapApp {
     switch (action) {
       case 'generate':
         return this.t('ai.generate')
+      case 'import':
+        return this.t('ai.import')
       case 'notes':
         return this.t('ai.notes')
       case 'relations':
@@ -3345,6 +3388,7 @@ class MindMapApp {
       return
     }
 
+    autoLayoutHierarchy(this.state.document, this.state.preferences.appearance.layoutMode)
     this.setSelection([fallbackNodeId], fallbackNodeId)
     this.state.editingNodeId = null
     this.state.connectSourceNodeId = null
@@ -3734,6 +3778,13 @@ class MindMapApp {
         case 'ai-expand-map':
           await this.expandAIMap()
           return
+        case 'ai-import-file':
+          this.pendingImportMode = 'ai'
+          this.refs?.importInput.click()
+          return
+        case 'ai-suggest-children':
+          await this.applyAISuggestChildren()
+          return
         case 'create-template-map':
           await this.createTemplateMap(normalizeAITemplateId(argument))
           return
@@ -3951,8 +4002,15 @@ class MindMapApp {
     this.render()
   }
 
-  private async importFile(file: File): Promise<void> {
-    const extension = file.name.split('.').pop()?.toLowerCase()
+  private async importFile(file: File, mode: PendingImportMode = 'auto'): Promise<void> {
+    const extension = file.name.split('.').pop()?.toLowerCase() ?? ''
+    const isRuleFormat = ['md', 'markdown', 'txt'].includes(extension)
+
+    if (mode === 'ai' || (!isRuleFormat && mode === 'auto')) {
+      await this.importFileWithAI(file)
+      return
+    }
+
     const format = extension === 'md' || extension === 'markdown' ? 'markdown' : 'text'
 
     try {
@@ -3973,6 +4031,43 @@ class MindMapApp {
       await this.saveDocument('status.importedSaved')
     } catch (error) {
       this.setStatus('status.importFailed', { reason: getErrorMessage(error) })
+      this.render()
+    }
+  }
+
+  private async importFileWithAI(file: File): Promise<void> {
+    if (this.state.ai.busy) {
+      return
+    }
+
+    this.state.ai.busy = true
+    this.setStatus('status.aiRunning')
+    this.render()
+
+    try {
+      const content = await file.text()
+      const extension = file.name.split('.').pop()?.toLowerCase() ?? ''
+      const result = await api.importDocumentWithAI({
+        fileName: file.name,
+        format: extension,
+        content,
+        instructions: this.state.ai.importInstructions,
+        settings: this.state.preferences.ai,
+        debug: this.buildAIDebugRequest(this.state.ai.importRawRequest),
+      })
+
+      this.state.ai.lastSummary = result.summary
+      this.state.ai.lastModel = result.model
+      this.captureAIDebug('import', result.debug)
+      await this.persistGeneratedDocument(result.document)
+      this.state.ai.open = false
+      this.setStatus('status.aiImported', { filename: file.name, count: result.document.nodes.length })
+    } catch (error) {
+      const reason = getErrorMessage(error)
+      this.captureAIDebug('import', getAIDebugInfo(error), reason)
+      this.setStatus('status.aiFailed', { reason })
+    } finally {
+      this.state.ai.busy = false
       this.render()
     }
   }
@@ -4207,6 +4302,9 @@ class MindMapApp {
       case 'generate':
         this.state.ai.generateRawRequest = rawRequest
         break
+      case 'import':
+        this.state.ai.importRawRequest = rawRequest
+        break
       case 'notes':
         this.state.ai.noteRawRequest = rawRequest
         break
@@ -4291,6 +4389,7 @@ class MindMapApp {
           appliedCount += 1
         }
 
+        autoLayoutHierarchy(this.state.document, this.state.preferences.appearance.layoutMode)
         this.setSelection(createdIds, createdIds[0] ?? null)
       } else {
         const changes = nextNotes.filter((item) => normalizeNodeNote(this.findNode(item.id)?.note) !== normalizeNodeNote(item.note))
@@ -4468,6 +4567,72 @@ class MindMapApp {
     } catch (error) {
       const reason = getErrorMessage(error)
       this.captureAIDebug('generate', getAIDebugInfo(error), reason)
+      this.setStatus('status.aiFailed', { reason })
+    } finally {
+      this.state.ai.busy = false
+      this.render()
+    }
+  }
+
+  private async applyAISuggestChildren(): Promise<void> {
+    const selectedNode = this.selectedNode()
+    if (!selectedNode) {
+      this.setStatus('status.aiNoSelection')
+      this.render()
+      return
+    }
+    if (this.state.ai.busy) {
+      return
+    }
+
+    this.state.ai.busy = true
+    this.setStatus('status.aiRunning')
+    this.renderHeader()
+
+    try {
+      const result = await api.suggestChildren({
+        document: this.state.document,
+        settings: this.state.preferences.ai,
+        targetNodeId: selectedNode.id,
+        instructions: this.state.ai.noteInstructions,
+        debug: this.buildAIDebugRequest(this.state.ai.noteRawRequest),
+      })
+      this.state.ai.lastSummary = result.summary
+      this.state.ai.lastModel = result.model
+      this.captureAIDebug('notes', result.debug)
+
+      const suggestions = result.suggestions.filter((item) => item.title.trim() !== '')
+      if (suggestions.length === 0) {
+        this.setStatus('status.aiNoSuggestions')
+        return
+      }
+
+      this.captureHistory()
+      selectedNode.collapsed = false
+      selectedNode.updatedAt = new Date().toISOString()
+      const createdIds: string[] = []
+      for (const suggestion of suggestions) {
+        const childNode = createNode({
+          parentId: selectedNode.id,
+          kind: 'topic',
+          position: nextChildPosition(this.state.document, selectedNode.id, this.state.preferences.appearance.layoutMode),
+          title: suggestion.title,
+          color: normalizeNodeColor(selectedNode.color) || undefined,
+        })
+        childNode.note = suggestion.note
+        this.state.document.nodes.push(childNode)
+        createdIds.push(childNode.id)
+      }
+
+      autoLayoutHierarchy(this.state.document, this.state.preferences.appearance.layoutMode)
+      this.setSelection(createdIds, createdIds[0] ?? null)
+      touchDocument(this.state.document)
+      this.setStatus('status.aiSuggestionsApplied', { count: createdIds.length })
+      this.render()
+      this.scheduleAutosave('status.childSaveScheduled')
+    } catch (error) {
+      const reason = getErrorMessage(error)
+      this.captureAIDebug('notes', getAIDebugInfo(error), reason)
       this.setStatus('status.aiFailed', { reason })
     } finally {
       this.state.ai.busy = false
