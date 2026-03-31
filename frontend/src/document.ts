@@ -230,20 +230,21 @@ function preferredRootChildDirection(document: MindMapDocument, children: MindNo
 }
 
 function resolveChildColumn(document: MindMapDocument, parent: MindNode, children: MindNode[], direction: -1 | 1): number {
+  const parentColumnEdge = resolveRelativeChildColumnEdge(document, parent, direction)
   if (children.length === 0) {
-    return resolveAlignedChildCenter(parent.position.x + direction * NODE_GAP_X, direction, defaultNodeWidth('topic'))
+    return resolveAlignedChildCenter(parentColumnEdge, direction, defaultNodeWidth('topic'))
   }
 
   if (direction === 1) {
-    const leftColumn = Math.min(
-      parent.position.x + NODE_GAP_X,
+    const leftColumn = Math.max(
+      parentColumnEdge,
       ...children.map((child) => child.position.x - estimateNodeWidth(child, childrenOf(document, child.id).length) / 2),
     )
     return resolveAlignedChildCenter(leftColumn, direction, defaultNodeWidth('topic'))
   }
 
-  const rightColumn = Math.max(
-    parent.position.x - NODE_GAP_X,
+  const rightColumn = Math.min(
+    parentColumnEdge,
     ...children.map((child) => child.position.x + estimateNodeWidth(child, childrenOf(document, child.id).length) / 2),
   )
   return resolveAlignedChildCenter(rightColumn, direction, defaultNodeWidth('topic'))
@@ -333,6 +334,13 @@ function resolveAlignedChildCenter(columnEdge: number, direction: -1 | 1, nodeWi
   return direction === 1
     ? Math.round(columnEdge + nodeWidth / 2)
     : Math.round(columnEdge - nodeWidth / 2)
+}
+
+function resolveRelativeChildColumnEdge(document: MindMapDocument, parent: MindNode, direction: -1 | 1): number {
+  const parentWidth = estimateNodeWidth(parent, childrenOf(document, parent.id).length)
+  return direction === 1
+    ? parent.position.x + parentWidth / 2 + NODE_GAP_X
+    : parent.position.x - parentWidth / 2 - NODE_GAP_X
 }
 
 export function touchDocument(document: MindMapDocument): void {
@@ -441,16 +449,15 @@ function layoutGroup(
   let cursorY = root.position.y - ((totalUnits - 1) * NODE_GAP_Y) / 2
 
   nodes.forEach((node, index) => {
-    layoutBranch(document, root, node.id, 1, side, cursorY, moved)
+    layoutBranch(document, root, node.id, side, cursorY, moved)
     cursorY += weights[index] * NODE_GAP_Y
   })
 }
 
 function layoutBranch(
   document: MindMapDocument,
-  root: MindNode,
+  parent: MindNode,
   nodeId: string,
-  depth: number,
   side: -1 | 1,
   topY: number,
   moved: Set<string>,
@@ -461,7 +468,7 @@ function layoutBranch(
   }
 
   const weight = branchWeight(document, nodeId)
-  const columnEdge = root.position.x + side * depth * NODE_GAP_X
+  const columnEdge = resolveRelativeChildColumnEdge(document, parent, side)
   const nodeWidth = estimateNodeWidth(node, childrenOf(document, node.id).length)
   node.position = {
     x: resolveAlignedChildCenter(columnEdge, side, nodeWidth),
@@ -478,7 +485,7 @@ function layoutBranch(
   let childCursorY = topY
   for (const child of children) {
     const childWeight = branchWeight(document, child.id)
-    layoutBranch(document, root, child.id, depth + 1, side, childCursorY, moved)
+    layoutBranch(document, node, child.id, side, childCursorY, moved)
     childCursorY += childWeight * NODE_GAP_Y
   }
 }
