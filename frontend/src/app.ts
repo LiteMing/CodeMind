@@ -34,6 +34,7 @@ import {
   loadPreferences,
   normalizeAIMaxTokens,
   normalizeAITimeoutSeconds,
+  normalizeCanvasLongPressAction,
   normalizeChromeLayout,
   normalizeEdgeStyle,
   normalizeGestureAction,
@@ -47,6 +48,7 @@ import type {
   AIDebugRequest,
   AppPreferences,
   AITemplateId,
+  CanvasLongPressAction,
   GestureAction,
   EdgeStyle,
   Locale,
@@ -114,6 +116,16 @@ interface MarqueeState {
   currentClientX: number
   currentClientY: number
   active: boolean
+}
+
+interface CanvasLongPressState {
+  pointerId: number
+  button: number
+  action: CanvasLongPressAction
+  startClientX: number
+  startClientY: number
+  clientX: number
+  clientY: number
 }
 
 interface StatusDescriptor {
@@ -426,6 +438,8 @@ class MindMapApp {
         activated: boolean
       }
     | null = null
+  private canvasLongPressHandle: number | null = null
+  private canvasLongPressState: CanvasLongPressState | null = null
   private pendingEditorOptions: EditorLaunchOptions | null = null
   private activeEditorAnchorLeft: number | null = null
   private nodeEditorMeasureCanvas: HTMLCanvasElement | null = null
@@ -792,26 +806,6 @@ class MindMapApp {
       this.cancelPendingNodeGesture()
     }
 
-    if (event.button === 2 && !nodeId) {
-      const withinScroll = target.closest<HTMLElement>('[data-workspace-scroll]')
-      if (!withinScroll) {
-        return
-      }
-
-      this.state.contextMenu = null
-      this.state.marquee = {
-        pointerId: event.pointerId,
-        button: event.button,
-        startClientX: event.clientX,
-        startClientY: event.clientY,
-        currentClientX: event.clientX,
-        currentClientY: event.clientY,
-        active: false,
-      }
-      this.renderOverlay()
-      return
-    }
-
     if (event.button !== 0 && event.button !== 1 && event.button !== 2) {
       return
     }
@@ -856,12 +850,23 @@ class MindMapApp {
 
     if (!nodeId) {
       this.clearNodeLongPress()
-      if (event.button === 0) {
-        this.tryStartCanvasPan(event, target)
+      this.clearCanvasLongPress()
+      const withinScroll = target.closest<HTMLElement>('[data-workspace-scroll]')
+      if (!withinScroll) {
+        return
       }
+
+      const canvasAction = this.canvasLongPressActionForButton(event.button)
+      if (canvasAction === 'none') {
+        return
+      }
+
+      this.armCanvasLongPress(canvasAction, event)
+      event.preventDefault()
       return
     }
 
+    this.clearCanvasLongPress()
     if (!this.state.selectedNodeIds.includes(nodeId)) {
       this.setSelection([nodeId], nodeId)
     }
@@ -877,9 +882,6 @@ class MindMapApp {
 
     if (!node || (event.button === 0 && dragNodeIds.length === 0) || this.state.editingNodeId === nodeId || this.state.connectSourceNodeId !== null) {
       this.clearNodeLongPress()
-      if (event.button === 0) {
-        this.tryStartCanvasPan(event, target)
-      }
       return
     }
 
@@ -960,6 +962,11 @@ class MindMapApp {
           this.startNodeDrag(nodeId, dragNodeIds, event)
         }
       }
+    }
+
+    if (this.canvasLongPressState && event.pointerId === this.canvasLongPressState.pointerId) {
+      this.canvasLongPressState.clientX = event.clientX
+      this.canvasLongPressState.clientY = event.clientY
     }
 
     if (this.state.marquee && event.pointerId === this.state.marquee.pointerId) {
@@ -1141,6 +1148,10 @@ class MindMapApp {
 
     if (this.longPressState && event.pointerId === this.longPressState.pointerId) {
       this.clearNodeLongPress()
+    }
+
+    if (this.canvasLongPressState && event.pointerId === this.canvasLongPressState.pointerId) {
+      this.clearCanvasLongPress()
     }
 
     if (this.state.marquee && event.pointerId === this.state.marquee.pointerId) {
@@ -1443,6 +1454,99 @@ class MindMapApp {
       default:
         return 'none'
     }
+  }
+
+  private canvasLongPressActionForButton(button: number): CanvasLongPressAction {
+    switch (button) {
+      case 0:
+        return this.state.preferences.interaction.canvasLeftLongPressAction
+      case 1:
+        return this.state.preferences.interaction.canvasMiddleLongPressAction
+      case 2:
+        return this.state.preferences.interaction.canvasRightLongPressAction
+      default:
+        return 'none'
+    }
+  }
+
+  private armCanvasLongPress(action: CanvasLongPressAction, event: PointerEvent): void {
+    this.clearCanvasLongPress()
+    this.canvasLongPressState = {
+      pointerId: event.pointerId,
+      button: event.button,
+      action,
+      startClientX: event.clientX,
+      startClientY: event.clientY,
+      clientX: event.clientX,
+      clientY: event.clientY,
+    }
+    this.canvasLongPressHandle = window.setTimeout(() => {
+      if (!this.canvasLongPressState || this.canvasLongPressState.pointerId !== event.pointerId) {
+        return
+      }
+      this.startCanvasLongPressAction(this.canvasLongPressState)
+    }, NODE_LONG_PRESS_DELAY_MS)
+  }
+
+  private clearCanvasLongPress(): void {
+    if (this.canvasLongPressHandle !== null) {
+      window.clearTimeout(this.canvasLongPressHandle)
+      this.canvasLongPressHandle = null
+    }
+    this.canvasLongPressState = null
+  }
+
+  private startCanvasLongPressAction(state: CanvasLongPressState): void {
+    this.clearCanvasLongPress()
+    this.suppressClickOnce = true
+    if (state.button === 2) {
+      this.suppressContextMenuOnce = true
+    }
+
+    switch (state.action) {
+      case 'pan-canvas':
+        this.startCanvasPan(state.pointerId, state.startClientX, state.startClientY)
+        if (this.pan) {
+          this.viewport.x = this.pan.startViewportX + (state.clientX - state.startClientX)
+          this.viewport.y = this.pan.startViewportY + (state.clientY - state.startClientY)
+          this.updateCanvasViewportView()
+        }
+        return
+      case 'marquee-select':
+        this.startMarqueeSelection(
+          state.pointerId,
+          state.button,
+          state.startClientX,
+          state.startClientY,
+          state.clientX,
+          state.clientY,
+        )
+        return
+      case 'none':
+      default:
+        return
+    }
+  }
+
+  private startMarqueeSelection(
+    pointerId: number,
+    button: number,
+    startClientX: number,
+    startClientY: number,
+    currentClientX = startClientX,
+    currentClientY = startClientY,
+  ): void {
+    this.state.contextMenu = null
+    this.state.marquee = {
+      pointerId,
+      button,
+      startClientX,
+      startClientY,
+      currentClientX,
+      currentClientY,
+      active: Math.hypot(currentClientX - startClientX, currentClientY - startClientY) > 8,
+    }
+    this.renderOverlay()
   }
 
   private armNodeLongPress(nodeId: string, dragNodeIds: string[], event: PointerEvent): void {
@@ -2098,14 +2202,13 @@ class MindMapApp {
     this.renderHeader()
   }
 
-  private renderGestureActionOptions(selected: GestureAction, config: { allowCanvasPan?: boolean } = {}): string {
+  private renderGestureActionOptions(selected: GestureAction): string {
     const gestureOptions =
       this.state.preferences.locale === 'zh-CN'
         ? [
             { value: 'none' as const, label: '无操作' },
             { value: 'rename' as const, label: '重命名节点' },
             { value: 'edit-tail' as const, label: '在标题末尾编辑' },
-            ...(config.allowCanvasPan ? [{ value: 'pan-canvas' as const, label: '拖动画布' }] : []),
             { value: 'ai-quick' as const, label: 'AI 快捷请求' },
             { value: 'ai-suggest-children' as const, label: '建议子节点' },
             { value: 'ai-suggest-siblings' as const, label: '建议同级节点' },
@@ -2119,7 +2222,6 @@ class MindMapApp {
             { value: 'none' as const, label: 'No action' },
             { value: 'rename' as const, label: 'Rename node' },
             { value: 'edit-tail' as const, label: 'Edit title tail' },
-            ...(config.allowCanvasPan ? [{ value: 'pan-canvas' as const, label: 'Pan canvas' }] : []),
             { value: 'ai-quick' as const, label: 'AI quick assist' },
             { value: 'ai-suggest-children' as const, label: 'Suggest children' },
             { value: 'ai-suggest-siblings' as const, label: 'Suggest siblings' },
@@ -2131,6 +2233,25 @@ class MindMapApp {
           ]
 
     return gestureOptions
+      .map((option) => `<option value="${option.value}" ${selected === option.value ? 'selected' : ''}>${escapeHtml(option.label)}</option>`)
+      .join('')
+  }
+
+  private renderCanvasLongPressActionOptions(selected: CanvasLongPressAction): string {
+    const options =
+      this.state.preferences.locale === 'zh-CN'
+        ? [
+            { value: 'none' as const, label: '无操作' },
+            { value: 'marquee-select' as const, label: '框选节点' },
+            { value: 'pan-canvas' as const, label: '拖动画布' },
+          ]
+        : [
+            { value: 'none' as const, label: 'No action' },
+            { value: 'marquee-select' as const, label: 'Marquee select' },
+            { value: 'pan-canvas' as const, label: 'Pan canvas' },
+          ]
+
+    return options
       .map((option) => `<option value="${option.value}" ${selected === option.value ? 'selected' : ''}>${escapeHtml(option.label)}</option>`)
       .join('')
   }
@@ -2645,25 +2766,46 @@ class MindMapApp {
               <label class="field-row">
                 <span>${this.t('settings.leftLongPressAction')}</span>
                 <select class="settings-select" data-setting-field="interaction.leftLongPressAction">
-                  ${this.renderGestureActionOptions(this.state.preferences.interaction.leftLongPressAction, { allowCanvasPan: true })}
+                  ${this.renderGestureActionOptions(this.state.preferences.interaction.leftLongPressAction)}
                 </select>
               </label>
               <label class="field-row">
                 <span>${this.t('settings.middleLongPressAction')}</span>
                 <select class="settings-select" data-setting-field="interaction.middleLongPressAction">
-                  ${this.renderGestureActionOptions(this.state.preferences.interaction.middleLongPressAction, { allowCanvasPan: true })}
+                  ${this.renderGestureActionOptions(this.state.preferences.interaction.middleLongPressAction)}
                 </select>
               </label>
               <label class="field-row">
                 <span>${this.t('settings.rightLongPressAction')}</span>
                 <select class="settings-select" data-setting-field="interaction.rightLongPressAction">
-                  ${this.renderGestureActionOptions(this.state.preferences.interaction.rightLongPressAction, { allowCanvasPan: true })}
+                  ${this.renderGestureActionOptions(this.state.preferences.interaction.rightLongPressAction)}
                 </select>
               </label>
               <label class="field-row">
                 <span>${this.t('settings.spaceAction')}</span>
                 <select class="settings-select" data-setting-field="interaction.spaceAction">
                   ${this.renderGestureActionOptions(this.state.preferences.interaction.spaceAction)}
+                </select>
+              </label>
+            </div>
+            <div class="settings-subsection">
+              <p class="section-label">${this.t('settings.operationBindings')}</p>
+              <label class="field-row">
+                <span>${this.t('settings.leftLongPressAction')}</span>
+                <select class="settings-select" data-setting-field="interaction.canvasLeftLongPressAction">
+                  ${this.renderCanvasLongPressActionOptions(this.state.preferences.interaction.canvasLeftLongPressAction)}
+                </select>
+              </label>
+              <label class="field-row">
+                <span>${this.t('settings.middleLongPressAction')}</span>
+                <select class="settings-select" data-setting-field="interaction.canvasMiddleLongPressAction">
+                  ${this.renderCanvasLongPressActionOptions(this.state.preferences.interaction.canvasMiddleLongPressAction)}
+                </select>
+              </label>
+              <label class="field-row">
+                <span>${this.t('settings.rightLongPressAction')}</span>
+                <select class="settings-select" data-setting-field="interaction.canvasRightLongPressAction">
+                  ${this.renderCanvasLongPressActionOptions(this.state.preferences.interaction.canvasRightLongPressAction)}
                 </select>
               </label>
             </div>
@@ -3502,27 +3644,42 @@ class MindMapApp {
     const minWidth = Math.max(MIN_NODE_WIDTH, parsePixelValue(computed.minWidth))
     const maxWidth = Math.max(minWidth, parsePixelValue(computed.maxWidth) || AUTO_NODE_EDITOR_MAX_WIDTH)
     const minHeight = Math.max(MIN_NODE_HEIGHT, parsePixelValue(computed.minHeight))
+    let previewWidth = Math.max(node.width ?? minWidth, minWidth)
 
     if (node.width) {
-      editor.style.width = `${Math.max(node.width, MIN_NODE_WIDTH)}px`
+      previewWidth = Math.max(node.width, MIN_NODE_WIDTH)
+      editor.style.width = `${previewWidth}px`
       editor.style.maxWidth = 'none'
     } else {
       const horizontalPadding = parsePixelValue(computed.paddingLeft) + parsePixelValue(computed.paddingRight) + 2
       const longestLineWidth = editor.value
         .split(/\r?\n/)
         .reduce((maxWidthSoFar, line) => Math.max(maxWidthSoFar, this.measureNodeEditorLineWidth(line || ' ', computed.font)), 0)
-      const nextWidth = clamp(Math.ceil(longestLineWidth + horizontalPadding), minWidth, maxWidth)
-      editor.style.width = `${nextWidth}px`
+      previewWidth = clamp(Math.ceil(longestLineWidth + horizontalPadding), minWidth, maxWidth)
+      editor.style.width = `${previewWidth}px`
       editor.style.maxWidth = `${maxWidth}px`
     }
 
     editor.style.height = 'auto'
+    let previewHeight = minHeight
     if (node.height) {
-      editor.style.height = `${Math.max(node.height, minHeight)}px`
-      return
+      previewHeight = Math.max(node.height, minHeight)
+      editor.style.height = `${previewHeight}px`
+    } else {
+      previewHeight = Math.max(editor.scrollHeight, minHeight)
+      editor.style.height = `${previewHeight}px`
     }
 
-    editor.style.height = `${Math.max(editor.scrollHeight, minHeight)}px`
+    if (!node.width && this.activeEditorAnchorLeft !== null) {
+      const article = this.rootEl.querySelector<HTMLElement>(`[data-node-id="${node.id}"]`)
+      if (article) {
+        article.classList.add('is-editing-auto-width')
+        article.style.left = `${this.activeEditorAnchorLeft + this.workspaceBounds.originX}px`
+        article.style.top = `${node.position.y + this.workspaceBounds.originY}px`
+        article.style.width = `${previewWidth}px`
+        article.style.minHeight = `${previewHeight}px`
+      }
+    }
   }
 
   private syncInspectorNoteInputs(): void {
@@ -5552,21 +5709,6 @@ class MindMapApp {
     this.updateCanvasViewportView()
   }
 
-  private tryStartCanvasPan(event: PointerEvent, target: HTMLElement): void {
-    const scroll = this.refs?.scroll
-    if (!scroll) {
-      return
-    }
-
-    const withinScroll = target.closest<HTMLElement>('[data-workspace-scroll]')
-    if (!withinScroll) {
-      return
-    }
-
-    this.startCanvasPan(event.pointerId, event.clientX, event.clientY)
-    event.preventDefault()
-  }
-
   private handleCanvasPan(event: PointerEvent): void {
     if (!this.pan || event.pointerId !== this.pan.pointerId) {
       return
@@ -5736,6 +5878,36 @@ class MindMapApp {
         this.updatePreferences((preferences) => {
           preferences.interaction.rightLongPressAction = normalizeGestureAction(value, preferences.interaction.rightLongPressAction)
           preferences.interaction.longPressAction = preferences.interaction.rightLongPressAction
+        })
+        this.setStatus('status.interactionUpdated')
+        this.render()
+        return
+      case 'interaction.canvasLeftLongPressAction':
+        this.updatePreferences((preferences) => {
+          preferences.interaction.canvasLeftLongPressAction = normalizeCanvasLongPressAction(
+            value,
+            preferences.interaction.canvasLeftLongPressAction,
+          )
+        })
+        this.setStatus('status.interactionUpdated')
+        this.render()
+        return
+      case 'interaction.canvasMiddleLongPressAction':
+        this.updatePreferences((preferences) => {
+          preferences.interaction.canvasMiddleLongPressAction = normalizeCanvasLongPressAction(
+            value,
+            preferences.interaction.canvasMiddleLongPressAction,
+          )
+        })
+        this.setStatus('status.interactionUpdated')
+        this.render()
+        return
+      case 'interaction.canvasRightLongPressAction':
+        this.updatePreferences((preferences) => {
+          preferences.interaction.canvasRightLongPressAction = normalizeCanvasLongPressAction(
+            value,
+            preferences.interaction.canvasRightLongPressAction,
+          )
         })
         this.setStatus('status.interactionUpdated')
         this.render()
@@ -5965,8 +6137,11 @@ class MindMapApp {
     this.state.connectSourceNodeId = snapshot.connectSourceNodeId && findNode(this.state.document, snapshot.connectSourceNodeId)
       ? snapshot.connectSourceNodeId
       : null
+    this.clearNodeLongPress()
+    this.clearCanvasLongPress()
     this.clearNodeEditorState()
     this.state.drag = null
+    this.pan = null
     this.state.resize = null
     this.state.contextMenu = null
     this.state.marquee = null
