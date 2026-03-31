@@ -409,6 +409,7 @@ class MindMapApp {
   private graphHitNodes: GraphHitNode[] = []
   private copiedSubtree: CopiedSubtree | null = null
   private suppressContextMenuOnce = false
+  private suppressClickOnce = false
   private pendingNodeGestureHandle: number | null = null
   private pendingNodeGestureNodeId: string | null = null
   private longPressHandle: number | null = null
@@ -545,6 +546,17 @@ class MindMapApp {
       return
     }
 
+    if (this.suppressClickOnce) {
+      this.suppressClickOnce = false
+      return
+    }
+
+    const nodeButton = target.closest<HTMLElement>('[data-node-button]')
+    const keepPendingGesture = nodeButton?.dataset.nodeButton === this.pendingNodeGestureNodeId && event.detail >= 2
+    if (!keepPendingGesture) {
+      this.cancelPendingNodeGesture()
+    }
+
     const closedContextMenu = Boolean(this.state.contextMenu) && !target.closest('[data-context-menu]')
     const closedFixedMenu = this.state.fixedMenu !== '' && !target.closest('[data-fixed-menu-shell]')
     const closedAIWheel = this.state.aiWheel.open && !target.closest('[data-ai-wheel]')
@@ -584,7 +596,6 @@ class MindMapApp {
 
     const command = target.closest<HTMLElement>('[data-command]')?.dataset.command
     const clickedNodeEditor = target.closest<HTMLTextAreaElement>('[data-node-editor]')
-    const nodeButton = target.closest<HTMLElement>('[data-node-button]')
     const clickedWorkspace = target.closest<HTMLElement>('[data-workspace-scroll]')
     if (command) {
       if (!command.startsWith('toggle-fixed-menu')) {
@@ -776,6 +787,10 @@ class MindMapApp {
     const nodeButton = target.closest<HTMLElement>('[data-node-button]')
     const nodeId = nodeButton?.dataset.nodeButton
     const longPressAction = this.longPressActionForButton(event.button)
+    const keepPendingGesture = nodeId === this.pendingNodeGestureNodeId && event.detail >= 2
+    if (!keepPendingGesture) {
+      this.cancelPendingNodeGesture()
+    }
 
     if (event.button === 2 && !nodeId) {
       const withinScroll = target.closest<HTMLElement>('[data-workspace-scroll]')
@@ -1448,6 +1463,7 @@ class MindMapApp {
       }
       this.longPressState.activated = true
       this.state.drag = null
+      this.suppressClickOnce = true
       if (this.longPressState.button === 2) {
         this.suppressContextMenuOnce = true
       }
@@ -1516,6 +1532,7 @@ class MindMapApp {
   }
 
   private openAIWheel(nodeId: string, clientX?: number, clientY?: number): void {
+    this.state.contextMenu = null
     this.state.fixedMenu = ''
     const fallback = this.nodeClientCenter(nodeId)
     this.state.aiWheel = {
@@ -2327,6 +2344,9 @@ class MindMapApp {
     if (this.state.contextMenu) {
       this.syncContextMenuPosition()
     }
+    if (this.state.aiWheel.open) {
+      this.syncAIWheelPosition()
+    }
   }
 
   private renderMarqueeBox(marquee: MarqueeState): string {
@@ -2407,26 +2427,55 @@ class MindMapApp {
     menu.style.top = `${Math.round(top)}px`
   }
 
+  private syncAIWheelPosition(): void {
+    if (!this.refs || !this.state.aiWheel.open) {
+      return
+    }
+
+    const wheel = this.refs.overlayLayer.querySelector<HTMLElement>('[data-ai-wheel]')
+    if (!wheel) {
+      return
+    }
+
+    const stageRect = this.refs.overlayLayer.getBoundingClientRect()
+    const wheelRect = wheel.getBoundingClientRect()
+    const halfWidth = wheelRect.width / 2
+    const halfHeight = wheelRect.height / 2
+    const left = clamp(
+      this.state.aiWheel.clientX - stageRect.left,
+      halfWidth + 12,
+      Math.max(halfWidth + 12, stageRect.width - halfWidth - 12),
+    )
+    const top = clamp(
+      this.state.aiWheel.clientY - stageRect.top,
+      halfHeight + 12,
+      Math.max(halfHeight + 12, stageRect.height - halfHeight - 12),
+    )
+
+    wheel.style.left = `${Math.round(left)}px`
+    wheel.style.top = `${Math.round(top)}px`
+  }
+
   private renderAIWheel(): string {
     if (!this.refs || !this.state.aiWheel.open || !this.state.aiWheel.nodeId) {
       return ''
     }
 
-    const stageRect = this.refs.overlayLayer.getBoundingClientRect()
-    const left = this.state.aiWheel.clientX - stageRect.left
-    const top = this.state.aiWheel.clientY - stageRect.top
     const labels = {
-      children: this.state.preferences.locale === 'zh-CN' ? '只生成子节点' : 'Children Only',
-      notes: this.state.preferences.locale === 'zh-CN' ? '只生成注释' : 'Notes Only',
-      relations: this.state.preferences.locale === 'zh-CN' ? '只生成连线' : 'Relations Only',
+      children: this.state.preferences.locale === 'zh-CN' ? '子节点' : 'Children',
+      notes: this.state.preferences.locale === 'zh-CN' ? '注释' : 'Notes',
+      relations: this.state.preferences.locale === 'zh-CN' ? '连线' : 'Relations',
+      siblings: this.state.preferences.locale === 'zh-CN' ? '同级节点' : 'Siblings',
+      close: this.state.preferences.locale === 'zh-CN' ? '关闭 AI 轮盘' : 'Close AI wheel',
     }
 
     return `
-      <section class="ai-wheel" data-ai-wheel style="left: ${Math.round(left)}px; top: ${Math.round(top)}px;">
+      <section class="ai-wheel" data-ai-wheel style="left: 0; top: 0;">
         <button type="button" class="ai-wheel-button ai-wheel-button-top" data-command="ai-wheel-children">${labels.children}</button>
         <button type="button" class="ai-wheel-button ai-wheel-button-left" data-command="ai-wheel-notes">${labels.notes}</button>
         <button type="button" class="ai-wheel-button ai-wheel-button-right" data-command="ai-wheel-relations">${labels.relations}</button>
-        <button type="button" class="ai-wheel-center" data-command="close-ai-wheel" aria-label="Close AI wheel">AI</button>
+        <button type="button" class="ai-wheel-button ai-wheel-button-bottom" data-command="ai-wheel-siblings">${labels.siblings}</button>
+        <button type="button" class="ai-wheel-center" data-command="close-ai-wheel" aria-label="${labels.close}">AI</button>
       </section>
     `
   }
@@ -4453,6 +4502,12 @@ class MindMapApp {
           await this.applyAIRelationsForFocus([targetNodeId])
           return
         }
+        case 'ai-wheel-siblings': {
+          const targetNodeId = this.state.aiWheel.nodeId ?? this.selectedNode()?.id ?? ''
+          this.closeAIWheel()
+          await this.applyAISuggestNodes(targetNodeId, 'siblings')
+          return
+        }
         case 'close-ai-wheel':
           this.closeAIWheel()
           this.renderOverlay()
@@ -5368,16 +5423,32 @@ class MindMapApp {
 
     const applied: Array<{ kind: 'children' | 'siblings' | 'notes' | 'relations'; count: number }> = []
     if (quickConfig.aiQuickChildren) {
-      applied.push({ kind: 'children', count: await this.applyAISuggestNodes(nodeId, 'children') })
+      const count = await this.applyAISuggestNodes(nodeId, 'children')
+      applied.push({ kind: 'children', count })
+      if (this.state.status.key === 'status.aiFailed') {
+        return
+      }
     }
     if (quickConfig.aiQuickSiblings && this.canSuggestSiblings(nodeId)) {
-      applied.push({ kind: 'siblings', count: await this.applyAISuggestNodes(nodeId, 'siblings') })
+      const count = await this.applyAISuggestNodes(nodeId, 'siblings')
+      applied.push({ kind: 'siblings', count })
+      if (this.state.status.key === 'status.aiFailed') {
+        return
+      }
     }
     if (quickConfig.aiQuickNotes) {
-      applied.push({ kind: 'notes', count: await this.applyAINodeNotesForTargets([nodeId], 'replace') })
+      const count = await this.applyAINodeNotesForTargets([nodeId], 'replace')
+      applied.push({ kind: 'notes', count })
+      if (this.state.status.key === 'status.aiFailed') {
+        return
+      }
     }
     if (quickConfig.aiQuickRelations) {
-      applied.push({ kind: 'relations', count: await this.applyAIRelationsForFocus([nodeId]) })
+      const count = await this.applyAIRelationsForFocus([nodeId])
+      applied.push({ kind: 'relations', count })
+      if (this.state.status.key === 'status.aiFailed') {
+        return
+      }
     }
 
     const summary = applied.filter((item) => item.count > 0)
@@ -5615,7 +5686,7 @@ class MindMapApp {
       case 'interaction.longPressAction':
         this.updatePreferences((preferences) => {
           preferences.interaction.longPressAction = normalizeGestureAction(value, preferences.interaction.longPressAction)
-          preferences.interaction.leftLongPressAction = preferences.interaction.longPressAction
+          preferences.interaction.rightLongPressAction = preferences.interaction.longPressAction
         })
         this.setStatus('status.interactionUpdated')
         this.render()
@@ -5623,7 +5694,6 @@ class MindMapApp {
       case 'interaction.leftLongPressAction':
         this.updatePreferences((preferences) => {
           preferences.interaction.leftLongPressAction = normalizeGestureAction(value, preferences.interaction.leftLongPressAction)
-          preferences.interaction.longPressAction = preferences.interaction.leftLongPressAction
         })
         this.setStatus('status.interactionUpdated')
         this.render()
@@ -5638,6 +5708,7 @@ class MindMapApp {
       case 'interaction.rightLongPressAction':
         this.updatePreferences((preferences) => {
           preferences.interaction.rightLongPressAction = normalizeGestureAction(value, preferences.interaction.rightLongPressAction)
+          preferences.interaction.longPressAction = preferences.interaction.rightLongPressAction
         })
         this.setStatus('status.interactionUpdated')
         this.render()

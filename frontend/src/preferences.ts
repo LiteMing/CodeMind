@@ -31,9 +31,9 @@ export function createDefaultPreferences(): AppPreferences {
       doubleClickAction: 'rename',
       tripleClickAction: 'ai-quick',
       longPressAction: 'ai-wheel',
-      leftLongPressAction: 'ai-wheel',
+      leftLongPressAction: 'none',
       middleLongPressAction: 'none',
-      rightLongPressAction: 'none',
+      rightLongPressAction: 'ai-wheel',
       spaceAction: 'edit-tail',
     },
     ai: {
@@ -57,7 +57,18 @@ export function loadPreferences(): AppPreferences {
   try {
     const parsed = JSON.parse(raw) as Partial<AppPreferences>
     const parsedInteraction = (parsed.interaction ?? {}) as Partial<AppPreferences['interaction']>
-    const legacyLongPressAction = normalizeGestureAction(parsedInteraction.longPressAction, defaults.interaction.leftLongPressAction)
+    const legacyLongPressAction = normalizeGestureAction(parsedInteraction.longPressAction, defaults.interaction.longPressAction)
+    const usesLegacySplitLongPressDefaults =
+      parsedInteraction.leftLongPressAction === 'ai-wheel' &&
+      (parsedInteraction.middleLongPressAction === undefined || parsedInteraction.middleLongPressAction === 'none') &&
+      (parsedInteraction.rightLongPressAction === undefined || parsedInteraction.rightLongPressAction === 'none') &&
+      (parsedInteraction.longPressAction === undefined || parsedInteraction.longPressAction === 'ai-wheel')
+    const rightLongPressAction = usesLegacySplitLongPressDefaults
+      ? defaults.interaction.rightLongPressAction
+      : normalizeGestureAction(parsedInteraction.rightLongPressAction, legacyLongPressAction)
+    const leftLongPressAction = usesLegacySplitLongPressDefaults
+      ? defaults.interaction.leftLongPressAction
+      : normalizeGestureAction(parsedInteraction.leftLongPressAction, defaults.interaction.leftLongPressAction)
     return {
       locale: normalizeLocale(parsed.locale) ?? defaults.locale,
       onboardingCompleted: parsed.onboardingCompleted ?? defaults.onboardingCompleted,
@@ -78,10 +89,10 @@ export function loadPreferences(): AppPreferences {
         aiQuickRelations: normalizeBoolean(parsedInteraction.aiQuickRelations, defaults.interaction.aiQuickRelations),
         doubleClickAction: normalizeGestureAction(parsedInteraction.doubleClickAction, defaults.interaction.doubleClickAction),
         tripleClickAction: normalizeGestureAction(parsedInteraction.tripleClickAction, defaults.interaction.tripleClickAction),
-        longPressAction: legacyLongPressAction,
-        leftLongPressAction: normalizeGestureAction(parsedInteraction.leftLongPressAction, legacyLongPressAction),
+        longPressAction: rightLongPressAction,
+        leftLongPressAction,
         middleLongPressAction: normalizeGestureAction(parsedInteraction.middleLongPressAction, defaults.interaction.middleLongPressAction),
-        rightLongPressAction: normalizeGestureAction(parsedInteraction.rightLongPressAction, defaults.interaction.rightLongPressAction),
+        rightLongPressAction,
         spaceAction: normalizeGestureAction(parsedInteraction.spaceAction, defaults.interaction.spaceAction),
       },
       ai: {

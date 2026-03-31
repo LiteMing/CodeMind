@@ -748,8 +748,8 @@ kbd {
 
 .ai-wheel {
   position: absolute;
-  width: 214px;
-  height: 214px;
+  width: 236px;
+  height: 236px;
   transform: translate(-50%, -50%);
   border-radius: 999px;
   border: 1px solid color-mix(in srgb, var(--accent) 22%, var(--line));
@@ -811,6 +811,12 @@ kbd {
   transform: translateY(-50%);
 }
 
+.ai-wheel-button-bottom {
+  bottom: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+}
+
 .ai-wheel-button-top:hover {
   transform: translateX(-50%) translateY(-1px);
 }
@@ -821,6 +827,10 @@ kbd {
 
 .ai-wheel-button-right:hover {
   transform: translateY(-50%) translateY(-1px);
+}
+
+.ai-wheel-button-bottom:hover {
+  transform: translateX(-50%) translateY(-1px);
 }
 
 .ai-wheel-center {
