@@ -949,8 +949,14 @@ class MindMapApp {
         Math.hypot(event.clientX - this.longPressState.startClientX, event.clientY - this.longPressState.startClientY) > NODE_LONG_PRESS_MOVE_THRESHOLD
       ) {
         const { nodeId, dragNodeIds, button } = this.longPressState
+        const action = this.longPressActionForButton(button)
         this.clearNodeLongPress()
-        if (button === 0 && dragNodeIds.length > 0) {
+        if (action === 'pan-canvas') {
+          if (button === 2) {
+            this.suppressContextMenuOnce = true
+          }
+          this.startCanvasPan(event.pointerId, event.clientX, event.clientY)
+        } else if (button === 0 && dragNodeIds.length > 0) {
           this.startNodeDrag(nodeId, dragNodeIds, event)
         }
       }
@@ -1470,6 +1476,7 @@ class MindMapApp {
       void this.runNodeGestureAction(action, nodeId, {
         clientX: this.longPressState.clientX,
         clientY: this.longPressState.clientY,
+        pointerId: this.longPressState.pointerId,
       })
     }, NODE_LONG_PRESS_DELAY_MS)
   }
@@ -1485,7 +1492,7 @@ class MindMapApp {
   private async runNodeGestureAction(
     action: GestureAction,
     nodeId: string,
-    origin?: { clientX?: number; clientY?: number },
+    origin?: { clientX?: number; clientY?: number; pointerId?: number },
   ): Promise<void> {
     const node = this.findNode(nodeId)
     if (!node) {
@@ -1500,6 +1507,11 @@ class MindMapApp {
         return
       case 'edit-tail':
         this.openNodeEditor(nodeId, { selection: 'end' })
+        return
+      case 'pan-canvas':
+        if (typeof origin?.pointerId === 'number' && typeof origin.clientX === 'number' && typeof origin.clientY === 'number') {
+          this.startCanvasPan(origin.pointerId, origin.clientX, origin.clientY)
+        }
         return
       case 'ai-quick':
         await this.applyAIQuickAssist(nodeId)
@@ -2086,13 +2098,14 @@ class MindMapApp {
     this.renderHeader()
   }
 
-  private renderGestureActionOptions(selected: GestureAction): string {
-    const options =
+  private renderGestureActionOptions(selected: GestureAction, config: { allowCanvasPan?: boolean } = {}): string {
+    const gestureOptions =
       this.state.preferences.locale === 'zh-CN'
         ? [
             { value: 'none' as const, label: '无操作' },
             { value: 'rename' as const, label: '重命名节点' },
             { value: 'edit-tail' as const, label: '在标题末尾编辑' },
+            ...(config.allowCanvasPan ? [{ value: 'pan-canvas' as const, label: '拖动画布' }] : []),
             { value: 'ai-quick' as const, label: 'AI 快捷请求' },
             { value: 'ai-suggest-children' as const, label: '建议子节点' },
             { value: 'ai-suggest-siblings' as const, label: '建议同级节点' },
@@ -2106,6 +2119,7 @@ class MindMapApp {
             { value: 'none' as const, label: 'No action' },
             { value: 'rename' as const, label: 'Rename node' },
             { value: 'edit-tail' as const, label: 'Edit title tail' },
+            ...(config.allowCanvasPan ? [{ value: 'pan-canvas' as const, label: 'Pan canvas' }] : []),
             { value: 'ai-quick' as const, label: 'AI quick assist' },
             { value: 'ai-suggest-children' as const, label: 'Suggest children' },
             { value: 'ai-suggest-siblings' as const, label: 'Suggest siblings' },
@@ -2116,7 +2130,7 @@ class MindMapApp {
             { value: 'toggle-collapse' as const, label: 'Toggle collapse' },
           ]
 
-    return options
+    return gestureOptions
       .map((option) => `<option value="${option.value}" ${selected === option.value ? 'selected' : ''}>${escapeHtml(option.label)}</option>`)
       .join('')
   }
@@ -2631,19 +2645,19 @@ class MindMapApp {
               <label class="field-row">
                 <span>${this.t('settings.leftLongPressAction')}</span>
                 <select class="settings-select" data-setting-field="interaction.leftLongPressAction">
-                  ${this.renderGestureActionOptions(this.state.preferences.interaction.leftLongPressAction)}
+                  ${this.renderGestureActionOptions(this.state.preferences.interaction.leftLongPressAction, { allowCanvasPan: true })}
                 </select>
               </label>
               <label class="field-row">
                 <span>${this.t('settings.middleLongPressAction')}</span>
                 <select class="settings-select" data-setting-field="interaction.middleLongPressAction">
-                  ${this.renderGestureActionOptions(this.state.preferences.interaction.middleLongPressAction)}
+                  ${this.renderGestureActionOptions(this.state.preferences.interaction.middleLongPressAction, { allowCanvasPan: true })}
                 </select>
               </label>
               <label class="field-row">
                 <span>${this.t('settings.rightLongPressAction')}</span>
                 <select class="settings-select" data-setting-field="interaction.rightLongPressAction">
-                  ${this.renderGestureActionOptions(this.state.preferences.interaction.rightLongPressAction)}
+                  ${this.renderGestureActionOptions(this.state.preferences.interaction.rightLongPressAction, { allowCanvasPan: true })}
                 </select>
               </label>
               <label class="field-row">
@@ -4213,9 +4227,7 @@ class MindMapApp {
 
     const title = rawTitle.trim() || this.t('node.untitled')
     const existingNode = this.findNode(nodeId)
-    const editor = this.nodeEditor(nodeId)
     const preservedAnchorLeft = this.activeEditorAnchorLeft
-    const measuredWidth = editor ? editor.getBoundingClientRect().width / this.viewport.scale : null
     if (!existingNode) {
       this.clearNodeEditorState()
       if (options.renderAfter !== false) {
@@ -4235,10 +4247,11 @@ class MindMapApp {
     this.captureHistory()
     this.updateNode(nodeId, (node) => {
       node.title = title
-      if (!node.width && preservedAnchorLeft !== null && measuredWidth) {
+      if (!node.width && preservedAnchorLeft !== null) {
+        const nextWidth = estimateNodeWidth({ ...node, title }, childrenOf(this.state.document, node.id).length)
         node.position = {
           ...node.position,
-          x: Math.round(preservedAnchorLeft + measuredWidth / 2),
+          x: Math.round(preservedAnchorLeft + nextWidth / 2),
         }
       }
     })
@@ -5550,15 +5563,8 @@ class MindMapApp {
       return
     }
 
-    this.pan = {
-      pointerId: event.pointerId,
-      startX: event.clientX,
-      startY: event.clientY,
-      startViewportX: this.viewport.x,
-      startViewportY: this.viewport.y,
-    }
+    this.startCanvasPan(event.pointerId, event.clientX, event.clientY)
     event.preventDefault()
-    this.setCanvasPanning(true)
   }
 
   private handleCanvasPan(event: PointerEvent): void {
@@ -5572,6 +5578,17 @@ class MindMapApp {
     this.viewport.x = this.pan.startViewportX + deltaX
     this.viewport.y = this.pan.startViewportY + deltaY
     this.updateCanvasViewportView()
+  }
+
+  private startCanvasPan(pointerId: number, clientX: number, clientY: number): void {
+    this.pan = {
+      pointerId,
+      startX: clientX,
+      startY: clientY,
+      startViewportX: this.viewport.x,
+      startViewportY: this.viewport.y,
+    }
+    this.setCanvasPanning(true)
   }
 
   private commitSettingField(field: string, value: string): void {
@@ -5590,9 +5607,19 @@ class MindMapApp {
         this.render()
         return
       case 'appearance.layoutMode':
+        const nextLayoutMode = normalizeLayoutMode(value)
+        const layoutModeChanged = this.state.preferences.appearance.layoutMode !== nextLayoutMode
         this.updatePreferences((preferences) => {
-          preferences.appearance.layoutMode = normalizeLayoutMode(value)
+          preferences.appearance.layoutMode = nextLayoutMode
         })
+        if (layoutModeChanged && this.state.view === 'map') {
+          const movedNodes = autoLayoutHierarchy(this.state.document, this.state.preferences.appearance.layoutMode)
+          touchDocument(this.state.document)
+          this.setStatus('status.layoutUpdated', { count: movedNodes })
+          this.render()
+          this.scheduleAutosave('status.layoutSaveScheduled')
+          return
+        }
         this.setStatus('status.appearanceUpdated')
         this.render()
         return

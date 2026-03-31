@@ -148,6 +148,7 @@ export function normalizeGestureAction(value: unknown, fallback: GestureAction =
   switch (value) {
     case 'rename':
     case 'edit-tail':
+    case 'pan-canvas':
     case 'ai-quick':
     case 'ai-suggest-children':
     case 'ai-suggest-siblings':

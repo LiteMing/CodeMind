@@ -10,6 +10,7 @@ export type GestureAction =
   | 'none'
   | 'rename'
   | 'edit-tail'
+  | 'pan-canvas'
   | 'ai-quick'
   | 'ai-suggest-children'
   | 'ai-suggest-siblings'
