@@ -20,7 +20,7 @@ export type GestureAction =
   | 'new-floating'
   | 'toggle-collapse'
 
-export type CanvasLongPressAction = 'none' | 'pan-canvas' | 'marquee-select'
+export type CanvasDragAction = 'none' | 'pan-canvas' | 'marquee-select'
 
 export type NodeKind = 'root' | 'topic' | 'floating'
 
@@ -110,9 +110,9 @@ export interface InteractionSettings {
   leftLongPressAction: GestureAction
   middleLongPressAction: GestureAction
   rightLongPressAction: GestureAction
-  canvasLeftLongPressAction: CanvasLongPressAction
-  canvasMiddleLongPressAction: CanvasLongPressAction
-  canvasRightLongPressAction: CanvasLongPressAction
+  canvasLeftDragAction: CanvasDragAction
+  canvasMiddleDragAction: CanvasDragAction
+  canvasRightDragAction: CanvasDragAction
   spaceAction: GestureAction
 }
 

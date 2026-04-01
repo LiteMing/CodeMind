@@ -34,7 +34,7 @@ import {
   loadPreferences,
   normalizeAIMaxTokens,
   normalizeAITimeoutSeconds,
-  normalizeCanvasLongPressAction,
+  normalizeCanvasDragAction,
   normalizeChromeLayout,
   normalizeEdgeStyle,
   normalizeGestureAction,
@@ -48,7 +48,7 @@ import type {
   AIDebugRequest,
   AppPreferences,
   AITemplateId,
-  CanvasLongPressAction,
+  CanvasDragAction,
   GestureAction,
   EdgeStyle,
   Locale,
@@ -116,16 +116,6 @@ interface MarqueeState {
   currentClientX: number
   currentClientY: number
   active: boolean
-}
-
-interface CanvasLongPressState {
-  pointerId: number
-  button: number
-  action: CanvasLongPressAction
-  startClientX: number
-  startClientY: number
-  clientX: number
-  clientY: number
 }
 
 interface StatusDescriptor {
@@ -438,8 +428,6 @@ class MindMapApp {
         activated: boolean
       }
     | null = null
-  private canvasLongPressHandle: number | null = null
-  private canvasLongPressState: CanvasLongPressState | null = null
   private pendingEditorOptions: EditorLaunchOptions | null = null
   private activeEditorAnchorLeft: number | null = null
   private nodeEditorMeasureCanvas: HTMLCanvasElement | null = null
@@ -850,23 +838,21 @@ class MindMapApp {
 
     if (!nodeId) {
       this.clearNodeLongPress()
-      this.clearCanvasLongPress()
       const withinScroll = target.closest<HTMLElement>('[data-workspace-scroll]')
       if (!withinScroll) {
         return
       }
 
-      const canvasAction = this.canvasLongPressActionForButton(event.button)
+      const canvasAction = this.canvasDragActionForButton(event.button)
       if (canvasAction === 'none') {
         return
       }
 
-      this.armCanvasLongPress(canvasAction, event)
+      this.startCanvasDragAction(canvasAction, event)
       event.preventDefault()
       return
     }
 
-    this.clearCanvasLongPress()
     if (!this.state.selectedNodeIds.includes(nodeId)) {
       this.setSelection([nodeId], nodeId)
     }
@@ -964,11 +950,6 @@ class MindMapApp {
       }
     }
 
-    if (this.canvasLongPressState && event.pointerId === this.canvasLongPressState.pointerId) {
-      this.canvasLongPressState.clientX = event.clientX
-      this.canvasLongPressState.clientY = event.clientY
-    }
-
     if (this.state.marquee && event.pointerId === this.state.marquee.pointerId) {
       this.state.marquee.currentClientX = event.clientX
       this.state.marquee.currentClientY = event.clientY
@@ -977,6 +958,7 @@ class MindMapApp {
         const deltaY = event.clientY - this.state.marquee.startClientY
         if (Math.hypot(deltaX, deltaY) > 8) {
           this.state.marquee.active = true
+          this.suppressClickOnce = true
         }
       }
       this.renderOverlay()
@@ -1148,10 +1130,6 @@ class MindMapApp {
 
     if (this.longPressState && event.pointerId === this.longPressState.pointerId) {
       this.clearNodeLongPress()
-    }
-
-    if (this.canvasLongPressState && event.pointerId === this.canvasLongPressState.pointerId) {
-      this.clearCanvasLongPress()
     }
 
     if (this.state.marquee && event.pointerId === this.state.marquee.pointerId) {
@@ -1456,71 +1434,31 @@ class MindMapApp {
     }
   }
 
-  private canvasLongPressActionForButton(button: number): CanvasLongPressAction {
+  private canvasDragActionForButton(button: number): CanvasDragAction {
     switch (button) {
       case 0:
-        return this.state.preferences.interaction.canvasLeftLongPressAction
+        return this.state.preferences.interaction.canvasLeftDragAction
       case 1:
-        return this.state.preferences.interaction.canvasMiddleLongPressAction
+        return this.state.preferences.interaction.canvasMiddleDragAction
       case 2:
-        return this.state.preferences.interaction.canvasRightLongPressAction
+        return this.state.preferences.interaction.canvasRightDragAction
       default:
         return 'none'
     }
   }
 
-  private armCanvasLongPress(action: CanvasLongPressAction, event: PointerEvent): void {
-    this.clearCanvasLongPress()
-    this.canvasLongPressState = {
-      pointerId: event.pointerId,
-      button: event.button,
-      action,
-      startClientX: event.clientX,
-      startClientY: event.clientY,
-      clientX: event.clientX,
-      clientY: event.clientY,
-    }
-    this.canvasLongPressHandle = window.setTimeout(() => {
-      if (!this.canvasLongPressState || this.canvasLongPressState.pointerId !== event.pointerId) {
-        return
-      }
-      this.startCanvasLongPressAction(this.canvasLongPressState)
-    }, NODE_LONG_PRESS_DELAY_MS)
-  }
-
-  private clearCanvasLongPress(): void {
-    if (this.canvasLongPressHandle !== null) {
-      window.clearTimeout(this.canvasLongPressHandle)
-      this.canvasLongPressHandle = null
-    }
-    this.canvasLongPressState = null
-  }
-
-  private startCanvasLongPressAction(state: CanvasLongPressState): void {
-    this.clearCanvasLongPress()
-    this.suppressClickOnce = true
-    if (state.button === 2) {
+  private startCanvasDragAction(action: CanvasDragAction, event: PointerEvent): void {
+    if (event.button === 2) {
       this.suppressContextMenuOnce = true
     }
 
-    switch (state.action) {
+    switch (action) {
       case 'pan-canvas':
-        this.startCanvasPan(state.pointerId, state.startClientX, state.startClientY)
-        if (this.pan) {
-          this.viewport.x = this.pan.startViewportX + (state.clientX - state.startClientX)
-          this.viewport.y = this.pan.startViewportY + (state.clientY - state.startClientY)
-          this.updateCanvasViewportView()
-        }
+        this.suppressClickOnce = true
+        this.startCanvasPan(event.pointerId, event.clientX, event.clientY)
         return
       case 'marquee-select':
-        this.startMarqueeSelection(
-          state.pointerId,
-          state.button,
-          state.startClientX,
-          state.startClientY,
-          state.clientX,
-          state.clientY,
-        )
+        this.startMarqueeSelection(event.pointerId, event.button, event.clientX, event.clientY)
         return
       case 'none':
       default:
@@ -2237,7 +2175,7 @@ class MindMapApp {
       .join('')
   }
 
-  private renderCanvasLongPressActionOptions(selected: CanvasLongPressAction): string {
+  private renderCanvasDragActionOptions(selected: CanvasDragAction): string {
     const options =
       this.state.preferences.locale === 'zh-CN'
         ? [
@@ -2791,21 +2729,21 @@ class MindMapApp {
             <div class="settings-subsection">
               <p class="section-label">${this.t('settings.operationBindings')}</p>
               <label class="field-row">
-                <span>${this.t('settings.leftLongPressAction')}</span>
-                <select class="settings-select" data-setting-field="interaction.canvasLeftLongPressAction">
-                  ${this.renderCanvasLongPressActionOptions(this.state.preferences.interaction.canvasLeftLongPressAction)}
+                <span>${this.t('settings.leftDragAction')}</span>
+                <select class="settings-select" data-setting-field="interaction.canvasLeftDragAction">
+                  ${this.renderCanvasDragActionOptions(this.state.preferences.interaction.canvasLeftDragAction)}
                 </select>
               </label>
               <label class="field-row">
-                <span>${this.t('settings.middleLongPressAction')}</span>
-                <select class="settings-select" data-setting-field="interaction.canvasMiddleLongPressAction">
-                  ${this.renderCanvasLongPressActionOptions(this.state.preferences.interaction.canvasMiddleLongPressAction)}
+                <span>${this.t('settings.middleDragAction')}</span>
+                <select class="settings-select" data-setting-field="interaction.canvasMiddleDragAction">
+                  ${this.renderCanvasDragActionOptions(this.state.preferences.interaction.canvasMiddleDragAction)}
                 </select>
               </label>
               <label class="field-row">
-                <span>${this.t('settings.rightLongPressAction')}</span>
-                <select class="settings-select" data-setting-field="interaction.canvasRightLongPressAction">
-                  ${this.renderCanvasLongPressActionOptions(this.state.preferences.interaction.canvasRightLongPressAction)}
+                <span>${this.t('settings.rightDragAction')}</span>
+                <select class="settings-select" data-setting-field="interaction.canvasRightDragAction">
+                  ${this.renderCanvasDragActionOptions(this.state.preferences.interaction.canvasRightDragAction)}
                 </select>
               </label>
             </div>
@@ -5882,31 +5820,31 @@ class MindMapApp {
         this.setStatus('status.interactionUpdated')
         this.render()
         return
-      case 'interaction.canvasLeftLongPressAction':
+      case 'interaction.canvasLeftDragAction':
         this.updatePreferences((preferences) => {
-          preferences.interaction.canvasLeftLongPressAction = normalizeCanvasLongPressAction(
+          preferences.interaction.canvasLeftDragAction = normalizeCanvasDragAction(
             value,
-            preferences.interaction.canvasLeftLongPressAction,
+            preferences.interaction.canvasLeftDragAction,
           )
         })
         this.setStatus('status.interactionUpdated')
         this.render()
         return
-      case 'interaction.canvasMiddleLongPressAction':
+      case 'interaction.canvasMiddleDragAction':
         this.updatePreferences((preferences) => {
-          preferences.interaction.canvasMiddleLongPressAction = normalizeCanvasLongPressAction(
+          preferences.interaction.canvasMiddleDragAction = normalizeCanvasDragAction(
             value,
-            preferences.interaction.canvasMiddleLongPressAction,
+            preferences.interaction.canvasMiddleDragAction,
           )
         })
         this.setStatus('status.interactionUpdated')
         this.render()
         return
-      case 'interaction.canvasRightLongPressAction':
+      case 'interaction.canvasRightDragAction':
         this.updatePreferences((preferences) => {
-          preferences.interaction.canvasRightLongPressAction = normalizeCanvasLongPressAction(
+          preferences.interaction.canvasRightDragAction = normalizeCanvasDragAction(
             value,
-            preferences.interaction.canvasRightLongPressAction,
+            preferences.interaction.canvasRightDragAction,
           )
         })
         this.setStatus('status.interactionUpdated')
@@ -6138,7 +6076,6 @@ class MindMapApp {
       ? snapshot.connectSourceNodeId
       : null
     this.clearNodeLongPress()
-    this.clearCanvasLongPress()
     this.clearNodeEditorState()
     this.state.drag = null
     this.pan = null

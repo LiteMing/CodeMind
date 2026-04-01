@@ -1,4 +1,4 @@
-import type { AppPreferences, CanvasLongPressAction, ChromeLayout, EdgeStyle, GestureAction, LayoutMode, Locale, TopPanelPosition } from './types'
+import type { AppPreferences, CanvasDragAction, ChromeLayout, EdgeStyle, GestureAction, LayoutMode, Locale, TopPanelPosition } from './types'
 
 const STORAGE_KEY = 'code-mind.preferences'
 export const DEFAULT_LM_STUDIO_URL = 'http://127.0.0.1:1234/v1'
@@ -34,9 +34,9 @@ export function createDefaultPreferences(): AppPreferences {
       leftLongPressAction: 'none',
       middleLongPressAction: 'none',
       rightLongPressAction: 'ai-wheel',
-      canvasLeftLongPressAction: 'marquee-select',
-      canvasMiddleLongPressAction: 'pan-canvas',
-      canvasRightLongPressAction: 'none',
+      canvasLeftDragAction: 'marquee-select',
+      canvasMiddleDragAction: 'pan-canvas',
+      canvasRightDragAction: 'none',
       spaceAction: 'edit-tail',
     },
     ai: {
@@ -60,6 +60,7 @@ export function loadPreferences(): AppPreferences {
   try {
     const parsed = JSON.parse(raw) as Partial<AppPreferences>
     const parsedInteraction = (parsed.interaction ?? {}) as Partial<AppPreferences['interaction']>
+    const legacyCanvasInteraction = parsedInteraction as Partial<Record<'canvasLeftLongPressAction' | 'canvasMiddleLongPressAction' | 'canvasRightLongPressAction', unknown>>
     const legacyLongPressAction = normalizeGestureAction(parsedInteraction.longPressAction, defaults.interaction.longPressAction)
     const usesLegacySplitLongPressDefaults =
       parsedInteraction.leftLongPressAction === 'ai-wheel' &&
@@ -75,21 +76,21 @@ export function loadPreferences(): AppPreferences {
     const rawMiddleLongPressAction = normalizeGestureAction(parsedInteraction.middleLongPressAction, defaults.interaction.middleLongPressAction)
     const leftLongPress = resolveSplitLongPressActions(
       rawLeftLongPressAction,
-      parsedInteraction.canvasLeftLongPressAction,
+      parsedInteraction.canvasLeftDragAction ?? legacyCanvasInteraction.canvasLeftLongPressAction,
       defaults.interaction.leftLongPressAction,
-      defaults.interaction.canvasLeftLongPressAction,
+      defaults.interaction.canvasLeftDragAction,
     )
     const middleLongPress = resolveSplitLongPressActions(
       rawMiddleLongPressAction,
-      parsedInteraction.canvasMiddleLongPressAction,
+      parsedInteraction.canvasMiddleDragAction ?? legacyCanvasInteraction.canvasMiddleLongPressAction,
       defaults.interaction.middleLongPressAction,
-      defaults.interaction.canvasMiddleLongPressAction,
+      defaults.interaction.canvasMiddleDragAction,
     )
     const rightLongPress = resolveSplitLongPressActions(
       rawRightLongPressAction,
-      parsedInteraction.canvasRightLongPressAction,
+      parsedInteraction.canvasRightDragAction ?? legacyCanvasInteraction.canvasRightLongPressAction,
       defaults.interaction.rightLongPressAction,
-      defaults.interaction.canvasRightLongPressAction,
+      defaults.interaction.canvasRightDragAction,
     )
     return {
       locale: normalizeLocale(parsed.locale) ?? defaults.locale,
@@ -115,9 +116,9 @@ export function loadPreferences(): AppPreferences {
         leftLongPressAction: leftLongPress.nodeAction,
         middleLongPressAction: middleLongPress.nodeAction,
         rightLongPressAction: rightLongPress.nodeAction,
-        canvasLeftLongPressAction: leftLongPress.canvasAction,
-        canvasMiddleLongPressAction: middleLongPress.canvasAction,
-        canvasRightLongPressAction: rightLongPress.canvasAction,
+        canvasLeftDragAction: leftLongPress.canvasAction,
+        canvasMiddleDragAction: middleLongPress.canvasAction,
+        canvasRightDragAction: rightLongPress.canvasAction,
         spaceAction: normalizeGestureAction(parsedInteraction.spaceAction, defaults.interaction.spaceAction),
       },
       ai: {
@@ -189,10 +190,10 @@ export function normalizeGestureAction(value: unknown, fallback: GestureAction =
   }
 }
 
-export function normalizeCanvasLongPressAction(
+export function normalizeCanvasDragAction(
   value: unknown,
-  fallback: CanvasLongPressAction = 'none',
-): CanvasLongPressAction {
+  fallback: CanvasDragAction = 'none',
+): CanvasDragAction {
   switch (value) {
     case 'pan-canvas':
     case 'marquee-select':
@@ -207,18 +208,18 @@ function resolveSplitLongPressActions(
   nodeAction: GestureAction,
   rawCanvasAction: unknown,
   defaultNodeAction: GestureAction,
-  defaultCanvasAction: CanvasLongPressAction,
-): { nodeAction: GestureAction; canvasAction: CanvasLongPressAction } {
+  defaultCanvasAction: CanvasDragAction,
+): { nodeAction: GestureAction; canvasAction: CanvasDragAction } {
   if (nodeAction === 'pan-canvas') {
     return {
       nodeAction: defaultNodeAction,
-      canvasAction: normalizeCanvasLongPressAction(rawCanvasAction, 'pan-canvas'),
+      canvasAction: normalizeCanvasDragAction(rawCanvasAction, 'pan-canvas'),
     }
   }
 
   return {
     nodeAction,
-    canvasAction: normalizeCanvasLongPressAction(rawCanvasAction, defaultCanvasAction),
+    canvasAction: normalizeCanvasDragAction(rawCanvasAction, defaultCanvasAction),
   }
 }
 
