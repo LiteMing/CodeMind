@@ -91,6 +91,7 @@ export interface AISettings {
 export interface AppearanceSettings {
   edgeStyle: EdgeStyle
   layoutMode: LayoutMode
+  childGapX: number
   chromeLayout: ChromeLayout
   topPanelPosition: TopPanelPosition
 }

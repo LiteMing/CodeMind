@@ -2,7 +2,7 @@ import { estimateNodeHeight, estimateNodeWidth, resolveNodeMinHeight, resolveNod
 import type { LayoutMode, MindMapDocument, MindNode, Position, RelationEdge } from './types'
 
 const ROOT_POSITION: Position = { x: 820, y: 320 }
-const NODE_GAP_X = 280
+const DEFAULT_CHILD_GAP_X = 220
 const NODE_GAP_Y = 96
 const COMPACT_NODE_GAP_Y = 18
 const PLACEMENT_PADDING_X = 28
@@ -137,7 +137,12 @@ export function visibleNodeIds(document: MindMapDocument): Set<string> {
   return visible
 }
 
-export function nextChildPosition(document: MindMapDocument, parentId: string, layoutMode: LayoutMode = 'balanced'): Position {
+export function nextChildPosition(
+  document: MindMapDocument,
+  parentId: string,
+  layoutMode: LayoutMode = 'balanced',
+  childGapX = DEFAULT_CHILD_GAP_X,
+): Position {
   const parent = findNode(document, parentId)
   if (!parent) {
     return ROOT_POSITION
@@ -150,19 +155,24 @@ export function nextChildPosition(document: MindMapDocument, parentId: string, l
     : parent.kind === 'root'
       ? children.filter((child) => branchDirection(document, child) === direction)
       : children
-  const targetX = resolveChildColumn(document, parent, laneChildren, direction)
+  const targetX = resolveChildColumn(document, parent, laneChildren, direction, childGapX)
   const targetY = nextStackedY(document, laneChildren, 'topic', parent.position.y)
   return findAvailablePosition(document, { x: targetX, y: targetY }, 'topic')
 }
 
-export function nextSiblingPosition(document: MindMapDocument, node: MindNode, layoutMode: LayoutMode = 'balanced'): Position {
+export function nextSiblingPosition(
+  document: MindMapDocument,
+  node: MindNode,
+  layoutMode: LayoutMode = 'balanced',
+  childGapX = DEFAULT_CHILD_GAP_X,
+): Position {
   if (!node.parentId) {
     return nextFloatingPosition(document)
   }
 
   const parent = findNode(document, node.parentId)
   if (parent?.kind === 'root') {
-    return nextChildPosition(document, parent.id, layoutMode)
+    return nextChildPosition(document, parent.id, layoutMode, childGapX)
   }
 
   const siblings = childrenOf(document, node.parentId)
@@ -229,8 +239,8 @@ function preferredRootChildDirection(document: MindMapDocument, children: MindNo
   return lastChild.position.x < root.position.x ? 1 : -1
 }
 
-function resolveChildColumn(document: MindMapDocument, parent: MindNode, children: MindNode[], direction: -1 | 1): number {
-  const parentColumnEdge = resolveRelativeChildColumnEdge(document, parent, direction)
+function resolveChildColumn(document: MindMapDocument, parent: MindNode, children: MindNode[], direction: -1 | 1, childGapX: number): number {
+  const parentColumnEdge = resolveRelativeChildColumnEdge(document, parent, direction, childGapX)
   if (children.length === 0) {
     return resolveAlignedChildCenter(parentColumnEdge, direction, defaultNodeWidth('topic'))
   }
@@ -336,11 +346,11 @@ function resolveAlignedChildCenter(columnEdge: number, direction: -1 | 1, nodeWi
     : Math.round(columnEdge - nodeWidth / 2)
 }
 
-function resolveRelativeChildColumnEdge(document: MindMapDocument, parent: MindNode, direction: -1 | 1): number {
+function resolveRelativeChildColumnEdge(document: MindMapDocument, parent: MindNode, direction: -1 | 1, childGapX: number): number {
   const parentWidth = estimateNodeWidth(parent, childrenOf(document, parent.id).length)
   return direction === 1
-    ? parent.position.x + parentWidth / 2 + NODE_GAP_X
-    : parent.position.x - parentWidth / 2 - NODE_GAP_X
+    ? parent.position.x + parentWidth / 2 + childGapX
+    : parent.position.x - parentWidth / 2 - childGapX
 }
 
 export function touchDocument(document: MindMapDocument): void {
@@ -398,7 +408,11 @@ export function toggleCollapse(document: MindMapDocument, nodeId: string): boole
   return true
 }
 
-export function autoLayoutHierarchy(document: MindMapDocument, layoutMode: LayoutMode = 'balanced'): number {
+export function autoLayoutHierarchy(
+  document: MindMapDocument,
+  layoutMode: LayoutMode = 'balanced',
+  childGapX = DEFAULT_CHILD_GAP_X,
+): number {
   const root = findRoot(document)
   root.position = { ...ROOT_POSITION }
   root.updatedAt = new Date().toISOString()
@@ -410,7 +424,7 @@ export function autoLayoutHierarchy(document: MindMapDocument, layoutMode: Layou
 
   const moved = new Set<string>(['root'])
   if (layoutMode === 'right') {
-    layoutGroup(document, root, rootChildren, 1, moved)
+    layoutGroup(document, root, rootChildren, 1, childGapX, moved)
     return moved.size
   }
 
@@ -428,8 +442,8 @@ export function autoLayoutHierarchy(document: MindMapDocument, layoutMode: Layou
     })
   }
 
-  layoutGroup(document, root, leftRoots, -1, moved)
-  layoutGroup(document, root, rightRoots, 1, moved)
+  layoutGroup(document, root, leftRoots, -1, childGapX, moved)
+  layoutGroup(document, root, rightRoots, 1, childGapX, moved)
   return moved.size
 }
 
@@ -438,6 +452,7 @@ function layoutGroup(
   root: MindNode,
   nodes: MindNode[],
   side: -1 | 1,
+  childGapX: number,
   moved: Set<string>,
 ): void {
   if (nodes.length === 0) {
@@ -449,7 +464,7 @@ function layoutGroup(
   let cursorY = root.position.y - ((totalUnits - 1) * NODE_GAP_Y) / 2
 
   nodes.forEach((node, index) => {
-    layoutBranch(document, root, node.id, side, cursorY, moved)
+    layoutBranch(document, root, node.id, side, cursorY, childGapX, moved)
     cursorY += weights[index] * NODE_GAP_Y
   })
 }
@@ -460,6 +475,7 @@ function layoutBranch(
   nodeId: string,
   side: -1 | 1,
   topY: number,
+  childGapX: number,
   moved: Set<string>,
 ): void {
   const node = findNode(document, nodeId)
@@ -468,7 +484,7 @@ function layoutBranch(
   }
 
   const weight = branchWeight(document, nodeId)
-  const columnEdge = resolveRelativeChildColumnEdge(document, parent, side)
+  const columnEdge = resolveRelativeChildColumnEdge(document, parent, side, childGapX)
   const nodeWidth = estimateNodeWidth(node, childrenOf(document, node.id).length)
   node.position = {
     x: resolveAlignedChildCenter(columnEdge, side, nodeWidth),
@@ -485,7 +501,7 @@ function layoutBranch(
   let childCursorY = topY
   for (const child of children) {
     const childWeight = branchWeight(document, child.id)
-    layoutBranch(document, node, child.id, side, childCursorY, moved)
+    layoutBranch(document, node, child.id, side, childCursorY, childGapX, moved)
     childCursorY += childWeight * NODE_GAP_Y
   }
 }

@@ -30,11 +30,13 @@ import {
 import {
   DEFAULT_AI_MAX_TOKENS,
   DEFAULT_AI_TIMEOUT_SECONDS,
+  DEFAULT_CHILD_GAP_X,
   DEFAULT_LM_STUDIO_URL,
   loadPreferences,
   normalizeAIMaxTokens,
   normalizeAITimeoutSeconds,
   normalizeCanvasDragAction,
+  normalizeChildGapX,
   normalizeChromeLayout,
   normalizeEdgeStyle,
   normalizeGestureAction,
@@ -2609,6 +2611,20 @@ class MindMapApp {
                 <option value="right" ${appearance.layoutMode === 'right' ? 'selected' : ''}>${this.t('settings.layoutMode.right')}</option>
               </select>
             </label>
+            <label class="field-stack">
+              <span>${this.t('settings.childGapX')}</span>
+              <input
+                class="settings-input"
+                type="number"
+                min="120"
+                max="360"
+                step="20"
+                inputmode="numeric"
+                data-setting-field="appearance.childGapX"
+                value="${escapeAttribute(String(appearance.childGapX || DEFAULT_CHILD_GAP_X))}"
+              />
+            </label>
+            <p class="inspector-copy">${this.t('settings.childGapXHint')}</p>
             <label class="field-row">
               <span>${this.t('settings.chromeLayout')}</span>
               <select class="settings-select" data-setting-field="appearance.chromeLayout">
@@ -3937,7 +3953,12 @@ class MindMapApp {
     parent.collapsed = false
     parent.updatedAt = now
 
-    const anchor = nextChildPosition(this.state.document, targetNode.id, this.state.preferences.appearance.layoutMode)
+    const anchor = nextChildPosition(
+      this.state.document,
+      targetNode.id,
+      this.state.preferences.appearance.layoutMode,
+      this.state.preferences.appearance.childGapX,
+    )
     const insertedNodes: MindNode[] = []
 
     for (const snapshot of this.copiedSubtree.nodes) {
@@ -4039,7 +4060,12 @@ class MindMapApp {
     const newNode = createNode({
       parentId,
       kind: 'topic',
-      position: nextChildPosition(this.state.document, parentId, this.state.preferences.appearance.layoutMode),
+      position: nextChildPosition(
+        this.state.document,
+        parentId,
+        this.state.preferences.appearance.layoutMode,
+        this.state.preferences.appearance.childGapX,
+      ),
       title: this.t('node.newChild'),
       color: normalizeNodeColor(parent.color) || undefined,
     })
@@ -4072,7 +4098,12 @@ class MindMapApp {
       newNode = createNode({
         parentId: node.parentId,
         kind: 'topic',
-        position: nextSiblingPosition(this.state.document, node, this.state.preferences.appearance.layoutMode),
+        position: nextSiblingPosition(
+          this.state.document,
+          node,
+          this.state.preferences.appearance.layoutMode,
+          this.state.preferences.appearance.childGapX,
+        ),
         title: this.t('node.newSibling'),
         color: normalizeNodeColor(node.color) || undefined,
       })
@@ -4189,7 +4220,11 @@ class MindMapApp {
       return
     }
 
-    autoLayoutHierarchy(this.state.document, this.state.preferences.appearance.layoutMode)
+    autoLayoutHierarchy(
+      this.state.document,
+      this.state.preferences.appearance.layoutMode,
+      this.state.preferences.appearance.childGapX,
+    )
     this.setSelection([fallbackNodeId], fallbackNodeId)
     this.state.editingNodeId = null
     this.state.connectSourceNodeId = null
@@ -4409,7 +4444,11 @@ class MindMapApp {
 
   private autoLayout(): void {
     const snapshot = this.createHistorySnapshot()
-    const movedNodes = autoLayoutHierarchy(this.state.document, this.state.preferences.appearance.layoutMode)
+    const movedNodes = autoLayoutHierarchy(
+      this.state.document,
+      this.state.preferences.appearance.layoutMode,
+      this.state.preferences.appearance.childGapX,
+    )
     if (movedNodes === 0) {
       this.setStatus('status.layoutUpdated', { count: 0 })
       this.render()
@@ -4428,7 +4467,11 @@ class MindMapApp {
       return
     }
 
-    autoLayoutHierarchy(this.state.document, this.state.preferences.appearance.layoutMode)
+    autoLayoutHierarchy(
+      this.state.document,
+      this.state.preferences.appearance.layoutMode,
+      this.state.preferences.appearance.childGapX,
+    )
   }
 
   private toggleNodeCollapse(nodeId: string): void {
@@ -4453,7 +4496,11 @@ class MindMapApp {
     }
 
     if (this.state.preferences.interaction.autoLayoutOnCollapse) {
-      autoLayoutHierarchy(this.state.document, this.state.preferences.appearance.layoutMode)
+      autoLayoutHierarchy(
+        this.state.document,
+        this.state.preferences.appearance.layoutMode,
+        this.state.preferences.appearance.childGapX,
+      )
     }
 
     this.pushHistorySnapshot(snapshot)
@@ -5224,7 +5271,12 @@ class MindMapApp {
           const childNode = createNode({
             parentId: parent.id,
             kind: 'topic',
-            position: nextChildPosition(this.state.document, parent.id, this.state.preferences.appearance.layoutMode),
+            position: nextChildPosition(
+              this.state.document,
+              parent.id,
+              this.state.preferences.appearance.layoutMode,
+              this.state.preferences.appearance.childGapX,
+            ),
             title: deriveNoteChildTitle(parent, normalizedNote, this.state.preferences.locale),
             color: normalizeNodeColor(parent.color) || undefined,
           })
@@ -5234,7 +5286,11 @@ class MindMapApp {
           appliedCount += 1
         }
 
-        autoLayoutHierarchy(this.state.document, this.state.preferences.appearance.layoutMode)
+        autoLayoutHierarchy(
+          this.state.document,
+          this.state.preferences.appearance.layoutMode,
+          this.state.preferences.appearance.childGapX,
+        )
         this.setSelection(createdIds, createdIds[0] ?? null)
       } else {
         const changes = nextNotes.filter((item) => normalizeNodeNote(this.findNode(item.id)?.note) !== normalizeNodeNote(item.note))
@@ -5483,8 +5539,18 @@ class MindMapApp {
           kind: 'topic',
           position:
             mode === 'siblings'
-              ? nextSiblingPosition(this.state.document, selectedNode, this.state.preferences.appearance.layoutMode)
-              : nextChildPosition(this.state.document, selectedNode.id, this.state.preferences.appearance.layoutMode),
+              ? nextSiblingPosition(
+                  this.state.document,
+                  selectedNode,
+                  this.state.preferences.appearance.layoutMode,
+                  this.state.preferences.appearance.childGapX,
+                )
+              : nextChildPosition(
+                  this.state.document,
+                  selectedNode.id,
+                  this.state.preferences.appearance.layoutMode,
+                  this.state.preferences.appearance.childGapX,
+                ),
           title: suggestion.title,
           color: normalizeNodeColor((parentNode ?? selectedNode).color) || undefined,
         })
@@ -5493,7 +5559,11 @@ class MindMapApp {
         createdIds.push(childNode.id)
       }
 
-      autoLayoutHierarchy(this.state.document, this.state.preferences.appearance.layoutMode)
+      autoLayoutHierarchy(
+        this.state.document,
+        this.state.preferences.appearance.layoutMode,
+        this.state.preferences.appearance.childGapX,
+      )
       this.setSelection(createdIds, createdIds[0] ?? null)
       touchDocument(this.state.document)
       this.setStatus('status.aiSuggestionsApplied', { count: createdIds.length })
@@ -5693,7 +5763,32 @@ class MindMapApp {
           preferences.appearance.layoutMode = nextLayoutMode
         })
         if (layoutModeChanged && this.state.view === 'map') {
-          const movedNodes = autoLayoutHierarchy(this.state.document, this.state.preferences.appearance.layoutMode)
+          const movedNodes = autoLayoutHierarchy(
+            this.state.document,
+            this.state.preferences.appearance.layoutMode,
+            this.state.preferences.appearance.childGapX,
+          )
+          touchDocument(this.state.document)
+          this.setStatus('status.layoutUpdated', { count: movedNodes })
+          this.render()
+          this.scheduleAutosave('status.layoutSaveScheduled')
+          return
+        }
+        this.setStatus('status.appearanceUpdated')
+        this.render()
+        return
+      case 'appearance.childGapX':
+        const nextChildGapX = normalizeChildGapX(value)
+        const childGapChanged = this.state.preferences.appearance.childGapX !== nextChildGapX
+        this.updatePreferences((preferences) => {
+          preferences.appearance.childGapX = nextChildGapX
+        })
+        if (childGapChanged && this.state.view === 'map') {
+          const movedNodes = autoLayoutHierarchy(
+            this.state.document,
+            this.state.preferences.appearance.layoutMode,
+            this.state.preferences.appearance.childGapX,
+          )
           touchDocument(this.state.document)
           this.setStatus('status.layoutUpdated', { count: movedNodes })
           this.render()

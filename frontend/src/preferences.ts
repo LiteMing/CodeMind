@@ -8,6 +8,9 @@ const MIN_AI_MAX_TOKENS = 256
 const MAX_AI_MAX_TOKENS = 32768
 const MIN_AI_TIMEOUT_SECONDS = 1
 const MAX_AI_TIMEOUT_SECONDS = 600
+export const DEFAULT_CHILD_GAP_X = 220
+const MIN_CHILD_GAP_X = 120
+const MAX_CHILD_GAP_X = 360
 
 export function createDefaultPreferences(): AppPreferences {
   return {
@@ -16,6 +19,7 @@ export function createDefaultPreferences(): AppPreferences {
     appearance: {
       edgeStyle: 'curve',
       layoutMode: 'balanced',
+      childGapX: DEFAULT_CHILD_GAP_X,
       chromeLayout: 'floating',
       topPanelPosition: 'left',
     },
@@ -98,6 +102,7 @@ export function loadPreferences(): AppPreferences {
       appearance: {
         edgeStyle: normalizeEdgeStyle(parsed.appearance?.edgeStyle),
         layoutMode: normalizeLayoutMode(parsed.appearance?.layoutMode),
+        childGapX: normalizeChildGapX(parsed.appearance?.childGapX),
         chromeLayout: normalizeChromeLayout(parsed.appearance?.chromeLayout),
         topPanelPosition: normalizeTopPanelPosition(parsed.appearance?.topPanelPosition),
       },
@@ -168,6 +173,15 @@ export function normalizeTopPanelPosition(value: unknown): TopPanelPosition {
     return value
   }
   return 'left'
+}
+
+export function normalizeChildGapX(value: unknown): number {
+  const parsed = typeof value === 'number' ? value : Number.parseInt(String(value ?? '').trim(), 10)
+  if (!Number.isFinite(parsed)) {
+    return DEFAULT_CHILD_GAP_X
+  }
+
+  return clamp(Math.round(parsed), MIN_CHILD_GAP_X, MAX_CHILD_GAP_X)
 }
 
 export function normalizeGestureAction(value: unknown, fallback: GestureAction = 'none'): GestureAction {
