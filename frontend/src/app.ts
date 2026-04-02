@@ -120,6 +120,13 @@ interface MarqueeState {
   active: boolean
 }
 
+interface ActiveEditorPreviewState {
+  nodeId: string
+  anchorLeft: number
+  width: number
+  height: number
+}
+
 interface StatusDescriptor {
   key: TranslationKey
   values?: Record<string, string | number>
@@ -432,6 +439,7 @@ class MindMapApp {
     | null = null
   private pendingEditorOptions: EditorLaunchOptions | null = null
   private activeEditorAnchorLeft: number | null = null
+  private activeEditorPreview: ActiveEditorPreviewState | null = null
   private nodeEditorMeasureCanvas: HTMLCanvasElement | null = null
   private pendingImportMode: PendingImportMode = 'auto'
   private workspaceBounds: WorkspaceBounds = {
@@ -3289,10 +3297,8 @@ class MindMapApp {
           return ''
         }
         const edgePoints = resolveHierarchyEdgeEndpoints(
-          parent,
-          node,
-          childCountById.get(parent.id) ?? 0,
-          childCountById.get(node.id) ?? 0,
+          this.resolveNodeRenderMetrics(parent, childCountById.get(parent.id) ?? 0),
+          this.resolveNodeRenderMetrics(node, childCountById.get(node.id) ?? 0),
         )
         return `<path class="edge edge-hierarchy" d="${buildHierarchyPath(projectPosition(edgePoints.source), projectPosition(edgePoints.target), edgeStyle)}" />`
       })
@@ -3307,10 +3313,8 @@ class MindMapApp {
         }
 
         const edgePoints = resolveRelationEdgeEndpoints(
-          source,
-          target,
-          childCountById.get(source.id) ?? 0,
-          childCountById.get(target.id) ?? 0,
+          this.resolveNodeRenderMetrics(source, childCountById.get(source.id) ?? 0),
+          this.resolveNodeRenderMetrics(target, childCountById.get(target.id) ?? 0),
         )
         const projectedSource = projectPosition(edgePoints.source)
         const projectedTarget = projectPosition(edgePoints.target)
@@ -3329,6 +3333,27 @@ class MindMapApp {
     return hierarchyEdges + relationEdges
   }
 
+  private resolveNodeRenderMetrics(node: MindNode, childCount: number): NodeRenderMetrics {
+    const preview = this.activeEditorPreview
+    if (preview && preview.nodeId === node.id) {
+      return {
+        position: {
+          x: preview.anchorLeft + preview.width / 2,
+          y: node.position.y,
+        },
+        width: preview.width,
+        height: preview.height,
+      }
+    }
+
+    const width = estimateNodeWidth(node, childCount)
+    return {
+      position: { ...node.position },
+      width,
+      height: estimateNodeHeight(node, childCount, width),
+    }
+  }
+
   private renderNodes(): string {
     const visibleIds = visibleNodeIds(this.state.document)
     const selectedIds = new Set(this.selectedNodeIds())
@@ -3340,7 +3365,9 @@ class MindMapApp {
       .map((node) => {
         const nodeColor = normalizeNodeColor(node.color)
         const isEditingNode = this.state.editingNodeId === node.id
-        const isAutoWidthEditingNode = isEditingNode && !node.width && this.activeEditorAnchorLeft !== null
+        const preview = this.activeEditorPreview?.nodeId === node.id ? this.activeEditorPreview : null
+        const autoWidthAnchorLeft = preview?.anchorLeft ?? this.activeEditorAnchorLeft
+        const isAutoWidthEditingNode = isEditingNode && !node.width && autoWidthAnchorLeft !== null
         const classes = [
           'node-card',
           `node-${node.kind}`,
@@ -3364,9 +3391,9 @@ class MindMapApp {
           : ''
         const collapseLabel = node.collapsed ? this.t('action.expand') : this.t('action.collapse')
 
-        const nodeDimensions = buildNodeDimensionStyle(node)
+        const nodeDimensions = buildNodeDimensionStyle(node, preview ? { width: preview.width, height: preview.height } : undefined)
         const nodePresentationStyle = buildNodeColorStyle(nodeColor)
-        const anchorX = isAutoWidthEditingNode ? this.activeEditorAnchorLeft ?? node.position.x : node.position.x
+        const anchorX = isAutoWidthEditingNode ? autoWidthAnchorLeft ?? node.position.x : node.position.x
         const articleStyle = `left: ${anchorX + originX}px; top: ${node.position.y + originY}px; ${nodePresentationStyle}`
 
         const content = isEditingNode
@@ -3547,6 +3574,7 @@ class MindMapApp {
         selectionStart: number
         selectionEnd: number
         anchorLeft: number | null
+        preview: ActiveEditorPreviewState | null
       }
     | null {
     const nodeId = this.state.editingNodeId
@@ -3561,17 +3589,19 @@ class MindMapApp {
       selectionStart: editor.selectionStart ?? editor.value.length,
       selectionEnd: editor.selectionEnd ?? editor.value.length,
       anchorLeft: this.activeEditorAnchorLeft,
+      preview: this.activeEditorPreview,
     }
   }
 
   private restoreActiveNodeEditorDraft(
     draft:
-      | {
+        | {
           nodeId: string
           value: string
           selectionStart: number
           selectionEnd: number
           anchorLeft: number | null
+          preview: ActiveEditorPreviewState | null
         }
       | null,
   ): void {
@@ -3581,6 +3611,7 @@ class MindMapApp {
 
     this.state.editingNodeId = draft.nodeId
     this.activeEditorAnchorLeft = draft.anchorLeft
+    this.activeEditorPreview = draft.preview
     this.pendingEditorOptions = {
       value: draft.value,
       selectionStart: draft.selectionStart,
@@ -3599,6 +3630,7 @@ class MindMapApp {
     const maxWidth = Math.max(minWidth, parsePixelValue(computed.maxWidth) || AUTO_NODE_EDITOR_MAX_WIDTH)
     const minHeight = Math.max(MIN_NODE_HEIGHT, parsePixelValue(computed.minHeight))
     let previewWidth = Math.max(node.width ?? minWidth, minWidth)
+    let previewAnchorLeft: number | null = this.activeEditorAnchorLeft
 
     if (node.width) {
       previewWidth = Math.max(node.width, MIN_NODE_WIDTH)
@@ -3624,15 +3656,26 @@ class MindMapApp {
       editor.style.height = `${previewHeight}px`
     }
 
-    if (!node.width && this.activeEditorAnchorLeft !== null) {
+    if (!node.width && previewAnchorLeft !== null) {
+      this.activeEditorPreview = {
+        nodeId: node.id,
+        anchorLeft: previewAnchorLeft,
+        width: previewWidth,
+        height: previewHeight,
+      }
       const article = this.rootEl.querySelector<HTMLElement>(`[data-node-id="${node.id}"]`)
       if (article) {
         article.classList.add('is-editing-auto-width')
-        article.style.left = `${this.activeEditorAnchorLeft + this.workspaceBounds.originX}px`
+        article.style.left = `${previewAnchorLeft + this.workspaceBounds.originX}px`
         article.style.top = `${node.position.y + this.workspaceBounds.originY}px`
-        article.style.width = `${previewWidth}px`
-        article.style.minHeight = `${previewHeight}px`
       }
+      this.refs?.edgeLayer && (this.refs.edgeLayer.innerHTML = this.renderEdges())
+      return
+    }
+
+    if (this.activeEditorPreview?.nodeId === node.id) {
+      this.activeEditorPreview = null
+      this.refs?.edgeLayer && (this.refs.edgeLayer.innerHTML = this.renderEdges())
     }
   }
 
@@ -4317,6 +4360,7 @@ class MindMapApp {
   private openNodeEditor(nodeId: string, options: EditorLaunchOptions = {}): void {
     this.state.editingNodeId = nodeId
     this.activeEditorAnchorLeft = this.resolveNodeEditorAnchorLeft(nodeId)
+    this.activeEditorPreview = this.resolveNodeEditorPreviewState(nodeId)
     this.pendingEditorOptions = options
     this.render()
   }
@@ -4336,10 +4380,32 @@ class MindMapApp {
     return node.position.x - measuredWidth / 2
   }
 
+  private resolveNodeEditorPreviewState(nodeId: string): ActiveEditorPreviewState | null {
+    const node = this.findNode(nodeId)
+    const anchorLeft = this.activeEditorAnchorLeft
+    if (!node || node.width || anchorLeft === null) {
+      return null
+    }
+
+    const element = this.rootEl.querySelector<HTMLElement>(`[data-node-id="${nodeId}"] .node-shell, [data-node-id="${nodeId}"] .node-editor`)
+    if (!element) {
+      return null
+    }
+
+    const rect = element.getBoundingClientRect()
+    return {
+      nodeId,
+      anchorLeft,
+      width: Math.max(rect.width / this.viewport.scale, MIN_NODE_WIDTH),
+      height: Math.max(rect.height / this.viewport.scale, MIN_NODE_HEIGHT),
+    }
+  }
+
   private clearNodeEditorState(): void {
     this.state.editingNodeId = null
     this.pendingEditorOptions = null
     this.activeEditorAnchorLeft = null
+    this.activeEditorPreview = null
   }
 
   private commitNodeEditor(
@@ -6673,45 +6739,37 @@ function buildHierarchyPath(source: Position, target: Position, edgeStyle: EdgeS
     : buildCurvedHierarchyPath(source, target)
 }
 
-function resolveHierarchyEdgeEndpoints(
-  parent: MindNode,
-  child: MindNode,
-  parentChildCount = 0,
-  childChildCount = 0,
-): { source: Position; target: Position } {
+interface NodeRenderMetrics {
+  position: Position
+  width: number
+  height: number
+}
+
+function resolveHierarchyEdgeEndpoints(parent: NodeRenderMetrics, child: NodeRenderMetrics): { source: Position; target: Position } {
   const direction = child.position.x >= parent.position.x ? 1 : -1
-  const parentWidth = estimateNodeWidth(parent, parentChildCount)
-  const childWidth = estimateNodeWidth(child, childChildCount)
 
   return {
     source: {
-      x: parent.position.x + direction * parentWidth / 2,
+      x: parent.position.x + direction * parent.width / 2,
       y: parent.position.y,
     },
     target: {
-      x: child.position.x - direction * childWidth / 2,
+      x: child.position.x - direction * child.width / 2,
       y: child.position.y,
     },
   }
 }
 
-function resolveRelationEdgeEndpoints(
-  source: MindNode,
-  target: MindNode,
-  sourceChildCount = 0,
-  targetChildCount = 0,
-): { source: Position; target: Position } {
+function resolveRelationEdgeEndpoints(source: NodeRenderMetrics, target: NodeRenderMetrics): { source: Position; target: Position } {
   return {
-    source: resolveNodeAnchorToward(source, target.position, sourceChildCount),
-    target: resolveNodeAnchorToward(target, source.position, targetChildCount),
+    source: resolveNodeAnchorToward(source, target.position),
+    target: resolveNodeAnchorToward(target, source.position),
   }
 }
 
-function resolveNodeAnchorToward(node: MindNode, toward: Position, childCount = 0): Position {
-  const width = estimateNodeWidth(node, childCount)
-  const height = estimateNodeHeight(node, childCount, width)
-  const halfWidth = width / 2
-  const halfHeight = height / 2
+function resolveNodeAnchorToward(node: NodeRenderMetrics, toward: Position): Position {
+  const halfWidth = node.width / 2
+  const halfHeight = node.height / 2
   const deltaX = toward.x - node.position.x
   const deltaY = toward.y - node.position.y
 
@@ -7267,13 +7325,17 @@ function graphNodeDepth(document: MindMapDocument, node: MindNode): number {
   return depth
 }
 
-function buildNodeDimensionStyle(node: MindNode): string {
+function buildNodeDimensionStyle(node: MindNode, preview?: { width: number; height: number }): string {
   const styles: string[] = []
-  if (node.width) {
+  if (preview) {
+    styles.push(`width: ${Math.max(preview.width, MIN_NODE_WIDTH)}px;`)
+    styles.push(`height: ${Math.max(preview.height, MIN_NODE_HEIGHT)}px;`)
+    styles.push('max-width: none;')
+  } else if (node.width) {
     styles.push(`width: ${Math.max(node.width, MIN_NODE_WIDTH)}px;`)
     styles.push('max-width: none;')
   }
-  if (node.height) {
+  if (!preview && node.height) {
     styles.push(`height: ${Math.max(node.height, MIN_NODE_HEIGHT)}px;`)
   }
   return styles.join(' ')
