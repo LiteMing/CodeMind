@@ -38,6 +38,15 @@ const (
 
 type NodeColor string
 
+type ArrowDirection string
+
+const (
+	ArrowDirectionNone     ArrowDirection = "none"
+	ArrowDirectionForward  ArrowDirection = "forward"
+	ArrowDirectionBackward ArrowDirection = "backward"
+	ArrowDirectionBoth     ArrowDirection = "both"
+)
+
 type Position struct {
 	X float64 `json:"x"`
 	Y float64 `json:"y"`
@@ -60,10 +69,30 @@ type Node struct {
 }
 
 type RelationEdge struct {
+	ID             string           `json:"id"`
+	SourceID       string           `json:"sourceId"`
+	TargetID       string           `json:"targetId"`
+	Label          string           `json:"label,omitempty"`
+	ArrowDirection ArrowDirection   `json:"arrowDirection,omitempty"`
+	Branches       []RelationBranch `json:"branches,omitempty"`
+	MidpointT      float64          `json:"midpointT,omitempty"`
+	MidpointOffset *Position        `json:"midpointOffset,omitempty"`
+	Waypoints      []Position       `json:"waypoints,omitempty"`
+	CreatedAt      time.Time        `json:"createdAt"`
+	UpdatedAt      time.Time        `json:"updatedAt"`
+}
+
+type RelationBranch struct {
+	TargetID string `json:"targetId"`
+}
+
+type RegionBox struct {
 	ID        string    `json:"id"`
-	SourceID  string    `json:"sourceId"`
-	TargetID  string    `json:"targetId"`
-	Label     string    `json:"label,omitempty"`
+	Label     string    `json:"label"`
+	Color     NodeColor `json:"color,omitempty"`
+	Position  Position  `json:"position"`
+	Width     float64   `json:"width"`
+	Height    float64   `json:"height"`
 	CreatedAt time.Time `json:"createdAt"`
 	UpdatedAt time.Time `json:"updatedAt"`
 }
@@ -80,6 +109,7 @@ type Document struct {
 	Theme     Theme          `json:"theme"`
 	Nodes     []Node         `json:"nodes"`
 	Relations []RelationEdge `json:"relations"`
+	Regions   []RegionBox    `json:"regions"`
 	Meta      Meta           `json:"meta"`
 }
 
@@ -104,6 +134,7 @@ func NewDefaultDocument() Document {
 		Theme:     ThemeDark,
 		Nodes:     []Node{root},
 		Relations: []RelationEdge{},
+		Regions:   []RegionBox{},
 		Meta: Meta{
 			Version:      1,
 			LastEditedAt: now,
@@ -170,6 +201,38 @@ func (d *Document) Validate() error {
 		if _, exists := nodeByID[edge.TargetID]; !exists {
 			return fmt.Errorf("relation %s has unknown target %s", edge.ID, edge.TargetID)
 		}
+		if !isValidArrowDirection(edge.ArrowDirection) {
+			return fmt.Errorf("relation %s has invalid arrow direction %s", edge.ID, edge.ArrowDirection)
+		}
+
+		branchTargets := make(map[string]struct{}, len(edge.Branches))
+		for _, branch := range edge.Branches {
+			if strings.TrimSpace(branch.TargetID) == "" {
+				return fmt.Errorf("relation %s has empty branch target", edge.ID)
+			}
+			if branch.TargetID == edge.SourceID {
+				return fmt.Errorf("relation %s cannot branch back to source %s", edge.ID, edge.SourceID)
+			}
+			if branch.TargetID == edge.TargetID {
+				return fmt.Errorf("relation %s has duplicate branch target %s", edge.ID, edge.TargetID)
+			}
+			if _, exists := nodeByID[branch.TargetID]; !exists {
+				return fmt.Errorf("relation %s has unknown branch target %s", edge.ID, branch.TargetID)
+			}
+			if _, exists := branchTargets[branch.TargetID]; exists {
+				return fmt.Errorf("relation %s has duplicate branch target %s", edge.ID, branch.TargetID)
+			}
+			branchTargets[branch.TargetID] = struct{}{}
+		}
+	}
+
+	for _, region := range d.Regions {
+		if strings.TrimSpace(region.ID) == "" {
+			return errors.New("region id is required")
+		}
+		if region.Width <= 0 || region.Height <= 0 {
+			return fmt.Errorf("region %s must have positive width and height", region.ID)
+		}
 	}
 
 	return nil
@@ -178,6 +241,17 @@ func (d *Document) Validate() error {
 func (d *Document) PrepareForSave(now time.Time) {
 	if d.Relations == nil {
 		d.Relations = []RelationEdge{}
+	}
+	if d.Regions == nil {
+		d.Regions = []RegionBox{}
+	}
+	for i := range d.Relations {
+		if d.Relations[i].Branches == nil {
+			d.Relations[i].Branches = []RelationBranch{}
+		}
+		if d.Relations[i].Waypoints == nil {
+			d.Relations[i].Waypoints = []Position{}
+		}
 	}
 
 	root := d.Root()
@@ -194,6 +268,17 @@ func (d *Document) PrepareForSave(now time.Time) {
 func (d *Document) TouchOpened(now time.Time) {
 	if d.Relations == nil {
 		d.Relations = []RelationEdge{}
+	}
+	if d.Regions == nil {
+		d.Regions = []RegionBox{}
+	}
+	for i := range d.Relations {
+		if d.Relations[i].Branches == nil {
+			d.Relations[i].Branches = []RelationBranch{}
+		}
+		if d.Relations[i].Waypoints == nil {
+			d.Relations[i].Waypoints = []Position{}
+		}
 	}
 
 	root := d.Root()
@@ -248,4 +333,13 @@ func (d Document) ChildrenOf(parentID string) []Node {
 	})
 
 	return children
+}
+
+func isValidArrowDirection(direction ArrowDirection) bool {
+	switch direction {
+	case "", ArrowDirectionNone, ArrowDirectionForward, ArrowDirectionBackward, ArrowDirectionBoth:
+		return true
+	default:
+		return false
+	}
 }

@@ -27,6 +27,7 @@ export function createDefaultDocument(): MindMapDocument {
       },
     ],
     relations: [],
+    regions: [],
     meta: {
       version: 1,
       lastEditedAt: now,
@@ -79,7 +80,12 @@ export function childrenOf(document: MindMapDocument, parentId: string): MindNod
 }
 
 export function connectedRelations(document: MindMapDocument, nodeId: string): RelationEdge[] {
-  return document.relations.filter((relation) => relation.sourceId === nodeId || relation.targetId === nodeId)
+  return document.relations.filter((relation) => {
+    if (relation.sourceId === nodeId || relation.targetId === nodeId) {
+      return true
+    }
+    return (relation.branches ?? []).some((branch) => branch.targetId === nodeId)
+  })
 }
 
 export function descendantIds(document: MindMapDocument, nodeId: string): string[] {
@@ -369,7 +375,12 @@ export function deleteNodeTree(document: MindMapDocument, nodeId: string): { rem
   const nodeCountBefore = document.nodes.length
 
   document.nodes = document.nodes.filter((node) => !removeIds.has(node.id))
-  document.relations = document.relations.filter((relation) => !removeIds.has(relation.sourceId) && !removeIds.has(relation.targetId))
+  document.relations = document.relations
+    .filter((relation) => !removeIds.has(relation.sourceId) && !removeIds.has(relation.targetId))
+    .map((relation) => ({
+      ...relation,
+      branches: (relation.branches ?? []).filter((branch) => !removeIds.has(branch.targetId)),
+    }))
 
   return {
     removedNodes: nodeCountBefore - document.nodes.length,

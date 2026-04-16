@@ -2,7 +2,9 @@ export type Theme = 'light' | 'dark'
 export type Locale = 'zh-CN' | 'en'
 export type AIProvider = 'lmstudio' | 'openai-compatible'
 export type AITemplateId = 'concept-graph' | 'project-planning' | 'character-network'
-export type EdgeStyle = 'curve' | 'orthogonal'
+export type EdgeStyle = 'curve' | 'orthogonal' | 'hidden'
+
+export type ArrowDirection = 'none' | 'forward' | 'backward' | 'both'
 export type LayoutMode = 'balanced' | 'right'
 export type ChromeLayout = 'floating' | 'fixed'
 export type TopPanelPosition = 'left' | 'center' | 'right'
@@ -53,6 +55,29 @@ export interface RelationEdge {
   sourceId: string
   targetId: string
   label?: string
+  arrowDirection?: ArrowDirection
+  branches?: RelationBranch[]
+  /** Custom midpoint offset (0..1 along path) for the draggable midpoint dot */
+  midpointT?: number
+  /** Custom midpoint position override after user drag */
+  midpointOffset?: Position
+  /** Branch waypoints – when user splits a connection at the midpoint, extra waypoints are stored */
+  waypoints?: Position[]
+  createdAt: string
+  updatedAt: string
+}
+
+export interface RelationBranch {
+  targetId: string
+}
+
+export interface RegionBox {
+  id: string
+  label: string
+  color: NodeColor
+  position: Position
+  width: number
+  height: number
   createdAt: string
   updatedAt: string
 }
@@ -69,6 +94,7 @@ export interface MindMapDocument {
   theme: Theme
   nodes: MindNode[]
   relations: RelationEdge[]
+  regions: RegionBox[]
   meta: MindMapMeta
 }
 

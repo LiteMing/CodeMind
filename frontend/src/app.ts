@@ -50,6 +50,7 @@ import type {
   AIDebugRequest,
   AppPreferences,
   AITemplateId,
+  ArrowDirection,
   CanvasDragAction,
   GestureAction,
   EdgeStyle,
@@ -60,6 +61,7 @@ import type {
   NodeColor,
   Position,
   Priority,
+  RegionBox,
   RelationEdge,
   Theme,
 } from './types'
@@ -108,6 +110,48 @@ interface ContextMenuState {
   clientX: number
   clientY: number
   nodeId: string | null
+  /** When right-clicking a relation edge */
+  relationId?: string | null
+  /** When right-clicking a region box */
+  regionId?: string | null
+}
+
+interface RegionDrawState {
+  pointerId: number
+  startCanvasX: number
+  startCanvasY: number
+  currentCanvasX: number
+  currentCanvasY: number
+  color: NodeColor
+}
+
+interface RegionDragState {
+  regionId: string
+  offsetX: number
+  offsetY: number
+  initialPosition: Position
+  initialNodePositions: Record<string, Position>
+  historyCaptured: boolean
+}
+
+interface ConnectorDragState {
+  sourceNodeId: string
+  pointerId: number
+  currentClientX: number
+  currentClientY: number
+}
+
+interface MidpointDragState {
+  relationId: string
+  pointerId: number
+  mode: 'pending' | 'move' | 'branch'
+  startClientX: number
+  startClientY: number
+  currentClientX: number
+  currentClientY: number
+  originMidpoint: Position
+  historyCaptured: boolean
+  longPressHandle: number | null
 }
 
 interface MarqueeState {
@@ -218,6 +262,11 @@ interface AppState {
   aiWheel: AIWheelState
   ai: AIWorkspaceState
   graph: GraphOverlayState
+  selectedRelationId: string | null
+  regionDraw: RegionDrawState | null
+  regionDrag: RegionDragState | null
+  connectorDrag: ConnectorDragState | null
+  midpointDrag: MidpointDragState | null
 }
 
 interface ShellRefs {
@@ -247,6 +296,7 @@ interface ShellRefs {
   scroll: HTMLElement
   canvas: HTMLElement
   edgeLayer: SVGSVGElement
+  regionLayer: HTMLElement
   nodeLayer: HTMLElement
   inspector: HTMLElement
   settingsLayer: HTMLElement
@@ -310,6 +360,8 @@ const GRAPH_ZOOM_SENSITIVITY = 0.0012
 const NODE_GESTURE_MULTI_CLICK_DELAY_MS = 240
 const NODE_LONG_PRESS_DELAY_MS = 520
 const NODE_LONG_PRESS_MOVE_THRESHOLD = 10
+const RELATION_HANDLE_LONG_PRESS_DELAY_MS = 320
+const RELATION_HANDLE_MOVE_THRESHOLD = 8
 const IMPORT_FILE_ACCEPT =
   '.md,.markdown,.txt,.json,.csv,.tsv,.html,.htm,.xml,.opml,.mermaid,.mmd,.yaml,.yml,.toml,.ini,.cfg,.log,.rst,text/plain,text/markdown,application/json,text/csv,text/html,application/xml,text/xml'
 const PRIORITY_VALUES: Priority[] = ['', 'P0', 'P1', 'P2', 'P3']
@@ -514,6 +566,11 @@ class MindMapApp {
         tilt: 0.18,
         zoom: GRAPH_DEFAULT_ZOOM,
       },
+      selectedRelationId: null,
+      regionDraw: null,
+      regionDrag: null,
+      connectorDrag: null,
+      midpointDrag: null,
     }
 
     this.applyLocale()
@@ -726,6 +783,41 @@ class MindMapApp {
 
     const target = event.target
     const element = target instanceof HTMLElement ? target : null
+    const svgElement = target instanceof SVGElement ? target : null
+
+    // Check for right-click on relation edge hit area
+    const relationClick = svgElement?.closest<SVGElement>('[data-relation-click]')
+    if (relationClick) {
+      const relationId = relationClick.getAttribute('data-relation-click')
+      if (relationId) {
+        this.state.selectedRelationId = relationId
+        this.state.contextMenu = {
+          clientX: event.clientX,
+          clientY: event.clientY,
+          nodeId: null,
+          relationId,
+        }
+        this.render()
+        return
+      }
+    }
+
+    // Check for right-click on region box
+    const regionEl = element?.closest<HTMLElement>('[data-region-id]')
+    if (regionEl) {
+      const regionId = regionEl.dataset.regionId
+      if (regionId) {
+        this.state.contextMenu = {
+          clientX: event.clientX,
+          clientY: event.clientY,
+          nodeId: null,
+          regionId,
+        }
+        this.render()
+        return
+      }
+    }
+
     const nodeId = element?.closest<HTMLElement>('[data-node-button]')?.dataset.nodeButton ?? null
     if (nodeId && !this.state.selectedNodeIds.includes(nodeId)) {
       this.setSelection([nodeId], nodeId)
@@ -767,8 +859,9 @@ class MindMapApp {
 
   private readonly handlePointerDown = (event: PointerEvent): void => {
     const target = event.target
-    if (target instanceof HTMLElement && this.state.graph.open) {
-      const graphCanvas = target.closest<HTMLCanvasElement>('[data-graph-canvas]')
+    const element = target instanceof Element ? target : null
+    if (element && this.state.graph.open) {
+      const graphCanvas = element.closest<HTMLCanvasElement>('[data-graph-canvas]')
       if (graphCanvas && event.button === 0) {
         this.graphDrag = {
           pointerId: event.pointerId,
@@ -788,15 +881,121 @@ class MindMapApp {
       return
     }
 
-    if (!(target instanceof HTMLElement)) {
+    if (!element) {
       return
     }
 
-    if (target.closest('[data-node-editor]')) {
+    if (element.closest('[data-node-editor]')) {
       return
     }
 
-    const nodeButton = target.closest<HTMLElement>('[data-node-button]')
+    // Handle connector dot long-press drag to create connection
+    const connectorDot = element.closest<HTMLElement>('[data-node-connector]')
+    if (connectorDot && event.button === 0) {
+      const sourceNodeId = connectorDot.dataset.nodeConnector
+      if (sourceNodeId) {
+        this.state.connectorDrag = {
+          sourceNodeId,
+          pointerId: event.pointerId,
+          currentClientX: event.clientX,
+          currentClientY: event.clientY,
+        }
+        event.preventDefault()
+        return
+      }
+    }
+
+    // Handle midpoint dot drag
+    const midpointDot = (target instanceof SVGElement ? target : null)?.closest<SVGElement>('[data-midpoint-dot]')
+    if (midpointDot && event.button === 0) {
+      const relationId = midpointDot.getAttribute('data-midpoint-dot')
+      if (relationId) {
+        const originMidpoint = this.resolveRelationMidpointPosition(relationId)
+        if (!originMidpoint) {
+          return
+        }
+        this.state.midpointDrag = {
+          relationId,
+          pointerId: event.pointerId,
+          mode: 'pending',
+          startClientX: event.clientX,
+          startClientY: event.clientY,
+          currentClientX: event.clientX,
+          currentClientY: event.clientY,
+          originMidpoint,
+          historyCaptured: false,
+          longPressHandle: window.setTimeout(() => {
+            if (this.state.midpointDrag?.relationId !== relationId || this.state.midpointDrag.pointerId !== event.pointerId) {
+              return
+            }
+            if (this.state.midpointDrag.mode !== 'pending') {
+              return
+            }
+            this.state.midpointDrag.mode = 'branch'
+            this.setStatus('status.connectionBranchMode')
+            this.renderWorkspace()
+          }, RELATION_HANDLE_LONG_PRESS_DELAY_MS),
+        }
+        this.state.selectedRelationId = relationId
+        event.preventDefault()
+        return
+      }
+    }
+
+    // Handle click on relation edge to select it
+    const svgTarget = target instanceof SVGElement ? target : null
+    const relationHit = svgTarget?.closest<SVGElement>('[data-relation-click]')
+    if (relationHit && event.button === 0) {
+      const relationId = relationHit.getAttribute('data-relation-click')
+      if (relationId) {
+        this.state.selectedRelationId = this.state.selectedRelationId === relationId ? null : relationId
+        this.state.selectedNodeId = null
+        this.state.selectedNodeIds = []
+        this.renderWorkspace()
+        event.preventDefault()
+        return
+      }
+    }
+
+    // Handle region box drag
+    const regionDragEl = element.closest<HTMLElement>('[data-region-drag]')
+    if (regionDragEl && event.button === 0 && !this.state.regionDraw) {
+      const regionId = regionDragEl.dataset.regionDrag
+      const region = this.state.document.regions?.find((r) => r.id === regionId)
+      if (region) {
+        const docPos = this.clientToCanvasPosition(event.clientX, event.clientY)
+        const nodesInRegion = this.nodesInRegion(region)
+        const initialNodePositions: Record<string, Position> = {}
+        for (const node of nodesInRegion) {
+          initialNodePositions[node.id] = { ...node.position }
+        }
+        this.state.regionDrag = {
+          regionId: region.id,
+          offsetX: docPos.x - region.position.x,
+          offsetY: docPos.y - region.position.y,
+          initialPosition: { ...region.position },
+          initialNodePositions,
+          historyCaptured: false,
+        }
+        event.preventDefault()
+        return
+      }
+    }
+
+    // Handle region draw mode - left click starts drawing
+    if (this.state.regionDraw && this.state.regionDraw.pointerId === -1 && event.button === 0) {
+      const docPos = this.clientToCanvasPosition(event.clientX, event.clientY)
+      this.state.regionDraw.pointerId = event.pointerId
+      this.state.regionDraw.startCanvasX = docPos.x
+      this.state.regionDraw.startCanvasY = docPos.y
+      this.state.regionDraw.currentCanvasX = docPos.x
+      this.state.regionDraw.currentCanvasY = docPos.y
+      this.setStatus('status.regionDrawing')
+      event.preventDefault()
+      return
+    }
+
+    const nodeButton = element.closest<HTMLElement>('[data-node-button]')
     const nodeId = nodeButton?.dataset.nodeButton
     const longPressAction = this.longPressActionForButton(event.button)
     const keepPendingGesture = nodeId === this.pendingNodeGestureNodeId && event.detail >= 2
@@ -808,7 +1007,7 @@ class MindMapApp {
       return
     }
 
-    const resizeHandle = target.closest<HTMLElement>('[data-node-resizer]')
+    const resizeHandle = element.closest<HTMLElement>('[data-node-resizer]')
     const resizeNodeId = resizeHandle?.dataset.nodeResizer
     if (resizeNodeId) {
       if (event.button !== 0) {
@@ -837,7 +1036,7 @@ class MindMapApp {
       return
     }
 
-    if (target.closest('[data-node-collapse-button]')) {
+    if (element.closest('[data-node-collapse-button]')) {
       event.preventDefault()
       return
     }
@@ -848,7 +1047,7 @@ class MindMapApp {
 
     if (!nodeId) {
       this.clearNodeLongPress()
-      const withinScroll = target.closest<HTMLElement>('[data-workspace-scroll]')
+      const withinScroll = element.closest<HTMLElement>('[data-workspace-scroll]')
       if (!withinScroll) {
         return
       }
@@ -936,6 +1135,77 @@ class MindMapApp {
     }
 
     if (this.state.view !== 'map') {
+      return
+    }
+
+    // Connector dot drag
+    if (this.state.connectorDrag && event.pointerId === this.state.connectorDrag.pointerId) {
+      this.state.connectorDrag.currentClientX = event.clientX
+      this.state.connectorDrag.currentClientY = event.clientY
+      this.renderWorkspace()
+      event.preventDefault()
+      return
+    }
+
+    // Midpoint dot drag
+    if (this.state.midpointDrag && event.pointerId === this.state.midpointDrag.pointerId) {
+      this.state.midpointDrag.currentClientX = event.clientX
+      this.state.midpointDrag.currentClientY = event.clientY
+      const dragState = this.state.midpointDrag
+      if (dragState.mode === 'pending') {
+        const moved = Math.hypot(event.clientX - dragState.startClientX, event.clientY - dragState.startClientY)
+        if (moved > RELATION_HANDLE_MOVE_THRESHOLD) {
+          this.clearMidpointDragLongPress(dragState)
+          dragState.mode = 'move'
+        }
+      }
+      this.renderWorkspace()
+      event.preventDefault()
+      return
+    }
+
+    // Region draw mode
+    if (this.state.regionDraw && this.state.regionDraw.pointerId !== -1 && event.pointerId === this.state.regionDraw.pointerId) {
+      const docPos = this.clientToCanvasPosition(event.clientX, event.clientY)
+      this.state.regionDraw.currentCanvasX = docPos.x
+      this.state.regionDraw.currentCanvasY = docPos.y
+      this.renderRegionDrawPreview()
+      event.preventDefault()
+      return
+    }
+
+    // Region drag
+    if (this.state.regionDrag) {
+      const docPos = this.clientToCanvasPosition(event.clientX, event.clientY)
+      const region = this.state.document.regions?.find((r) => r.id === this.state.regionDrag!.regionId)
+      if (region) {
+        const newRegionX = docPos.x - this.state.regionDrag.offsetX
+        const newRegionY = docPos.y - this.state.regionDrag.offsetY
+        if (
+          !this.state.regionDrag.historyCaptured &&
+          (Math.abs(newRegionX - region.position.x) > 0.5 || Math.abs(newRegionY - region.position.y) > 0.5)
+        ) {
+          this.captureHistory()
+          this.state.regionDrag.historyCaptured = true
+        }
+        const dx = newRegionX - this.state.regionDrag.initialPosition.x
+        const dy = newRegionY - this.state.regionDrag.initialPosition.y
+        region.position = { x: newRegionX, y: newRegionY }
+        // Move contained nodes
+        const movedNodeIds: string[] = []
+        for (const [nodeId, initialPos] of Object.entries(this.state.regionDrag.initialNodePositions)) {
+          const node = this.findNode(nodeId)
+          if (node) {
+            node.position = {
+              x: initialPos.x + dx,
+              y: initialPos.y + dy,
+            }
+            movedNodeIds.push(nodeId)
+          }
+        }
+        this.applyLiveRegionDrag(region, movedNodeIds)
+      }
+      event.preventDefault()
       return
     }
 
@@ -1138,6 +1408,81 @@ class MindMapApp {
       return
     }
 
+    // Connector drag finish
+    if (this.state.connectorDrag && event.pointerId === this.state.connectorDrag.pointerId) {
+      const sourceNodeId = this.state.connectorDrag.sourceNodeId
+      // Find target node at pointer position
+      const target = document.elementFromPoint(event.clientX, event.clientY)
+      const targetEl = target instanceof HTMLElement ? target : null
+      const targetConnector = targetEl?.closest<HTMLElement>('[data-node-connector]')
+      const targetButton = targetEl?.closest<HTMLElement>('[data-node-button]')
+      const targetNodeId = targetConnector?.dataset.nodeConnector ?? targetButton?.dataset.nodeButton
+      this.state.connectorDrag = null
+      if (targetNodeId && targetNodeId !== sourceNodeId) {
+        this.createRelation(sourceNodeId, targetNodeId)
+      } else {
+        this.renderWorkspace()
+      }
+      return
+    }
+
+    // Midpoint drag finish
+    if (this.state.midpointDrag && event.pointerId === this.state.midpointDrag.pointerId) {
+      const dragState = this.state.midpointDrag
+      const relation = this.state.document.relations.find((r) => r.id === dragState.relationId)
+      this.clearMidpointDragLongPress(dragState)
+      this.state.midpointDrag = null
+      if (!relation) {
+        this.renderWorkspace()
+        return
+      }
+
+      if (dragState.mode === 'branch') {
+        const target = document.elementFromPoint(event.clientX, event.clientY)
+        const targetEl = target instanceof HTMLElement ? target : null
+        const targetConnector = targetEl?.closest<HTMLElement>('[data-node-connector]')
+        const targetButton = targetEl?.closest<HTMLElement>('[data-node-button]')
+        const targetNodeId = targetConnector?.dataset.nodeConnector ?? targetButton?.dataset.nodeButton ?? null
+        if (targetNodeId) {
+          this.addBranchTargetToRelation(relation, targetNodeId)
+        } else {
+          this.renderWorkspace()
+        }
+        return
+      }
+
+      const moved = Math.hypot(event.clientX - dragState.startClientX, event.clientY - dragState.startClientY)
+      if (dragState.mode === 'move' || moved > RELATION_HANDLE_MOVE_THRESHOLD) {
+        this.moveRelationMidpoint(relation, this.clientToCanvasPosition(event.clientX, event.clientY))
+      } else {
+        this.renderWorkspace()
+      }
+      return
+    }
+
+    // Region draw finish
+    if (this.state.regionDraw && this.state.regionDraw.pointerId !== -1 && event.pointerId === this.state.regionDraw.pointerId) {
+      const rd = this.state.regionDraw
+      const x = Math.min(rd.startCanvasX, rd.currentCanvasX)
+      const y = Math.min(rd.startCanvasY, rd.currentCanvasY)
+      const w = Math.abs(rd.currentCanvasX - rd.startCanvasX)
+      const h = Math.abs(rd.currentCanvasY - rd.startCanvasY)
+      this.finishRegionDraw(x, y, w, h)
+      return
+    }
+
+    // Region drag finish
+    if (this.state.regionDrag) {
+      const wasMoved = this.state.regionDrag.historyCaptured
+      this.state.regionDrag = null
+      if (wasMoved) {
+        touchDocument(this.state.document)
+        this.renderWorkspace()
+        this.scheduleAutosave('status.layoutSaveScheduled')
+      }
+      return
+    }
+
     if (this.longPressState && event.pointerId === this.longPressState.pointerId) {
       this.clearNodeLongPress()
     }
@@ -1271,6 +1616,35 @@ class MindMapApp {
     if ((event.ctrlKey || event.metaKey) && !event.shiftKey && event.key.toLowerCase() === 'v') {
       event.preventDefault()
       this.pasteCopiedSubtree()
+      return
+    }
+
+    if (event.key === 'Escape' && this.state.regionDraw) {
+      event.preventDefault()
+      this.state.regionDraw = null
+      this.render()
+      return
+    }
+
+    if (event.key === 'Escape' && this.state.connectorDrag) {
+      event.preventDefault()
+      this.state.connectorDrag = null
+      this.renderWorkspace()
+      return
+    }
+
+    if (event.key === 'Escape' && this.state.midpointDrag) {
+      event.preventDefault()
+      this.clearMidpointDragLongPress(this.state.midpointDrag)
+      this.state.midpointDrag = null
+      this.renderWorkspace()
+      return
+    }
+
+    if (event.key === 'Escape' && this.state.selectedRelationId) {
+      event.preventDefault()
+      this.state.selectedRelationId = null
+      this.renderWorkspace()
       return
     }
 
@@ -1916,6 +2290,7 @@ class MindMapApp {
           <section class="workspace-panel">
             <div class="workspace-scroll" data-workspace-scroll>
               <div class="workspace-canvas" data-workspace-canvas>
+                <div class="region-layer" data-region-layer></div>
                 <svg class="edge-layer" viewBox="0 0 ${WORKSPACE_MIN_WIDTH} ${WORKSPACE_MIN_HEIGHT}" aria-hidden="true" data-edge-layer></svg>
                 <div class="node-layer" data-node-layer></div>
               </div>
@@ -1959,6 +2334,7 @@ class MindMapApp {
       scroll: requiredElement(this.rootEl, '[data-workspace-scroll]'),
       canvas: requiredElement(this.rootEl, '[data-workspace-canvas]'),
       edgeLayer: requiredElement(this.rootEl, '[data-edge-layer]'),
+      regionLayer: requiredElement(this.rootEl, '[data-region-layer]'),
       nodeLayer: requiredElement(this.rootEl, '[data-node-layer]'),
       inspector: requiredElement(this.rootEl, '[data-inspector]'),
       settingsLayer: requiredElement(this.rootEl, '[data-settings-layer]'),
@@ -2242,7 +2618,29 @@ class MindMapApp {
     this.updateCanvasViewportView()
     this.refs.scroll.classList.toggle('is-marqueeing', Boolean(this.state.marquee))
     this.refs.edgeLayer.innerHTML = this.renderEdges()
+    this.refs.regionLayer.innerHTML = this.renderRegions()
     this.refs.nodeLayer.innerHTML = this.renderNodes()
+  }
+
+  private renderRegionDrawPreview(): void {
+    if (!this.refs || !this.state.regionDraw || this.state.regionDraw.pointerId === -1) {
+      return
+    }
+    const rd = this.state.regionDraw
+    const originX = this.workspaceBounds.originX
+    const originY = this.workspaceBounds.originY
+    const left = Math.min(rd.startCanvasX, rd.currentCanvasX) + originX
+    const top = Math.min(rd.startCanvasY, rd.currentCanvasY) + originY
+    const w = Math.abs(rd.currentCanvasX - rd.startCanvasX)
+    const h = Math.abs(rd.currentCanvasY - rd.startCanvasY)
+    const palette = resolveNodeColorPalette(rd.color)
+    const borderColor = palette ? `rgba(${palette.accentRgb.join(',')}, 0.6)` : 'rgba(96,165,250,0.5)'
+    const bgColor = palette ? `rgba(${palette.surfaceRgb.join(',')}, 0.15)` : 'rgba(96,165,250,0.1)'
+    // Show preview overlay in the region layer
+    this.refs.regionLayer.innerHTML = this.renderRegions() + `<div class="region-box region-draw-preview" style="
+      left: ${left}px; top: ${top}px; width: ${w}px; height: ${h}px;
+      background: ${bgColor}; border: 2px dashed ${borderColor};
+    "></div>`
   }
 
   private renderInspector(): void {
@@ -2458,6 +2856,41 @@ class MindMapApp {
     const stageRect = this.refs.overlayLayer.getBoundingClientRect()
     const left = Math.round(this.state.contextMenu.clientX - stageRect.left)
     const top = Math.round(this.state.contextMenu.clientY - stageRect.top)
+
+    // Relation context menu
+    if (this.state.contextMenu.relationId) {
+      const relation = this.state.document.relations.find((r) => r.id === this.state.contextMenu!.relationId)
+      const arrowDir = relation?.arrowDirection ?? 'none'
+      return `
+        <section class="context-menu" data-context-menu style="left: ${Math.round(left)}px; top: ${Math.round(top)}px;">
+          <p class="section-label">${this.t('context.relation')}</p>
+          <button type="button" class="chip-button context-menu-button ${arrowDir === 'none' ? 'is-active' : ''}" data-command="set-arrow:none:${this.state.contextMenu.relationId}">${this.t('action.arrowNone')}</button>
+          <button type="button" class="chip-button context-menu-button ${arrowDir === 'forward' ? 'is-active' : ''}" data-command="set-arrow:forward:${this.state.contextMenu.relationId}">${this.t('action.arrowForward')}</button>
+          <button type="button" class="chip-button context-menu-button ${arrowDir === 'backward' ? 'is-active' : ''}" data-command="set-arrow:backward:${this.state.contextMenu.relationId}">${this.t('action.arrowBackward')}</button>
+          <button type="button" class="chip-button context-menu-button ${arrowDir === 'both' ? 'is-active' : ''}" data-command="set-arrow:both:${this.state.contextMenu.relationId}">${this.t('action.arrowBoth')}</button>
+          <div class="context-menu-divider"></div>
+          <button type="button" class="chip-button context-menu-button" data-command="branch-connection:${this.state.contextMenu.relationId}">${this.t('action.branchConnection')}</button>
+          <div class="context-menu-divider"></div>
+          <button type="button" class="chip-button danger context-menu-button" data-command="delete-relation:${this.state.contextMenu.relationId}">${this.t('action.remove')}</button>
+        </section>
+      `
+    }
+
+    // Region context menu
+    if (this.state.contextMenu.regionId) {
+      return `
+        <section class="context-menu" data-context-menu style="left: ${Math.round(left)}px; top: ${Math.round(top)}px;">
+          <p class="section-label">${this.t('context.regionActions')}</p>
+          ${NODE_COLOR_VALUES.filter((c) => c !== '').map((color) => {
+            const palette = NODE_COLOR_PALETTES[color as Exclude<NodeColor, ''>]
+            return `<button type="button" class="chip-button context-menu-button" data-command="set-region-color:${color}:${this.state.contextMenu!.regionId}" style="border-left: 4px solid ${palette.accent};">${this.t(palette.labelKey)}</button>`
+          }).join('')}
+          <div class="context-menu-divider"></div>
+          <button type="button" class="chip-button danger context-menu-button" data-command="delete-region:${this.state.contextMenu.regionId}">${this.t('action.deleteRegion')}</button>
+        </section>
+      `
+    }
+
     const selectedIds = this.selectedNodeIds()
     const selectedCount = selectedIds.length
     const primaryNode = this.selectedNode()
@@ -2483,6 +2916,8 @@ class MindMapApp {
           ${primaryNode?.collapsed ? this.t('action.expand') : this.t('action.collapse')}
         </button>
         <button type="button" class="chip-button context-menu-button" data-command="connect-selected" ${canUseSingleNodeActions ? '' : 'disabled'}>${this.t('action.linkRelation')}</button>
+        <div class="context-menu-divider"></div>
+        <button type="button" class="chip-button context-menu-button" data-command="create-region">${this.t('action.createRegion')}</button>
         <div class="context-menu-divider"></div>
         <button type="button" class="chip-button context-menu-button" data-command="set-priority:P0" ${canUseSingleNodeActions ? '' : 'disabled'}>${this.t('context.priorityP0')}</button>
         <button type="button" class="chip-button context-menu-button" data-command="set-priority:P1" ${canUseSingleNodeActions ? '' : 'disabled'}>${this.t('context.priorityP1')}</button>
@@ -2610,6 +3045,7 @@ class MindMapApp {
               <select class="settings-select" data-setting-field="appearance.edgeStyle">
                 <option value="curve" ${appearance.edgeStyle === 'curve' ? 'selected' : ''}>${this.t('settings.edgeStyle.curve')}</option>
                 <option value="orthogonal" ${appearance.edgeStyle === 'orthogonal' ? 'selected' : ''}>${this.t('settings.edgeStyle.orthogonal')}</option>
+                <option value="hidden" ${appearance.edgeStyle === 'hidden' ? 'selected' : ''}>${this.t('settings.edgeStyle.hidden')}</option>
               </select>
             </label>
             <label class="field-row">
@@ -3287,9 +3723,22 @@ class MindMapApp {
   private renderEdges(): string {
     const visibleIds = visibleNodeIds(this.state.document)
     const edgeStyle = this.state.preferences.appearance.edgeStyle
+    const drawEdgeStyle: EdgeStyle = edgeStyle === 'hidden' ? 'curve' : edgeStyle
     const projectPosition = (position: Position) => this.toWorkspacePosition(position)
     const childCountById = new Map(this.state.document.nodes.map((node) => [node.id, childrenOf(this.state.document, node.id).length]))
-    const hierarchyEdges = this.state.document.nodes
+
+    // Arrow marker definitions
+    const arrowDefs = `<defs>
+      <marker id="arrow-forward" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto" markerUnits="strokeWidth">
+        <path d="M 0 0 L 10 4 L 0 8 z" fill="var(--relation)" />
+      </marker>
+      <marker id="arrow-backward" markerWidth="10" markerHeight="8" refX="1" refY="4" orient="auto" markerUnits="strokeWidth">
+        <path d="M 10 0 L 0 4 L 10 8 z" fill="var(--relation)" />
+      </marker>
+    </defs>`
+
+    // Hierarchy edges (hidden when edge style is hidden)
+    const hierarchyEdges = edgeStyle === 'hidden' ? '' : this.state.document.nodes
       .filter((node) => Boolean(node.parentId) && visibleIds.has(node.id) && visibleIds.has(node.parentId ?? ''))
       .map((node) => {
         const parent = this.findNode(node.parentId ?? '')
@@ -3300,10 +3749,11 @@ class MindMapApp {
           this.resolveNodeRenderMetrics(parent, childCountById.get(parent.id) ?? 0),
           this.resolveNodeRenderMetrics(node, childCountById.get(node.id) ?? 0),
         )
-        return `<path class="edge edge-hierarchy" d="${buildHierarchyPath(projectPosition(edgePoints.source), projectPosition(edgePoints.target), edgeStyle)}" />`
+        return `<path class="edge edge-hierarchy" d="${buildHierarchyPath(projectPosition(edgePoints.source), projectPosition(edgePoints.target), drawEdgeStyle)}" />`
       })
       .join('')
 
+    // Relation edges - always shown (even when hierarchy is hidden), with optional arrows and branches
     const relationEdges = this.state.document.relations
       .map((edge) => {
         const source = this.findNode(edge.sourceId)
@@ -3312,25 +3762,98 @@ class MindMapApp {
           return ''
         }
 
-        const edgePoints = resolveRelationEdgeEndpoints(
-          this.resolveNodeRenderMetrics(source, childCountById.get(source.id) ?? 0),
-          this.resolveNodeRenderMetrics(target, childCountById.get(target.id) ?? 0),
-        )
+        const sourceMetrics = this.resolveNodeRenderMetrics(source, childCountById.get(source.id) ?? 0)
+        const targetMetrics = this.resolveNodeRenderMetrics(target, childCountById.get(target.id) ?? 0)
+        const edgePoints = resolveRelationEdgeEndpoints(sourceMetrics, targetMetrics)
         const projectedSource = projectPosition(edgePoints.source)
         const projectedTarget = projectPosition(edgePoints.target)
-        const mid = getRelationMidpoint(projectedSource, projectedTarget, edgeStyle)
+        const midpointDoc = this.resolveRelationMidpointForEdge(edge, sourceMetrics, targetMetrics, drawEdgeStyle)
+        const mid = projectPosition(midpointDoc)
         const label = edge.label
           ? `<text class="relation-label" x="${mid.x}" y="${mid.y - 10}">${escapeHtml(edge.label)}</text>`
           : ''
 
+        const isSelected = this.state.selectedRelationId === edge.id
+        const selectedClass = isSelected ? ' is-selected' : ''
+        const arrowDir = edge.arrowDirection ?? 'none'
+        const markerStart = arrowDir === 'backward' || arrowDir === 'both' ? ' marker-start="url(#arrow-backward)"' : ''
+        const markerEnd = arrowDir === 'forward' || arrowDir === 'both' ? ' marker-end="url(#arrow-forward)"' : ''
+        const sourceToMidPath = buildRelationSegmentPath(projectedSource, mid, drawEdgeStyle)
+        const midToTargetPath = buildRelationSegmentPath(mid, projectedTarget, drawEdgeStyle)
+        const hitSegments = [sourceToMidPath, midToTargetPath]
+        const branchPaths: string[] = []
+
+        for (const branch of edge.branches ?? []) {
+          const branchNode = this.findNode(branch.targetId)
+          if (!branchNode || !visibleIds.has(branchNode.id)) {
+            continue
+          }
+          const branchMetrics = this.resolveNodeRenderMetrics(branchNode, childCountById.get(branchNode.id) ?? 0)
+          const branchTarget = projectPosition(resolveNodeAnchorToward(branchMetrics, midpointDoc))
+          const branchPath = buildRelationSegmentPath(mid, branchTarget, drawEdgeStyle)
+          hitSegments.push(branchPath)
+          branchPaths.push(`<path class="edge edge-relation edge-branch${selectedClass}" d="${branchPath}"${markerEnd} />`)
+        }
+
+        let legacyWaypointLines = ''
+        if (edge.waypoints && edge.waypoints.length > 0) {
+          legacyWaypointLines = edge.waypoints
+            .map((wp) => {
+              const projectedWaypoint = projectPosition(wp)
+              const path = buildRelationSegmentPath(mid, projectedWaypoint, drawEdgeStyle)
+              hitSegments.push(path)
+              return `<path class="edge edge-relation edge-branch${selectedClass}" d="${path}" />`
+            })
+            .join('')
+        }
+
+        const hitPath = `<path class="edge-hit-area${selectedClass}" data-relation-click="${edge.id}" d="${hitSegments.join(' ')}" />`
+
+        // Midpoint dot for selected relation
+        const midpointDot = isSelected
+          ? `<circle class="edge-midpoint-dot" data-midpoint-dot="${edge.id}" cx="${mid.x}" cy="${mid.y}" r="6" />`
+          : ''
+
+        const midpointDrag = this.state.midpointDrag?.relationId === edge.id ? this.state.midpointDrag : null
+        const branchPreview = midpointDrag?.mode === 'branch'
+          ? (() => {
+              const previewTarget = projectPosition(this.clientToCanvasPosition(midpointDrag.currentClientX, midpointDrag.currentClientY))
+              const previewPath = buildRelationSegmentPath(mid, previewTarget, drawEdgeStyle)
+              return `<path class="edge edge-connector-drag edge-branch-preview" d="${previewPath}" />`
+            })()
+          : ''
+
         return `<g>
-          <path class="edge edge-relation" d="${buildRelationPath(projectedSource, projectedTarget, edgeStyle)}" />
+          ${hitPath}
+          <path class="edge edge-relation${selectedClass}" d="${sourceToMidPath}"${markerStart} />
+          <path class="edge edge-relation${selectedClass}" d="${midToTargetPath}"${markerEnd} />
+          ${branchPaths.join('')}
+          ${legacyWaypointLines}
           ${label}
+          ${midpointDot}
+          ${branchPreview}
         </g>`
       })
       .join('')
 
-    return hierarchyEdges + relationEdges
+    // Live connector drag line
+    let connectorLine = ''
+    if (this.state.connectorDrag) {
+      const sourceNode = this.findNode(this.state.connectorDrag.sourceNodeId)
+      if (sourceNode) {
+        const sourceMetrics = this.resolveNodeRenderMetrics(sourceNode, childCountById.get(sourceNode.id) ?? 0)
+        const projSource = projectPosition({
+          x: sourceMetrics.position.x + sourceMetrics.width / 2,
+          y: sourceMetrics.position.y - sourceMetrics.height / 2,
+        })
+        const canvasPos = this.clientToCanvas(this.state.connectorDrag.currentClientX, this.state.connectorDrag.currentClientY)
+        if (canvasPos) {
+          connectorLine = `<line class="edge edge-connector-drag" x1="${projSource.x}" y1="${projSource.y}" x2="${canvasPos.x}" y2="${canvasPos.y}" />`
+        }
+      }
+    }
+
+    return arrowDefs + hierarchyEdges + relationEdges + connectorLine
   }
 
   private resolveNodeRenderMetrics(node: MindNode, childCount: number): NodeRenderMetrics {
@@ -3420,6 +3943,8 @@ class MindMapApp {
              ></button>`
           : ''
 
+        const connectorDot = `<button type="button" class="node-connector-dot" data-node-connector="${node.id}" aria-label="Drag to connect"></button>`
+
         return `
           <article
             class="${classes}"
@@ -3429,6 +3954,7 @@ class MindMapApp {
             ${content}
             ${collapseButton}
             ${resizeHandle}
+            ${connectorDot}
           </article>
         `
       })
@@ -3853,7 +4379,9 @@ class MindMapApp {
   }
 
   private clearSelection(): void {
-    if (this.state.selectedNodeIds.length === 0 && this.state.selectedNodeId === null) {
+    const hadRelation = this.state.selectedRelationId !== null
+    this.state.selectedRelationId = null
+    if (this.state.selectedNodeIds.length === 0 && this.state.selectedNodeId === null && !hadRelation) {
       return
     }
 
@@ -4087,6 +4615,7 @@ class MindMapApp {
       this.setStatus('status.relationModeCancelled')
     }
 
+    this.state.selectedRelationId = null
     this.setSelection([nodeId], nodeId)
     this.render()
   }
@@ -4255,7 +4784,12 @@ class MindMapApp {
 
     this.captureHistory()
     this.state.document.nodes = this.state.document.nodes.filter((node) => !removeIds.has(node.id))
-    this.state.document.relations = this.state.document.relations.filter((relation) => !removeIds.has(relation.sourceId) && !removeIds.has(relation.targetId))
+    this.state.document.relations = this.state.document.relations
+      .filter((relation) => !removeIds.has(relation.sourceId) && !removeIds.has(relation.targetId))
+      .map((relation) => ({
+        ...relation,
+        branches: (relation.branches ?? []).filter((branch) => !removeIds.has(branch.targetId)),
+      }))
 
     const removedNodes = nodeCountBefore - this.state.document.nodes.length
     const removedRelations = relationCountBefore - this.state.document.relations.length
@@ -4780,6 +5314,36 @@ class MindMapApp {
             this.removeRelation(argument)
           }
           return
+        case 'create-region':
+          this.startRegionDraw()
+          return
+        case 'delete-region':
+          if (argument) {
+            this.deleteRegion(argument)
+          }
+          return
+        case 'set-region-color': {
+          const [color, regionId] = argument.split(':')
+          if (regionId) {
+            this.setRegionColor(regionId, normalizeNodeColor(color))
+          }
+          return
+        }
+        case 'set-arrow': {
+          const parts = argument.split(':')
+          const direction = parts[0] as ArrowDirection
+          const relationId = parts.slice(1).join(':')
+          if (relationId) {
+            this.setRelationArrowDirection(relationId, direction)
+          }
+          return
+        }
+        case 'branch-connection': {
+          if (argument) {
+            this.branchConnectionAtMidpoint(argument)
+          }
+          return
+        }
         default:
           break
       }
@@ -4796,11 +5360,249 @@ class MindMapApp {
       return
     }
 
+    if (this.state.selectedRelationId === relationId) {
+      this.state.selectedRelationId = null
+    }
     this.pushHistorySnapshot(snapshot)
     touchDocument(this.state.document)
     this.setStatus('status.relationRemoved')
     this.render()
     this.scheduleAutosave('status.relationRemovalSaveScheduled')
+  }
+
+  // ---- Region Box methods ----
+
+  private startRegionDraw(): void {
+    this.state.contextMenu = null
+    this.state.regionDraw = {
+      pointerId: -1,
+      startCanvasX: 0,
+      startCanvasY: 0,
+      currentCanvasX: 0,
+      currentCanvasY: 0,
+      color: 'blue',
+    }
+    this.setStatus('status.regionCreated')
+    this.render()
+  }
+
+  private finishRegionDraw(x: number, y: number, w: number, h: number): void {
+    if (w < 30 || h < 30) {
+      this.state.regionDraw = null
+      this.render()
+      return
+    }
+    if (!this.state.document.regions) {
+      this.state.document.regions = []
+    }
+    const now = new Date().toISOString()
+    const region: RegionBox = {
+      id: createId('region'),
+      label: '',
+      color: this.state.regionDraw?.color ?? 'blue',
+      position: { x: x + w / 2, y: y + h / 2 },
+      width: w,
+      height: h,
+      createdAt: now,
+      updatedAt: now,
+    }
+    this.captureHistory()
+    this.state.document.regions.push(region)
+    this.state.regionDraw = null
+    touchDocument(this.state.document)
+    this.setStatus('status.regionCreated')
+    this.render()
+    this.scheduleAutosave('status.relationSaveScheduled')
+  }
+
+  private deleteRegion(regionId: string): void {
+    if (!this.state.document.regions) return
+    this.captureHistory()
+    this.state.document.regions = this.state.document.regions.filter((r) => r.id !== regionId)
+    touchDocument(this.state.document)
+    this.setStatus('status.regionDeleted')
+    this.render()
+    this.scheduleAutosave('status.deletionSaveScheduled')
+  }
+
+  private setRegionColor(regionId: string, color: NodeColor): void {
+    if (!this.state.document.regions) return
+    const region = this.state.document.regions.find((r) => r.id === regionId)
+    if (!region) return
+    this.captureHistory()
+    region.color = color || 'blue'
+    region.updatedAt = new Date().toISOString()
+    touchDocument(this.state.document)
+    this.render()
+    this.scheduleAutosave('status.colorSaveScheduled')
+  }
+
+  private nodeOverlapsRegion(node: MindNode, region: RegionBox): boolean {
+    const childCount = childrenOf(this.state.document, node.id).length
+    const metrics = this.resolveNodeRenderMetrics(node, childCount)
+    const nodeLeft = metrics.position.x - metrics.width / 2
+    const nodeRight = metrics.position.x + metrics.width / 2
+    const nodeTop = metrics.position.y - metrics.height / 2
+    const nodeBottom = metrics.position.y + metrics.height / 2
+    const regionLeft = region.position.x - region.width / 2
+    const regionRight = region.position.x + region.width / 2
+    const regionTop = region.position.y - region.height / 2
+    const regionBottom = region.position.y + region.height / 2
+
+    return rectanglesOverlapCoords(nodeLeft, nodeTop, nodeRight, nodeBottom, regionLeft, regionTop, regionRight, regionBottom)
+  }
+
+  private nodesInRegion(region: RegionBox): MindNode[] {
+    return this.state.document.nodes.filter((node) => this.nodeOverlapsRegion(node, region))
+  }
+
+  private applyLiveRegionDrag(_region: RegionBox, _movedNodeIds: string[]): void {
+    this.renderWorkspace()
+  }
+
+  private renderRegions(): string {
+    if (!this.state.document.regions || this.state.document.regions.length === 0) {
+      return ''
+    }
+    const originX = this.workspaceBounds.originX
+    const originY = this.workspaceBounds.originY
+    return this.state.document.regions.map((region) => {
+      const palette = resolveNodeColorPalette(region.color)
+      const accent = palette?.accent ?? '#60a5fa'
+      const bgColor = palette ? `rgba(${palette.surfaceRgb.join(',')}, 0.12)` : 'rgba(96,165,250,0.08)'
+      const borderColor = palette ? `rgba(${palette.accentRgb.join(',')}, 0.4)` : 'rgba(96,165,250,0.3)'
+      const w = region.width
+      const h = region.height
+      const left = region.position.x - w / 2 + originX
+      const top = region.position.y - h / 2 + originY
+      return `<div class="region-box" data-region-id="${region.id}" data-region-drag="${region.id}" style="
+        left: ${left}px; top: ${top}px; width: ${w}px; height: ${h}px;
+        background: ${bgColor}; border: 2px dashed ${borderColor};
+        --region-accent: ${accent};
+      ">
+        <span class="region-label">${escapeHtml(region.label)}</span>
+      </div>`
+    }).join('')
+  }
+
+  // ---- Relation arrow direction ----
+
+  private setRelationArrowDirection(relationId: string, direction: ArrowDirection): void {
+    const relation = this.state.document.relations.find((r) => r.id === relationId)
+    if (!relation) return
+    this.captureHistory()
+    relation.arrowDirection = direction
+    relation.updatedAt = new Date().toISOString()
+    touchDocument(this.state.document)
+    this.setStatus('status.arrowDirectionChanged')
+    this.render()
+    this.scheduleAutosave('status.relationSaveScheduled')
+  }
+
+  // ---- Connection branching ----
+
+  private branchConnectionAtMidpoint(relationId: string): void {
+    const relation = this.state.document.relations.find((r) => r.id === relationId)
+    if (!relation) return
+    this.state.selectedRelationId = relationId
+    this.setStatus('status.connectionBranchMode')
+    this.renderWorkspace()
+  }
+
+  private clearMidpointDragLongPress(dragState: MidpointDragState | null): void {
+    if (!dragState || dragState.longPressHandle === null) {
+      return
+    }
+    window.clearTimeout(dragState.longPressHandle)
+    dragState.longPressHandle = null
+  }
+
+  private relationIncludesTarget(relation: RelationEdge, targetNodeId: string): boolean {
+    if (relation.sourceId === targetNodeId || relation.targetId === targetNodeId) {
+      return true
+    }
+    return (relation.branches ?? []).some((branch) => branch.targetId === targetNodeId)
+  }
+
+  private moveRelationMidpoint(relation: RelationEdge, midpoint: Position): void {
+    this.captureHistory()
+    relation.midpointOffset = midpoint
+    relation.updatedAt = new Date().toISOString()
+    touchDocument(this.state.document)
+    this.renderWorkspace()
+    this.scheduleAutosave('status.relationSaveScheduled')
+  }
+
+  private addBranchTargetToRelation(relation: RelationEdge, targetNodeId: string): void {
+    if (this.relationIncludesTarget(relation, targetNodeId)) {
+      this.setStatus('status.relationAlreadyExists')
+      this.renderWorkspace()
+      return
+    }
+
+    if (!this.findNode(targetNodeId)) {
+      this.renderWorkspace()
+      return
+    }
+
+    this.captureHistory()
+    if (!relation.branches) {
+      relation.branches = []
+    }
+    relation.branches.push({
+      targetId: targetNodeId,
+    })
+    relation.updatedAt = new Date().toISOString()
+    touchDocument(this.state.document)
+    this.setStatus('status.connectionBranched')
+    this.renderWorkspace()
+    this.scheduleAutosave('status.relationSaveScheduled')
+  }
+
+  private resolveRelationMidpointPosition(relationId: string): Position | null {
+    const relation = this.state.document.relations.find((edge) => edge.id === relationId)
+    if (!relation) {
+      return null
+    }
+
+    const source = this.findNode(relation.sourceId)
+    const target = this.findNode(relation.targetId)
+    if (!source || !target) {
+      return null
+    }
+
+    const edgeStyle = this.state.preferences.appearance.edgeStyle === 'hidden' ? 'curve' : this.state.preferences.appearance.edgeStyle
+    const sourceMetrics = this.resolveNodeRenderMetrics(source, childrenOf(this.state.document, source.id).length)
+    const targetMetrics = this.resolveNodeRenderMetrics(target, childrenOf(this.state.document, target.id).length)
+    return this.resolveRelationMidpointForEdge(relation, sourceMetrics, targetMetrics, edgeStyle)
+  }
+
+  private resolveRelationMidpointForEdge(
+    relation: RelationEdge,
+    sourceMetrics: NodeRenderMetrics,
+    targetMetrics: NodeRenderMetrics,
+    edgeStyle: EdgeStyle,
+  ): Position {
+    const dragState = this.state.midpointDrag?.relationId === relation.id ? this.state.midpointDrag : null
+    if (dragState?.mode === 'move') {
+      return this.clientToCanvasPosition(dragState.currentClientX, dragState.currentClientY)
+    }
+    if (relation.midpointOffset) {
+      return relation.midpointOffset
+    }
+    return resolveRelationHubPosition(sourceMetrics, targetMetrics, edgeStyle)
+  }
+
+  // ---- Helper: client coordinates to canvas coordinates ----
+
+  private clientToCanvas(clientX: number, clientY: number): Position | null {
+    if (!this.refs) return null
+    const scrollRect = this.refs.scroll.getBoundingClientRect()
+    const scrollLeft = this.refs.scroll.scrollLeft
+    const scrollTop = this.refs.scroll.scrollTop
+    const canvasX = (clientX - scrollRect.left + scrollLeft - this.viewport.x) / this.viewport.scale
+    const canvasY = (clientY - scrollRect.top + scrollTop - this.viewport.y) / this.viewport.scale
+    return { x: canvasX, y: canvasY }
   }
 
   private toggleTheme(): void {
@@ -6192,6 +6994,9 @@ class MindMapApp {
     this.refs.nodeLayer.style.width = `${bounds.width}px`
     this.refs.nodeLayer.style.height = `${bounds.height}px`
     this.refs.nodeLayer.style.setProperty('zoom', String(this.viewport.scale))
+    this.refs.regionLayer.style.width = `${bounds.width}px`
+    this.refs.regionLayer.style.height = `${bounds.height}px`
+    this.refs.regionLayer.style.setProperty('zoom', String(this.viewport.scale))
     this.refs.edgeLayer.style.width = `${scaledWidth}px`
     this.refs.edgeLayer.style.height = `${scaledHeight}px`
   }
@@ -6593,6 +7398,27 @@ class MindMapApp {
     for (const node of frame.nodes) {
       const nodePalette = resolveNodeColorPalette(node.color)
       const occlusionRadius = node.radius + Math.max(3.2, node.lineWidth * 1.25)
+
+      // Draw region ring if node is inside a region
+      const regions = this.state.document.regions ?? []
+      for (const region of regions) {
+        const docNode = this.findNode(node.id)
+        if (!docNode) continue
+        if (this.nodeOverlapsRegion(docNode, region)) {
+          const regionPalette = resolveNodeColorPalette(region.color)
+          if (regionPalette) {
+            context.save()
+            context.beginPath()
+            context.strokeStyle = rgbaFromRgb(regionPalette.accentRgb, 0.55)
+            context.lineWidth = Math.max(2.5, node.lineWidth * 1.1)
+            context.arc(node.x, node.y, occlusionRadius + 4, 0, Math.PI * 2)
+            context.stroke()
+            context.restore()
+          }
+          break
+        }
+      }
+
       context.save()
       context.beginPath()
       context.fillStyle = nodePalette ? rgbaFromRgb(nodePalette.plateRgb, node.occlusionOpacity) : `rgba(9, 14, 24, ${node.occlusionOpacity})`
@@ -6799,18 +7625,31 @@ function buildOrthogonalHierarchyPath(source: Position, target: Position): strin
   return `M ${source.x} ${source.y} L ${bendX} ${source.y} L ${bendX} ${target.y} L ${target.x} ${target.y}`
 }
 
-function buildRelationPath(source: Position, target: Position, edgeStyle: EdgeStyle): string {
-  if (edgeStyle === 'orthogonal') {
-    return buildOrthogonalRelationPath(source, target)
-  }
-
-  const midpoint = getCurvedRelationMidpoint(source, target)
-  return `M ${source.x} ${source.y} Q ${midpoint.x} ${midpoint.y} ${target.x} ${target.y}`
+function buildRelationSegmentPath(source: Position, target: Position, edgeStyle: EdgeStyle): string {
+  return edgeStyle === 'orthogonal'
+    ? buildOrthogonalRelationSegmentPath(source, target)
+    : buildCurvedRelationSegmentPath(source, target)
 }
 
-function buildOrthogonalRelationPath(source: Position, target: Position): string {
-  const guideY = resolveOrthogonalRelationGuideY(source, target)
-  return `M ${source.x} ${source.y} L ${source.x} ${guideY} L ${target.x} ${guideY} L ${target.x} ${target.y}`
+function buildCurvedRelationSegmentPath(source: Position, target: Position): string {
+  const deltaX = target.x - source.x
+  const deltaY = target.y - source.y
+  const bend = clamp(Math.hypot(deltaX, deltaY) * 0.16, 18, 88)
+  const control = {
+    x: source.x + deltaX / 2,
+    y: source.y + deltaY / 2 - (Math.abs(deltaX) >= Math.abs(deltaY) ? bend : bend * 0.45),
+  }
+  return `M ${source.x} ${source.y} Q ${control.x} ${control.y} ${target.x} ${target.y}`
+}
+
+function buildOrthogonalRelationSegmentPath(source: Position, target: Position): string {
+  if (Math.abs(target.x - source.x) >= Math.abs(target.y - source.y)) {
+    const bendX = source.x + (target.x - source.x) / 2
+    return `M ${source.x} ${source.y} L ${bendX} ${source.y} L ${bendX} ${target.y} L ${target.x} ${target.y}`
+  }
+
+  const bendY = source.y + (target.y - source.y) / 2
+  return `M ${source.x} ${source.y} L ${source.x} ${bendY} L ${target.x} ${bendY} L ${target.x} ${target.y}`
 }
 
 function getRelationMidpoint(source: Position, target: Position, edgeStyle: EdgeStyle): Position {
@@ -6835,6 +7674,59 @@ function getOrthogonalRelationMidpoint(source: Position, target: Position): Posi
 
 function resolveOrthogonalRelationGuideY(source: Position, target: Position): number {
   return Math.min(source.y, target.y) - Math.max(44, Math.abs(target.x - source.x) * 0.08)
+}
+
+function resolveRelationHubPosition(source: NodeRenderMetrics, target: NodeRenderMetrics, edgeStyle: EdgeStyle): Position {
+  const endpoints = resolveRelationEdgeEndpoints(source, target)
+  let hub = getRelationMidpoint(endpoints.source, endpoints.target, edgeStyle)
+  const sourceBounds = nodeMetricsBounds(source)
+  const targetBounds = nodeMetricsBounds(target)
+
+  if (pointInsideBounds(hub, sourceBounds) || pointInsideBounds(hub, targetBounds)) {
+    hub = {
+      x: (endpoints.source.x + endpoints.target.x) / 2,
+      y: Math.min(
+        sourceBounds.top,
+        targetBounds.top,
+        Math.min(endpoints.source.y, endpoints.target.y) - Math.max(28, Math.abs(endpoints.target.x - endpoints.source.x) * 0.05),
+      ) - 18,
+    }
+  }
+
+  return hub
+}
+
+interface BoundsRect {
+  left: number
+  top: number
+  right: number
+  bottom: number
+}
+
+function nodeMetricsBounds(node: NodeRenderMetrics): BoundsRect {
+  return {
+    left: node.position.x - node.width / 2,
+    right: node.position.x + node.width / 2,
+    top: node.position.y - node.height / 2,
+    bottom: node.position.y + node.height / 2,
+  }
+}
+
+function pointInsideBounds(point: Position, bounds: BoundsRect): boolean {
+  return point.x >= bounds.left && point.x <= bounds.right && point.y >= bounds.top && point.y <= bounds.bottom
+}
+
+function rectanglesOverlapCoords(
+  leftA: number,
+  topA: number,
+  rightA: number,
+  bottomA: number,
+  leftB: number,
+  topB: number,
+  rightB: number,
+  bottomB: number,
+): boolean {
+  return leftA <= rightB && rightA >= leftB && topA <= bottomB && bottomA >= topB
 }
 
 function escapeHtml(value: string): string {
@@ -7467,6 +8359,16 @@ function getWorkspaceBounds(document: MindMapDocument): WorkspaceBounds {
     minY = Math.min(minY, node.position.y - nodeHeight / 2 - WORKSPACE_PADDING)
     maxX = Math.max(maxX, node.position.x + nodeWidth / 2 + WORKSPACE_PADDING)
     maxY = Math.max(maxY, node.position.y + nodeHeight / 2 + WORKSPACE_PADDING)
+  }
+
+  // Also account for region boxes
+  if (document.regions) {
+    for (const region of document.regions) {
+      minX = Math.min(minX, region.position.x - region.width / 2 - WORKSPACE_PADDING)
+      minY = Math.min(minY, region.position.y - region.height / 2 - WORKSPACE_PADDING)
+      maxX = Math.max(maxX, region.position.x + region.width / 2 + WORKSPACE_PADDING)
+      maxY = Math.max(maxY, region.position.y + region.height / 2 + WORKSPACE_PADDING)
+    }
   }
 
   const width = Math.max(WORKSPACE_MIN_WIDTH, Math.ceil(maxX - minX))

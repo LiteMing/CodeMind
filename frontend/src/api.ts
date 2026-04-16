@@ -275,7 +275,12 @@ function normalizeDocument(document: MindMapDocument): MindMapDocument {
       width: node.width || undefined,
       height: node.height || undefined,
     })),
-    relations: document.relations ?? [],
+    relations: (document.relations ?? []).map((relation) => ({
+      ...relation,
+      branches: (relation.branches ?? []).filter((branch) => branch?.targetId),
+      waypoints: (relation.waypoints ?? []).filter((waypoint) => Number.isFinite(waypoint?.x) && Number.isFinite(waypoint?.y)),
+    })),
+    regions: document.regions ?? [],
   }
 }
 

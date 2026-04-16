@@ -1482,6 +1482,11 @@ kbd {
   text-rendering: geometricPrecision;
 }
 
+.edge-layer .edge-hit-area,
+.edge-layer .edge-midpoint-dot {
+  pointer-events: all;
+}
+
 .node-layer {
   transform-origin: 0 0;
 }
@@ -1966,4 +1971,131 @@ code {
     min-height: 40px;
     font-size: 0.78rem;
   }
+}
+
+/* ---- Region box styles ---- */
+
+.region-layer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  transform-origin: 0 0;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.region-box {
+  position: absolute;
+  border-radius: 12px;
+  pointer-events: all;
+  cursor: grab;
+  transition: box-shadow 0.18s ease;
+  z-index: 0;
+}
+
+.region-box:hover {
+  box-shadow: 0 0 0 2px var(--region-accent, rgba(96,165,250,0.4));
+}
+
+.region-box:active {
+  cursor: grabbing;
+}
+
+.region-label {
+  position: absolute;
+  top: 6px;
+  left: 10px;
+  font-size: 0.72rem;
+  color: var(--muted);
+  user-select: none;
+  pointer-events: none;
+}
+
+.region-draw-preview {
+  pointer-events: none;
+  opacity: 0.7;
+}
+
+/* ---- Node connector dot ---- */
+
+.node-connector-dot {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 2px solid var(--node);
+  cursor: crosshair;
+  opacity: 0;
+  transition: opacity 0.15s ease, transform 0.15s ease;
+  z-index: 10;
+  padding: 0;
+  appearance: none;
+  outline: none;
+}
+
+.node-card:hover .node-connector-dot,
+.node-connector-dot:focus {
+  opacity: 1;
+}
+
+.node-connector-dot:hover {
+  transform: scale(1.3);
+}
+
+/* ---- Edge / relation selection and interaction ---- */
+
+.edge-hit-area {
+  fill: none;
+  stroke: transparent;
+  stroke-width: 16;
+  cursor: pointer;
+  pointer-events: stroke;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.edge-hit-area.is-selected {
+  stroke: color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+.edge-relation.is-selected {
+  stroke: var(--accent);
+  stroke-width: 4;
+  stroke-dasharray: none;
+  filter: drop-shadow(0 0 4px var(--accent));
+}
+
+.edge-branch {
+  stroke-dasharray: 6 5;
+}
+
+.edge-branch.is-selected {
+  stroke: var(--accent);
+}
+
+.edge-connector-drag {
+  stroke: var(--accent);
+  stroke-width: 2;
+  stroke-dasharray: 6 4;
+  opacity: 0.7;
+}
+
+.edge-branch-preview {
+  stroke-width: 2.5;
+  opacity: 0.85;
+}
+
+.edge-midpoint-dot {
+  fill: var(--accent);
+  stroke: var(--node);
+  stroke-width: 2;
+  cursor: grab;
+  transition: r 0.12s ease;
+}
+
+.edge-midpoint-dot:hover {
+  r: 8;
 }
