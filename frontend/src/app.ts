@@ -247,6 +247,7 @@ interface AppState {
   snapshotDraftName: string
   selectedNodeId: string | null
   selectedNodeIds: string[]
+  selectedRegionId: string | null
   editingNodeId: string | null
   connectSourceNodeId: string | null
   drag: DragState | null
@@ -514,6 +515,7 @@ class MindMapApp {
       snapshotDraftName: '',
       selectedNodeId: 'root',
       selectedNodeIds: ['root'],
+      selectedRegionId: null,
       editingNodeId: null,
       connectSourceNodeId: null,
       drag: null,
@@ -666,6 +668,7 @@ class MindMapApp {
     const command = target.closest<HTMLElement>('[data-command]')?.dataset.command
     const clickedNodeEditor = target.closest<HTMLTextAreaElement>('[data-node-editor]')
     const clickedWorkspace = target.closest<HTMLElement>('[data-workspace-scroll]')
+    const clickedRegion = target.closest<HTMLElement>('[data-region-id]')
     if (command) {
       if (!command.startsWith('toggle-fixed-menu')) {
         this.state.fixedMenu = ''
@@ -760,6 +763,12 @@ class MindMapApp {
       return
     }
 
+    if (clickedRegion?.dataset.regionId) {
+      this.selectRegion(clickedRegion.dataset.regionId)
+      this.render()
+      return
+    }
+
     if (closedContextMenu || closedFixedMenu || closedAIWheel) {
       this.renderOverlay()
       this.renderHeader()
@@ -791,6 +800,8 @@ class MindMapApp {
       const relationId = relationClick.getAttribute('data-relation-click')
       if (relationId) {
         this.state.selectedRelationId = relationId
+        this.state.selectedRegionId = null
+        this.applySelectionState([], null)
         this.state.contextMenu = {
           clientX: event.clientX,
           clientY: event.clientY,
@@ -807,6 +818,7 @@ class MindMapApp {
     if (regionEl) {
       const regionId = regionEl.dataset.regionId
       if (regionId) {
+        this.selectRegion(regionId)
         this.state.contextMenu = {
           clientX: event.clientX,
           clientY: event.clientY,
@@ -951,6 +963,7 @@ class MindMapApp {
         this.state.selectedRelationId = this.state.selectedRelationId === relationId ? null : relationId
         this.state.selectedNodeId = null
         this.state.selectedNodeIds = []
+        this.state.selectedRegionId = null
         this.renderWorkspace()
         event.preventDefault()
         return
@@ -963,6 +976,7 @@ class MindMapApp {
       const regionId = regionDragEl.dataset.regionDrag
       const region = this.state.document.regions?.find((r) => r.id === regionId)
       if (region) {
+        this.selectRegion(region.id)
         const docPos = this.clientToCanvasPosition(event.clientX, event.clientY)
         const nodesInRegion = this.nodesInRegion(region)
         const initialNodePositions: Record<string, Position> = {}
@@ -2860,18 +2874,25 @@ class MindMapApp {
     // Relation context menu
     if (this.state.contextMenu.relationId) {
       const relation = this.state.document.relations.find((r) => r.id === this.state.contextMenu!.relationId)
+      const sourceNode = relation ? this.findNode(relation.sourceId) : null
+      const targetNode = relation ? this.findNode(relation.targetId) : null
       const arrowDir = relation?.arrowDirection ?? 'none'
+      const sourceLabel = sourceNode ? shorten(sourceNode.title, 12) : 'A'
+      const targetLabel = targetNode ? shorten(targetNode.title, 12) : 'B'
       return `
-        <section class="context-menu" data-context-menu style="left: ${Math.round(left)}px; top: ${Math.round(top)}px;">
-          <p class="section-label">${this.t('context.relation')}</p>
-          <button type="button" class="chip-button context-menu-button ${arrowDir === 'none' ? 'is-active' : ''}" data-command="set-arrow:none:${this.state.contextMenu.relationId}">${this.t('action.arrowNone')}</button>
-          <button type="button" class="chip-button context-menu-button ${arrowDir === 'forward' ? 'is-active' : ''}" data-command="set-arrow:forward:${this.state.contextMenu.relationId}">${this.t('action.arrowForward')}</button>
-          <button type="button" class="chip-button context-menu-button ${arrowDir === 'backward' ? 'is-active' : ''}" data-command="set-arrow:backward:${this.state.contextMenu.relationId}">${this.t('action.arrowBackward')}</button>
-          <button type="button" class="chip-button context-menu-button ${arrowDir === 'both' ? 'is-active' : ''}" data-command="set-arrow:both:${this.state.contextMenu.relationId}">${this.t('action.arrowBoth')}</button>
-          <div class="context-menu-divider"></div>
-          <button type="button" class="chip-button context-menu-button" data-command="branch-connection:${this.state.contextMenu.relationId}">${this.t('action.branchConnection')}</button>
-          <div class="context-menu-divider"></div>
-          <button type="button" class="chip-button danger context-menu-button" data-command="delete-relation:${this.state.contextMenu.relationId}">${this.t('action.remove')}</button>
+        <section class="relation-wheel-shell" data-context-menu style="left: ${Math.round(left)}px; top: ${Math.round(top)}px;">
+          <section class="relation-wheel" data-relation-wheel>
+            <p class="section-label relation-wheel-label">${this.t('context.relation')}</p>
+            <button type="button" class="relation-wheel-button relation-wheel-button-top ${arrowDir === 'both' ? 'is-active' : ''}" data-command="set-arrow:both:${this.state.contextMenu.relationId}">${this.t('action.arrowBoth')}</button>
+            <button type="button" class="relation-wheel-button relation-wheel-button-left ${arrowDir === 'backward' ? 'is-active' : ''}" data-command="set-arrow:backward:${this.state.contextMenu.relationId}">${escapeHtml(sourceLabel)}</button>
+            <button type="button" class="relation-wheel-button relation-wheel-button-right ${arrowDir === 'forward' ? 'is-active' : ''}" data-command="set-arrow:forward:${this.state.contextMenu.relationId}">${escapeHtml(targetLabel)}</button>
+            <button type="button" class="relation-wheel-button relation-wheel-button-bottom ${arrowDir === 'none' ? 'is-active' : ''}" data-command="set-arrow:none:${this.state.contextMenu.relationId}">${this.t('action.arrowNone')}</button>
+            <div class="relation-wheel-center">${this.state.preferences.locale === 'zh-CN' ? '箭头' : 'Arrow'}</div>
+          </section>
+          <div class="relation-wheel-actions">
+            <button type="button" class="chip-button context-menu-button" data-command="branch-connection:${this.state.contextMenu.relationId}">${this.t('action.branchConnection')}</button>
+            <button type="button" class="chip-button danger context-menu-button" data-command="delete-relation:${this.state.contextMenu.relationId}">${this.t('action.remove')}</button>
+          </div>
         </section>
       `
     }
@@ -3773,14 +3794,32 @@ class MindMapApp {
           ? `<text class="relation-label" x="${mid.x}" y="${mid.y - 10}">${escapeHtml(edge.label)}</text>`
           : ''
 
+        const midpointDrag = this.state.midpointDrag?.relationId === edge.id ? this.state.midpointDrag : null
         const isSelected = this.state.selectedRelationId === edge.id
         const selectedClass = isSelected ? ' is-selected' : ''
         const arrowDir = edge.arrowDirection ?? 'none'
         const markerStart = arrowDir === 'backward' || arrowDir === 'both' ? ' marker-start="url(#arrow-backward)"' : ''
         const markerEnd = arrowDir === 'forward' || arrowDir === 'both' ? ' marker-end="url(#arrow-forward)"' : ''
-        const sourceToMidPath = buildRelationSegmentPath(projectedSource, mid, drawEdgeStyle)
-        const midToTargetPath = buildRelationSegmentPath(mid, projectedTarget, drawEdgeStyle)
-        const hitSegments = [sourceToMidPath, midToTargetPath]
+        const usesMidpointHub =
+          Boolean(edge.midpointOffset) ||
+          (edge.branches?.length ?? 0) > 0 ||
+          (edge.waypoints?.length ?? 0) > 0 ||
+          midpointDrag?.mode === 'move' ||
+          midpointDrag?.mode === 'branch'
+        const mainPaths = usesMidpointHub
+          ? [
+              `<path class="edge edge-relation${selectedClass}" d="${buildRelationSegmentPath(projectedSource, mid, drawEdgeStyle)}"${markerStart} />`,
+              `<path class="edge edge-relation${selectedClass}" d="${buildRelationSegmentPath(mid, projectedTarget, drawEdgeStyle)}"${markerEnd} />`,
+            ]
+          : [
+              `<path class="edge edge-relation${selectedClass}" d="${buildRelationSegmentPath(projectedSource, projectedTarget, drawEdgeStyle)}"${markerStart}${markerEnd} />`,
+            ]
+        const hitSegments = usesMidpointHub
+          ? [
+              buildRelationSegmentPath(projectedSource, mid, drawEdgeStyle),
+              buildRelationSegmentPath(mid, projectedTarget, drawEdgeStyle),
+            ]
+          : [buildRelationSegmentPath(projectedSource, projectedTarget, drawEdgeStyle)]
         const branchPaths: string[] = []
 
         for (const branch of edge.branches ?? []) {
@@ -3814,7 +3853,6 @@ class MindMapApp {
           ? `<circle class="edge-midpoint-dot" data-midpoint-dot="${edge.id}" cx="${mid.x}" cy="${mid.y}" r="6" />`
           : ''
 
-        const midpointDrag = this.state.midpointDrag?.relationId === edge.id ? this.state.midpointDrag : null
         const branchPreview = midpointDrag?.mode === 'branch'
           ? (() => {
               const previewTarget = projectPosition(this.clientToCanvasPosition(midpointDrag.currentClientX, midpointDrag.currentClientY))
@@ -3825,8 +3863,7 @@ class MindMapApp {
 
         return `<g>
           ${hitPath}
-          <path class="edge edge-relation${selectedClass}" d="${sourceToMidPath}"${markerStart} />
-          <path class="edge edge-relation${selectedClass}" d="${midToTargetPath}"${markerEnd} />
+          ${mainPaths.join('')}
           ${branchPaths.join('')}
           ${legacyWaypointLines}
           ${label}
@@ -4375,13 +4412,24 @@ class MindMapApp {
   private setSelection(nodeIds: string[], primaryNodeId: string | null = nodeIds[nodeIds.length - 1] ?? null): void {
     this.finishActiveNodeEditing()
     this.applySelectionState(nodeIds, primaryNodeId)
+    this.state.selectedRegionId = null
+    this.clearNodeEditorState()
+  }
+
+  private selectRegion(regionId: string): void {
+    this.finishActiveNodeEditing()
+    this.applySelectionState([], null)
+    this.state.selectedRelationId = null
+    this.state.selectedRegionId = regionId
     this.clearNodeEditorState()
   }
 
   private clearSelection(): void {
     const hadRelation = this.state.selectedRelationId !== null
+    const hadRegion = this.state.selectedRegionId !== null
     this.state.selectedRelationId = null
-    if (this.state.selectedNodeIds.length === 0 && this.state.selectedNodeId === null && !hadRelation) {
+    this.state.selectedRegionId = null
+    if (this.state.selectedNodeIds.length === 0 && this.state.selectedNodeId === null && !hadRelation && !hadRegion) {
       return
     }
 
@@ -5471,11 +5519,12 @@ class MindMapApp {
       const accent = palette?.accent ?? '#60a5fa'
       const bgColor = palette ? `rgba(${palette.surfaceRgb.join(',')}, 0.12)` : 'rgba(96,165,250,0.08)'
       const borderColor = palette ? `rgba(${palette.accentRgb.join(',')}, 0.4)` : 'rgba(96,165,250,0.3)'
+      const selectedClass = this.state.selectedRegionId === region.id ? ' is-selected' : ''
       const w = region.width
       const h = region.height
       const left = region.position.x - w / 2 + originX
       const top = region.position.y - h / 2 + originY
-      return `<div class="region-box" data-region-id="${region.id}" data-region-drag="${region.id}" style="
+      return `<div class="region-box${selectedClass}" data-region-id="${region.id}" data-region-drag="${region.id}" style="
         left: ${left}px; top: ${top}px; width: ${w}px; height: ${h}px;
         background: ${bgColor}; border: 2px dashed ${borderColor};
         --region-accent: ${accent};
@@ -5590,7 +5639,8 @@ class MindMapApp {
     if (relation.midpointOffset) {
       return relation.midpointOffset
     }
-    return resolveRelationHubPosition(sourceMetrics, targetMetrics, edgeStyle)
+    const endpoints = resolveRelationEdgeEndpoints(sourceMetrics, targetMetrics)
+    return getRelationDefaultMidpoint(endpoints.source, endpoints.target, edgeStyle)
   }
 
   // ---- Helper: client coordinates to canvas coordinates ----
@@ -7634,86 +7684,68 @@ function buildRelationSegmentPath(source: Position, target: Position, edgeStyle:
 function buildCurvedRelationSegmentPath(source: Position, target: Position): string {
   const deltaX = target.x - source.x
   const deltaY = target.y - source.y
-  const bend = clamp(Math.hypot(deltaX, deltaY) * 0.16, 18, 88)
-  const control = {
-    x: source.x + deltaX / 2,
-    y: source.y + deltaY / 2 - (Math.abs(deltaX) >= Math.abs(deltaY) ? bend : bend * 0.45),
+  if (Math.abs(deltaX) >= Math.abs(deltaY)) {
+    const controlOffset = clamp(Math.abs(deltaX) * 0.32, 20, 92) * Math.sign(deltaX || 1)
+    return `M ${source.x} ${source.y} C ${source.x + controlOffset} ${source.y}, ${target.x - controlOffset} ${target.y}, ${target.x} ${target.y}`
   }
-  return `M ${source.x} ${source.y} Q ${control.x} ${control.y} ${target.x} ${target.y}`
+
+  const controlOffset = clamp(Math.abs(deltaY) * 0.32, 20, 92) * Math.sign(deltaY || 1)
+  return `M ${source.x} ${source.y} C ${source.x} ${source.y + controlOffset}, ${target.x} ${target.y - controlOffset}, ${target.x} ${target.y}`
 }
 
 function buildOrthogonalRelationSegmentPath(source: Position, target: Position): string {
-  if (Math.abs(target.x - source.x) >= Math.abs(target.y - source.y)) {
-    const bendX = source.x + (target.x - source.x) / 2
-    return `M ${source.x} ${source.y} L ${bendX} ${source.y} L ${bendX} ${target.y} L ${target.x} ${target.y}`
-  }
-
-  const bendY = source.y + (target.y - source.y) / 2
-  return `M ${source.x} ${source.y} L ${source.x} ${bendY} L ${target.x} ${bendY} L ${target.x} ${target.y}`
+  const points = buildOrthogonalRelationPolyline(source, target)
+  return points.map((point, index) => `${index === 0 ? 'M' : 'L'} ${point.x} ${point.y}`).join(' ')
 }
 
-function getRelationMidpoint(source: Position, target: Position, edgeStyle: EdgeStyle): Position {
-  return edgeStyle === 'orthogonal'
-    ? getOrthogonalRelationMidpoint(source, target)
-    : getCurvedRelationMidpoint(source, target)
-}
-
-function getCurvedRelationMidpoint(source: Position, target: Position): Position {
-  return {
-    x: (source.x + target.x) / 2,
-    y: (source.y + target.y) / 2 - Math.max(60, Math.abs(target.x - source.x) * 0.08),
-  }
-}
-
-function getOrthogonalRelationMidpoint(source: Position, target: Position): Position {
-  return {
-    x: (source.x + target.x) / 2,
-    y: resolveOrthogonalRelationGuideY(source, target),
-  }
-}
-
-function resolveOrthogonalRelationGuideY(source: Position, target: Position): number {
-  return Math.min(source.y, target.y) - Math.max(44, Math.abs(target.x - source.x) * 0.08)
-}
-
-function resolveRelationHubPosition(source: NodeRenderMetrics, target: NodeRenderMetrics, edgeStyle: EdgeStyle): Position {
-  const endpoints = resolveRelationEdgeEndpoints(source, target)
-  let hub = getRelationMidpoint(endpoints.source, endpoints.target, edgeStyle)
-  const sourceBounds = nodeMetricsBounds(source)
-  const targetBounds = nodeMetricsBounds(target)
-
-  if (pointInsideBounds(hub, sourceBounds) || pointInsideBounds(hub, targetBounds)) {
-    hub = {
-      x: (endpoints.source.x + endpoints.target.x) / 2,
-      y: Math.min(
-        sourceBounds.top,
-        targetBounds.top,
-        Math.min(endpoints.source.y, endpoints.target.y) - Math.max(28, Math.abs(endpoints.target.x - endpoints.source.x) * 0.05),
-      ) - 18,
+function getRelationDefaultMidpoint(source: Position, target: Position, edgeStyle: EdgeStyle): Position {
+  if (edgeStyle !== 'orthogonal') {
+    return {
+      x: (source.x + target.x) / 2,
+      y: (source.y + target.y) / 2,
     }
   }
 
-  return hub
+  return polylineMidpoint(buildOrthogonalRelationPolyline(source, target))
 }
 
-interface BoundsRect {
-  left: number
-  top: number
-  right: number
-  bottom: number
-}
-
-function nodeMetricsBounds(node: NodeRenderMetrics): BoundsRect {
-  return {
-    left: node.position.x - node.width / 2,
-    right: node.position.x + node.width / 2,
-    top: node.position.y - node.height / 2,
-    bottom: node.position.y + node.height / 2,
+function buildOrthogonalRelationPolyline(source: Position, target: Position): Position[] {
+  if (Math.abs(target.x - source.x) >= Math.abs(target.y - source.y)) {
+    const bendX = source.x + (target.x - source.x) / 2
+    return [source, { x: bendX, y: source.y }, { x: bendX, y: target.y }, target]
   }
+
+  const bendY = source.y + (target.y - source.y) / 2
+  return [source, { x: source.x, y: bendY }, { x: target.x, y: bendY }, target]
 }
 
-function pointInsideBounds(point: Position, bounds: BoundsRect): boolean {
-  return point.x >= bounds.left && point.x <= bounds.right && point.y >= bounds.top && point.y <= bounds.bottom
+function polylineMidpoint(points: Position[]): Position {
+  if (points.length < 2) {
+    return points[0] ?? { x: 0, y: 0 }
+  }
+
+  let totalLength = 0
+  for (let index = 1; index < points.length; index += 1) {
+    totalLength += Math.hypot(points[index].x - points[index - 1].x, points[index].y - points[index - 1].y)
+  }
+
+  const halfway = totalLength / 2
+  let traversed = 0
+  for (let index = 1; index < points.length; index += 1) {
+    const start = points[index - 1]
+    const end = points[index]
+    const segmentLength = Math.hypot(end.x - start.x, end.y - start.y)
+    if (traversed + segmentLength >= halfway) {
+      const segmentRatio = segmentLength === 0 ? 0 : (halfway - traversed) / segmentLength
+      return {
+        x: start.x + (end.x - start.x) * segmentRatio,
+        y: start.y + (end.y - start.y) * segmentRatio,
+      }
+    }
+    traversed += segmentLength
+  }
+
+  return points[points.length - 1]
 }
 
 function rectanglesOverlapCoords(
