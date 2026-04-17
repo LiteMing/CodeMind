@@ -8,11 +8,33 @@
     "dev:wails": "cross-env VITE_CODE_MIND_API_BASE=http://127.0.0.1:34117 vite",
     "build": "tsc && vite build",
     "build:wails": "cross-env VITE_CODE_MIND_API_BASE=http://127.0.0.1:34117 tsc && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "vitest --run",
+    "lint": "eslint src --ext .ts",
+    "format": "prettier --write src",
+    "format:check": "prettier --check src",
+    "prepare": "cd .. && husky"
+  },
+  "lint-staged": {
+    "*.ts": [
+      "eslint --fix",
+      "prettier --write"
+    ],
+    "*.{css,json,md}": [
+      "prettier --write"
+    ]
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "cross-env": "^10.1.0",
+    "eslint": "^10.2.0",
+    "eslint-config-prettier": "^10.1.8",
+    "husky": "^9.1.7",
+    "lint-staged": "^16.4.0",
+    "prettier": "^3.8.3",
     "typescript": "~5.9.3",
-    "vite": "^8.0.1"
+    "typescript-eslint": "^8.58.2",
+    "vite": "^8.0.1",
+    "vitest": "^4.1.4"
   }
 }

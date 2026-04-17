@@ -1,4 +1,30 @@
 import { api } from './api'
+import type {
+  ActiveEditorPreviewState,
+  AIDebugAction,
+  AINoteTargetState,
+  AppState,
+  CopiedSubtree,
+  DragState,
+  EditorLaunchOptions,
+  FixedMenuId,
+  GraphDragState,
+  HistorySnapshot,
+  MarqueeState,
+  MidpointDragState,
+  PanState,
+  PendingImportMode,
+  ShellRefs,
+} from './app-types'
+import {
+  NODE_COLOR_PALETTES,
+  NODE_COLOR_VALUES,
+  normalizeNodeColor,
+  resolveNodeColorPalette,
+  buildNodeColorStyle,
+  rgbaFromRgb,
+  applyAlphaToHex,
+} from './color-palette'
 import {
   autoLayoutHierarchy,
   childrenOf,
@@ -19,14 +45,26 @@ import {
   updateRelationLabel,
   visibleNodeIds,
 } from './document'
+import {
+  type NodeRenderMetrics,
+  buildHierarchyPath,
+  resolveHierarchyEdgeEndpoints,
+  resolveRelationEdgeEndpoints,
+  resolveNodeAnchorToward,
+  buildRelationSegmentPath,
+  getRelationDefaultMidpoint,
+} from './edge-geometry'
+import { type GraphHitNode, buildGraphFrame, traceRoundedRectPath } from './graph-frame'
 import { type TranslationKey, kindLabel, nodeColorLabel, themeLabel, translate } from './i18n'
 import {
-  estimateNodeHeight,
-  estimateNodeWidth,
-  resolveNodeMinHeight,
-  resolveNodeMinWidth,
-  TOPIC_NODE_MAX_WIDTH,
-} from './node-sizing'
+  buildNodeDimensionStyle,
+  nodeVisibleTitle,
+  normalizeNodeNote,
+  deriveNoteChildTitle,
+  MIN_NODE_WIDTH,
+  MIN_NODE_HEIGHT,
+} from './node-render'
+import { estimateNodeHeight, estimateNodeWidth, TOPIC_NODE_MAX_WIDTH } from './node-sizing'
 import {
   DEFAULT_AI_MAX_TOKENS,
   DEFAULT_AI_TIMEOUT_SECONDS,
@@ -45,6 +83,14 @@ import {
   savePreferences,
 } from './preferences'
 import { listLocalSnapshots, loadLocalSnapshot, saveLocalSnapshot, type LocalSnapshotSummary } from './snapshots'
+import {
+  AI_TEMPLATES,
+  normalizeAITemplateId,
+  templateLabel,
+  promptTemplateCopy,
+  createTemplateDocument,
+  normalizedRelationPairKey,
+} from './templates'
 import type {
   AIDebugInfo,
   AIDebugRequest,
@@ -65,291 +111,36 @@ import type {
   RelationEdge,
   Theme,
 } from './types'
+import {
+  clamp,
+  clampMin,
+  cloneDocument,
+  directionalCrossDelta,
+  directionalPrimaryDelta,
+  downloadTextFile,
+  escapeAttribute,
+  escapeHtml,
+  formatRelativeTime,
+  getAIDebugInfo,
+  getErrorMessage,
+  getWorkspaceBounds,
+  isTypingTarget,
+  nodeCenter,
+  normalizeClientRect,
+  parsePixelValue,
+  rectanglesIntersect,
+  rectanglesOverlapCoords,
+  requiredElement,
+  shorten,
+  slugify,
+  type WorkspaceBounds,
+  WORKSPACE_MIN_WIDTH,
+  WORKSPACE_MIN_HEIGHT,
+} from './utils'
 
-type AppView = 'home' | 'map'
-type AIDebugAction = 'generate' | 'notes' | 'relations' | 'import' | ''
-type PendingImportMode = 'auto' | 'ai'
-type FixedMenuId = 'file' | 'node' | 'ai' | 'view' | ''
-
-interface DragState {
-  nodeId: string
-  nodeIds: string[]
-  offsetX: number
-  offsetY: number
-  initialPositions: Record<string, Position>
-  historyCaptured: boolean
-}
-
-interface PanState {
-  pointerId: number
-  startX: number
-  startY: number
-  startViewportX: number
-  startViewportY: number
-}
-
-interface ResizeState {
-  nodeId: string
-  startX: number
-  startY: number
-  startWidth: number
-  startHeight: number
-  anchorLeft: number
-  anchorTop: number
-  historyCaptured: boolean
-}
-
-interface HistorySnapshot {
-  document: MindMapDocument
-  selectedNodeId: string | null
-  selectedNodeIds: string[]
-  connectSourceNodeId: string | null
-}
-
-interface ContextMenuState {
-  clientX: number
-  clientY: number
-  nodeId: string | null
-  /** When right-clicking a relation edge */
-  relationId?: string | null
-  /** When right-clicking a region box */
-  regionId?: string | null
-}
-
-interface RegionDrawState {
-  pointerId: number
-  startCanvasX: number
-  startCanvasY: number
-  currentCanvasX: number
-  currentCanvasY: number
-  color: NodeColor
-}
-
-interface RegionDragState {
-  regionId: string
-  offsetX: number
-  offsetY: number
-  initialPosition: Position
-  initialNodePositions: Record<string, Position>
-  historyCaptured: boolean
-}
-
-interface ConnectorDragState {
-  sourceNodeId: string
-  pointerId: number
-  currentClientX: number
-  currentClientY: number
-}
-
-interface MidpointDragState {
-  relationId: string
-  pointerId: number
-  mode: 'pending' | 'move' | 'branch'
-  startClientX: number
-  startClientY: number
-  currentClientX: number
-  currentClientY: number
-  originMidpoint: Position
-  historyCaptured: boolean
-  longPressHandle: number | null
-}
-
-interface MarqueeState {
-  pointerId: number
-  button: number
-  startClientX: number
-  startClientY: number
-  currentClientX: number
-  currentClientY: number
-  active: boolean
-}
-
-interface ActiveEditorPreviewState {
-  nodeId: string
-  anchorLeft: number
-  width: number
-  height: number
-}
-
-interface StatusDescriptor {
-  key: TranslationKey
-  values?: Record<string, string | number>
-}
-
-interface EditorLaunchOptions {
-  value?: string | null
-  selection?: 'all' | 'end'
-  selectionStart?: number
-  selectionEnd?: number
-}
-
-interface GraphDragState {
-  pointerId: number
-  startX: number
-  startY: number
-  startRotation: number
-  startTilt: number
-}
-
-interface AIWorkspaceState {
-  open: boolean
-  busy: boolean
-  testing: boolean
-  debugOpen: boolean
-  rawMode: boolean
-  template: AITemplateId
-  topic: string
-  generationInstructions: string
-  importInstructions: string
-  noteInstructions: string
-  relationInstructions: string
-  generateRawRequest: string
-  importRawRequest: string
-  noteRawRequest: string
-  relationRawRequest: string
-  lastSummary: string
-  lastModel: string
-  lastDebugAction: AIDebugAction
-  lastDebugInfo: AIDebugInfo | null
-  lastDebugError: string
-  connectionMessage: string
-  connectionModel: string
-  connectionOK: boolean | null
-}
-
-interface AINoteTargetState {
-  mode: 'selection' | 'all'
-  nodes: MindNode[]
-}
-
-interface GraphOverlayState {
-  open: boolean
-  search: string
-  selectedNodeId: string | null
-  autoRotate: boolean
-  rotation: number
-  tilt: number
-  zoom: number
-}
-
-interface AIWheelState {
-  open: boolean
-  nodeId: string | null
-  clientX: number
-  clientY: number
-}
-
-interface AppState {
-  view: AppView
-  maps: MindMapSummary[]
-  document: MindMapDocument
-  currentMapId: string | null
-  snapshotDraftName: string
-  selectedNodeId: string | null
-  selectedNodeIds: string[]
-  selectedRegionId: string | null
-  editingNodeId: string | null
-  connectSourceNodeId: string | null
-  drag: DragState | null
-  resize: ResizeState | null
-  contextMenu: ContextMenuState | null
-  marquee: MarqueeState | null
-  status: StatusDescriptor
-  preferences: AppPreferences
-  settingsOpen: boolean
-  topPanelCollapsed: boolean
-  fixedMenu: FixedMenuId
-  inspectorCollapsed: boolean
-  aiWheel: AIWheelState
-  ai: AIWorkspaceState
-  graph: GraphOverlayState
-  selectedRelationId: string | null
-  regionDraw: RegionDrawState | null
-  regionDrag: RegionDragState | null
-  connectorDrag: ConnectorDragState | null
-  midpointDrag: MidpointDragState | null
-}
-
-interface ShellRefs {
-  topChrome: HTMLElement
-  topPanel: HTMLElement
-  fixedToolbar: HTMLElement
-  eyebrow: HTMLParagraphElement
-  title: HTMLHeadingElement
-  status: HTMLParagraphElement
-  homeButton: HTMLButtonElement
-  topPanelButton: HTMLButtonElement
-  renameMapButton: HTMLButtonElement
-  deleteMapButton: HTMLButtonElement
-  settingsButton: HTMLButtonElement
-  panelButton: HTMLButtonElement
-  themeButton: HTMLButtonElement
-  undoButton: HTMLButtonElement
-  redoButton: HTMLButtonElement
-  saveButton: HTMLButtonElement
-  layoutButton: HTMLButtonElement
-  exportButton: HTMLButtonElement
-  importButton: HTMLButtonElement
-  topbarConnectButton: HTMLButtonElement
-  aiButton: HTMLButtonElement
-  graphButton: HTMLButtonElement
-  importInput: HTMLInputElement
-  scroll: HTMLElement
-  canvas: HTMLElement
-  edgeLayer: SVGSVGElement
-  regionLayer: HTMLElement
-  nodeLayer: HTMLElement
-  inspector: HTMLElement
-  settingsLayer: HTMLElement
-  onboardingLayer: HTMLElement
-  overlayLayer: HTMLElement
-  aiLayer: HTMLElement
-  graphLayer: HTMLElement
-}
-
-interface GraphHitNode {
-  id: string
-  x: number
-  y: number
-  radius: number
-}
-
-interface WorkspaceBounds {
-  minX: number
-  minY: number
-  width: number
-  height: number
-  originX: number
-  originY: number
-}
-
-interface CopiedSubtreeNode {
-  id: string
-  parentId?: string
-  kind: MindNode['kind']
-  title: string
-  note?: string
-  priority?: Priority
-  color?: NodeColor
-  collapsed?: boolean
-  width?: number
-  height?: number
-  offset: Position
-}
-
-interface CopiedSubtree {
-  rootId: string
-  nodes: CopiedSubtreeNode[]
-}
-
-const WORKSPACE_MIN_WIDTH = 2400
-const WORKSPACE_MIN_HEIGHT = 1600
-const WORKSPACE_PADDING = 360
 const MIN_ZOOM = 0.4
 const MAX_ZOOM = 2.4
 const ZOOM_SENSITIVITY = 0.0018
-const MIN_NODE_WIDTH = resolveNodeMinWidth('topic')
-const MIN_NODE_HEIGHT = resolveNodeMinHeight('topic')
 const AUTO_NODE_EDITOR_MAX_WIDTH = TOPIC_NODE_MAX_WIDTH
 const DRAG_SNAP_THRESHOLD = 18
 const AUTO_SNAPSHOT_MIN_INTERVAL_MS = 2 * 60 * 1000
@@ -366,90 +157,6 @@ const RELATION_HANDLE_MOVE_THRESHOLD = 8
 const IMPORT_FILE_ACCEPT =
   '.md,.markdown,.txt,.json,.csv,.tsv,.html,.htm,.xml,.opml,.mermaid,.mmd,.yaml,.yml,.toml,.ini,.cfg,.log,.rst,text/plain,text/markdown,application/json,text/csv,text/html,application/xml,text/xml'
 const PRIORITY_VALUES: Priority[] = ['', 'P0', 'P1', 'P2', 'P3']
-const NODE_COLOR_VALUES: NodeColor[] = ['', 'slate', 'blue', 'teal', 'green', 'amber', 'rose', 'violet']
-const AI_TEMPLATES: Array<{ id: AITemplateId }> = [
-  { id: 'concept-graph' },
-  { id: 'project-planning' },
-  { id: 'character-network' },
-]
-
-type NodeColorChoice = Exclude<NodeColor, ''>
-
-interface NodeColorPalette {
-  accent: string
-  accentRgb: [number, number, number]
-  surfaceRgb: [number, number, number]
-  plateRgb: [number, number, number]
-  glowRgb: [number, number, number]
-  text: string
-  labelKey: TranslationKey
-}
-
-const NODE_COLOR_PALETTES: Record<NodeColorChoice, NodeColorPalette> = {
-  slate: {
-    accent: '#94a3b8',
-    accentRgb: [148, 163, 184],
-    surfaceRgb: [71, 85, 105],
-    plateRgb: [51, 65, 85],
-    glowRgb: [148, 163, 184],
-    text: '#f8fafc',
-    labelKey: 'color.slate',
-  },
-  blue: {
-    accent: '#60a5fa',
-    accentRgb: [96, 165, 250],
-    surfaceRgb: [37, 99, 235],
-    plateRgb: [29, 78, 216],
-    glowRgb: [96, 165, 250],
-    text: '#eff6ff',
-    labelKey: 'color.blue',
-  },
-  teal: {
-    accent: '#2dd4bf',
-    accentRgb: [45, 212, 191],
-    surfaceRgb: [13, 148, 136],
-    plateRgb: [15, 118, 110],
-    glowRgb: [45, 212, 191],
-    text: '#ecfeff',
-    labelKey: 'color.teal',
-  },
-  green: {
-    accent: '#4ade80',
-    accentRgb: [74, 222, 128],
-    surfaceRgb: [22, 163, 74],
-    plateRgb: [21, 128, 61],
-    glowRgb: [74, 222, 128],
-    text: '#f0fdf4',
-    labelKey: 'color.green',
-  },
-  amber: {
-    accent: '#f59e0b',
-    accentRgb: [245, 158, 11],
-    surfaceRgb: [217, 119, 6],
-    plateRgb: [180, 83, 9],
-    glowRgb: [245, 158, 11],
-    text: '#fffbeb',
-    labelKey: 'color.amber',
-  },
-  rose: {
-    accent: '#fb7185',
-    accentRgb: [251, 113, 133],
-    surfaceRgb: [225, 29, 72],
-    plateRgb: [190, 24, 93],
-    glowRgb: [251, 113, 133],
-    text: '#fff1f2',
-    labelKey: 'color.rose',
-  },
-  violet: {
-    accent: '#a78bfa',
-    accentRgb: [167, 139, 250],
-    surfaceRgb: [109, 40, 217],
-    plateRgb: [91, 33, 182],
-    glowRgb: [167, 139, 250],
-    text: '#f5f3ff',
-    labelKey: 'color.violet',
-  },
-}
 
 export async function createApp(rootEl: HTMLElement): Promise<void> {
   const app = new MindMapApp(rootEl)
@@ -477,19 +184,17 @@ class MindMapApp {
   private pendingNodeGestureHandle: number | null = null
   private pendingNodeGestureNodeId: string | null = null
   private longPressHandle: number | null = null
-  private longPressState:
-    | {
-        pointerId: number
-        nodeId: string
-        button: number
-        startClientX: number
-        startClientY: number
-        clientX: number
-        clientY: number
-        dragNodeIds: string[]
-        activated: boolean
-      }
-    | null = null
+  private longPressState: {
+    pointerId: number
+    nodeId: string
+    button: number
+    startClientX: number
+    startClientY: number
+    clientX: number
+    clientY: number
+    dragNodeIds: string[]
+    activated: boolean
+  } | null = null
   private pendingEditorOptions: EditorLaunchOptions | null = null
   private activeEditorAnchorLeft: number | null = null
   private activeEditorPreview: ActiveEditorPreviewState | null = null
@@ -937,7 +642,10 @@ class MindMapApp {
           originMidpoint,
           historyCaptured: false,
           longPressHandle: window.setTimeout(() => {
-            if (this.state.midpointDrag?.relationId !== relationId || this.state.midpointDrag.pointerId !== event.pointerId) {
+            if (
+              this.state.midpointDrag?.relationId !== relationId ||
+              this.state.midpointDrag.pointerId !== event.pointerId
+            ) {
               return
             }
             if (this.state.midpointDrag.mode !== 'pending') {
@@ -1089,7 +797,12 @@ class MindMapApp {
       return
     }
 
-    if (!node || (event.button === 0 && dragNodeIds.length === 0) || this.state.editingNodeId === nodeId || this.state.connectSourceNodeId !== null) {
+    if (
+      !node ||
+      (event.button === 0 && dragNodeIds.length === 0) ||
+      this.state.editingNodeId === nodeId ||
+      this.state.connectSourceNodeId !== null
+    ) {
       this.clearNodeLongPress()
       return
     }
@@ -1179,7 +892,11 @@ class MindMapApp {
     }
 
     // Region draw mode
-    if (this.state.regionDraw && this.state.regionDraw.pointerId !== -1 && event.pointerId === this.state.regionDraw.pointerId) {
+    if (
+      this.state.regionDraw &&
+      this.state.regionDraw.pointerId !== -1 &&
+      event.pointerId === this.state.regionDraw.pointerId
+    ) {
       const docPos = this.clientToCanvasPosition(event.clientX, event.clientY)
       this.state.regionDraw.currentCanvasX = docPos.x
       this.state.regionDraw.currentCanvasY = docPos.y
@@ -1228,7 +945,8 @@ class MindMapApp {
       this.longPressState.clientY = event.clientY
       if (
         !this.longPressState.activated &&
-        Math.hypot(event.clientX - this.longPressState.startClientX, event.clientY - this.longPressState.startClientY) > NODE_LONG_PRESS_MOVE_THRESHOLD
+        Math.hypot(event.clientX - this.longPressState.startClientX, event.clientY - this.longPressState.startClientY) >
+          NODE_LONG_PRESS_MOVE_THRESHOLD
       ) {
         const { nodeId, dragNodeIds, button } = this.longPressState
         const action = this.longPressActionForButton(button)
@@ -1306,7 +1024,8 @@ class MindMapApp {
     if (
       currentNode &&
       !this.state.drag.historyCaptured &&
-      (Math.abs(nextPosition.x - currentNode.position.x) > 0.5 || Math.abs(nextPosition.y - currentNode.position.y) > 0.5)
+      (Math.abs(nextPosition.x - currentNode.position.x) > 0.5 ||
+        Math.abs(nextPosition.y - currentNode.position.y) > 0.5)
     ) {
       this.captureHistory()
       this.state.drag.historyCaptured = true
@@ -1339,7 +1058,11 @@ class MindMapApp {
     }
   }
 
-  private resolveSnappedDragDelta(dragState: DragState, deltaX: number, deltaY: number): { deltaX: number; deltaY: number } {
+  private resolveSnappedDragDelta(
+    dragState: DragState,
+    deltaX: number,
+    deltaY: number,
+  ): { deltaX: number; deltaY: number } {
     const draggedNodeIDs = new Set(dragState.nodeIds)
     return {
       deltaX: this.resolveDragAxisSnap(dragState, deltaX, 'x', draggedNodeIDs),
@@ -1475,7 +1198,11 @@ class MindMapApp {
     }
 
     // Region draw finish
-    if (this.state.regionDraw && this.state.regionDraw.pointerId !== -1 && event.pointerId === this.state.regionDraw.pointerId) {
+    if (
+      this.state.regionDraw &&
+      this.state.regionDraw.pointerId !== -1 &&
+      event.pointerId === this.state.regionDraw.pointerId
+    ) {
       const rd = this.state.regionDraw
       const x = Math.min(rd.startCanvasX, rd.currentCanvasX)
       const y = Math.min(rd.startCanvasY, rd.currentCanvasY)
@@ -1590,7 +1317,13 @@ class MindMapApp {
     }
 
     const activeTypingTarget = isTypingTarget(document.activeElement)
-    if (this.state.view !== 'map' || this.onboardingOpen() || this.state.settingsOpen || isTypingTarget(event.target) || activeTypingTarget) {
+    if (
+      this.state.view !== 'map' ||
+      this.onboardingOpen() ||
+      this.state.settingsOpen ||
+      isTypingTarget(event.target) ||
+      activeTypingTarget
+    ) {
       return
     }
 
@@ -1718,7 +1451,13 @@ class MindMapApp {
 
   private readonly handleEditorKeyDown = (event: KeyboardEvent): void => {
     const target = event.target
-    if (!(target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement)) {
+    if (
+      !(
+        target instanceof HTMLInputElement ||
+        target instanceof HTMLTextAreaElement ||
+        target instanceof HTMLSelectElement
+      )
+    ) {
       return
     }
 
@@ -1779,7 +1518,10 @@ class MindMapApp {
       if (!nextNodeId) {
         return
       }
-      void this.runNodeGestureAction(this.state.preferences.interaction.doubleClickAction, nextNodeId, { clientX, clientY })
+      void this.runNodeGestureAction(this.state.preferences.interaction.doubleClickAction, nextNodeId, {
+        clientX,
+        clientY,
+      })
     }, NODE_GESTURE_MULTI_CLICK_DELAY_MS)
   }
 
@@ -1949,7 +1691,11 @@ class MindMapApp {
         this.openNodeEditor(nodeId, { selection: 'end' })
         return
       case 'pan-canvas':
-        if (typeof origin?.pointerId === 'number' && typeof origin.clientX === 'number' && typeof origin.clientY === 'number') {
+        if (
+          typeof origin?.pointerId === 'number' &&
+          typeof origin.clientX === 'number' &&
+          typeof origin.clientY === 'number'
+        ) {
           this.startCanvasPan(origin.pointerId, origin.clientX, origin.clientY)
         }
         return
@@ -2051,7 +1797,13 @@ class MindMapApp {
 
   private readonly handleInput = (event: Event): void => {
     const target = event.target
-    if (!(target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement)) {
+    if (
+      !(
+        target instanceof HTMLInputElement ||
+        target instanceof HTMLTextAreaElement ||
+        target instanceof HTMLSelectElement
+      )
+    ) {
       return
     }
 
@@ -2125,7 +1877,13 @@ class MindMapApp {
 
   private readonly handleChange = (event: Event): void => {
     const target = event.target
-    if (!(target instanceof HTMLInputElement || target instanceof HTMLSelectElement || target instanceof HTMLTextAreaElement)) {
+    if (
+      !(
+        target instanceof HTMLInputElement ||
+        target instanceof HTMLSelectElement ||
+        target instanceof HTMLTextAreaElement
+      )
+    ) {
       return
     }
 
@@ -2505,7 +2263,11 @@ class MindMapApp {
             [
               renderMenuItem('open-ai-workspace', this.t('toolbar.ai'), aiBusy),
               renderMenuItem('ai-suggest-children', this.t('ai.suggestChildrenAction'), aiBusy || !hasSelection),
-              renderMenuItem('ai-suggest-siblings', this.t('ai.suggestSiblingsAction'), aiBusy || !this.canSuggestSiblings()),
+              renderMenuItem(
+                'ai-suggest-siblings',
+                this.t('ai.suggestSiblingsAction'),
+                aiBusy || !this.canSuggestSiblings(),
+              ),
               renderMenuItem('ai-complete-node-notes', this.t('ai.notesAction'), aiBusy),
               renderMenuItem('ai-connect-relations', this.t('ai.connectAction'), aiBusy),
             ].join(''),
@@ -2515,9 +2277,15 @@ class MindMapApp {
             labels.view,
             [
               renderMenuItem('auto-layout', this.t('toolbar.autoLayout')),
-              renderMenuItem('toggle-inspector', this.t(this.state.inspectorCollapsed ? 'panel.side.show' : 'panel.side.hide')),
+              renderMenuItem(
+                'toggle-inspector',
+                this.t(this.state.inspectorCollapsed ? 'panel.side.show' : 'panel.side.hide'),
+              ),
               renderMenuItem('open-graph-overlay', this.t('toolbar.graph3d')),
-              renderMenuItem('theme-toggle', this.t('toolbar.theme', { theme: themeLabel(locale, this.state.document.theme) })),
+              renderMenuItem(
+                'theme-toggle',
+                this.t('toolbar.theme', { theme: themeLabel(locale, this.state.document.theme) }),
+              ),
               renderMenuItem('toggle-settings', this.t('toolbar.settings')),
             ].join(''),
           )}
@@ -2571,7 +2339,10 @@ class MindMapApp {
           ]
 
     return gestureOptions
-      .map((option) => `<option value="${option.value}" ${selected === option.value ? 'selected' : ''}>${escapeHtml(option.label)}</option>`)
+      .map(
+        (option) =>
+          `<option value="${option.value}" ${selected === option.value ? 'selected' : ''}>${escapeHtml(option.label)}</option>`,
+      )
       .join('')
   }
 
@@ -2590,7 +2361,10 @@ class MindMapApp {
           ]
 
     return options
-      .map((option) => `<option value="${option.value}" ${selected === option.value ? 'selected' : ''}>${escapeHtml(option.label)}</option>`)
+      .map(
+        (option) =>
+          `<option value="${option.value}" ${selected === option.value ? 'selected' : ''}>${escapeHtml(option.label)}</option>`,
+      )
       .join('')
   }
 
@@ -2651,7 +2425,9 @@ class MindMapApp {
     const borderColor = palette ? `rgba(${palette.accentRgb.join(',')}, 0.6)` : 'rgba(96,165,250,0.5)'
     const bgColor = palette ? `rgba(${palette.surfaceRgb.join(',')}, 0.15)` : 'rgba(96,165,250,0.1)'
     // Show preview overlay in the region layer
-    this.refs.regionLayer.innerHTML = this.renderRegions() + `<div class="region-box region-draw-preview" style="
+    this.refs.regionLayer.innerHTML =
+      this.renderRegions() +
+      `<div class="region-box region-draw-preview" style="
       left: ${left}px; top: ${top}px; width: ${w}px; height: ${h}px;
       background: ${bgColor}; border: 2px dashed ${borderColor};
     "></div>`
@@ -2902,10 +2678,12 @@ class MindMapApp {
       return `
         <section class="context-menu" data-context-menu style="left: ${Math.round(left)}px; top: ${Math.round(top)}px;">
           <p class="section-label">${this.t('context.regionActions')}</p>
-          ${NODE_COLOR_VALUES.filter((c) => c !== '').map((color) => {
-            const palette = NODE_COLOR_PALETTES[color as Exclude<NodeColor, ''>]
-            return `<button type="button" class="chip-button context-menu-button" data-command="set-region-color:${color}:${this.state.contextMenu!.regionId}" style="border-left: 4px solid ${palette.accent};">${this.t(palette.labelKey)}</button>`
-          }).join('')}
+          ${NODE_COLOR_VALUES.filter((c) => c !== '')
+            .map((color) => {
+              const palette = NODE_COLOR_PALETTES[color as Exclude<NodeColor, ''>]
+              return `<button type="button" class="chip-button context-menu-button" data-command="set-region-color:${color}:${this.state.contextMenu!.regionId}" style="border-left: 4px solid ${palette.accent};">${this.t(palette.labelKey)}</button>`
+            })
+            .join('')}
           <div class="context-menu-divider"></div>
           <button type="button" class="chip-button danger context-menu-button" data-command="delete-region:${this.state.contextMenu.regionId}">${this.t('action.deleteRegion')}</button>
         </section>
@@ -2960,8 +2738,16 @@ class MindMapApp {
 
     const stageRect = this.refs.overlayLayer.getBoundingClientRect()
     const menuRect = menu.getBoundingClientRect()
-    const left = clamp(this.state.contextMenu.clientX - stageRect.left, 12, Math.max(12, stageRect.width - menuRect.width - 12))
-    const top = clamp(this.state.contextMenu.clientY - stageRect.top, 12, Math.max(12, stageRect.height - menuRect.height - 12))
+    const left = clamp(
+      this.state.contextMenu.clientX - stageRect.left,
+      12,
+      Math.max(12, stageRect.width - menuRect.width - 12),
+    )
+    const top = clamp(
+      this.state.contextMenu.clientY - stageRect.top,
+      12,
+      Math.max(12, stageRect.height - menuRect.height - 12),
+    )
     menu.style.left = `${Math.round(left)}px`
     menu.style.top = `${Math.round(top)}px`
   }
@@ -3387,9 +3173,12 @@ class MindMapApp {
 
           <section class="settings-card">
             <p class="section-label">${this.t('ai.notes')}</p>
-            <p class="inspector-copy">${this.t(noteTargets.mode === 'selection' ? 'ai.notesSelectionHint' : 'ai.notesAllHint', {
-              value: noteTargets.nodes.length,
-            })}</p>
+            <p class="inspector-copy">${this.t(
+              noteTargets.mode === 'selection' ? 'ai.notesSelectionHint' : 'ai.notesAllHint',
+              {
+                value: noteTargets.nodes.length,
+              },
+            )}</p>
             <label class="field-stack">
               <span>${this.t('ai.instructions')}</span>
               <textarea class="settings-input ai-textarea" data-ai-field="noteInstructions" placeholder="${escapeAttribute(this.t('ai.notesPlaceholder'))}">${escapeHtml(this.state.ai.noteInstructions)}</textarea>
@@ -3403,9 +3192,12 @@ class MindMapApp {
 
           <section class="settings-card">
             <p class="section-label">${this.t('ai.suggestChildren')}</p>
-            <p class="inspector-copy">${this.t(this.selectedNode() ? 'ai.suggestChildrenHint' : 'ai.suggestChildrenNoSelection', {
-              title: this.selectedNode()?.title ?? '',
-            })}</p>
+            <p class="inspector-copy">${this.t(
+              this.selectedNode() ? 'ai.suggestChildrenHint' : 'ai.suggestChildrenNoSelection',
+              {
+                title: this.selectedNode()?.title ?? '',
+              },
+            )}</p>
             <div class="ai-action-row">
               <button type="button" class="action-button" data-command="ai-suggest-children" ${this.state.ai.busy || !this.selectedNode() ? 'disabled' : ''}>${this.t('ai.suggestChildrenAction')}</button>
               <button type="button" class="chip-button" data-command="ai-suggest-siblings" ${this.state.ai.busy || !this.canSuggestSiblings() ? 'disabled' : ''}>${this.t('ai.suggestSiblingsAction')}</button>
@@ -3660,9 +3452,12 @@ class MindMapApp {
               <p class="inspector-copy">${this.t('graph.subtitle')}</p>
             </div>
             <div class="ai-action-row">
-              <button type="button" class="chip-button" data-command="toggle-graph-autorotate">${this.t('graph.autoRotate', {
-                value: this.state.graph.autoRotate ? this.t('common.on') : this.t('common.off'),
-              })}</button>
+              <button type="button" class="chip-button" data-command="toggle-graph-autorotate">${this.t(
+                'graph.autoRotate',
+                {
+                  value: this.state.graph.autoRotate ? this.t('common.on') : this.t('common.off'),
+                },
+              )}</button>
               <button type="button" class="chip-button" data-command="reset-graph-view">${this.t('graph.resetView')}</button>
               <button type="button" class="chip-button" data-command="focus-graph-selected" ${this.state.graph.selectedNodeId ? '' : 'disabled'}>${this.t('graph.focusAction')}</button>
               <button type="button" class="ghost-button" data-command="close-graph-overlay">${this.t('settings.close')}</button>
@@ -3746,7 +3541,9 @@ class MindMapApp {
     const edgeStyle = this.state.preferences.appearance.edgeStyle
     const drawEdgeStyle: EdgeStyle = edgeStyle === 'hidden' ? 'curve' : edgeStyle
     const projectPosition = (position: Position) => this.toWorkspacePosition(position)
-    const childCountById = new Map(this.state.document.nodes.map((node) => [node.id, childrenOf(this.state.document, node.id).length]))
+    const childCountById = new Map(
+      this.state.document.nodes.map((node) => [node.id, childrenOf(this.state.document, node.id).length]),
+    )
 
     // Arrow marker definitions
     const arrowDefs = `<defs>
@@ -3759,20 +3556,23 @@ class MindMapApp {
     </defs>`
 
     // Hierarchy edges (hidden when edge style is hidden)
-    const hierarchyEdges = edgeStyle === 'hidden' ? '' : this.state.document.nodes
-      .filter((node) => Boolean(node.parentId) && visibleIds.has(node.id) && visibleIds.has(node.parentId ?? ''))
-      .map((node) => {
-        const parent = this.findNode(node.parentId ?? '')
-        if (!parent) {
-          return ''
-        }
-        const edgePoints = resolveHierarchyEdgeEndpoints(
-          this.resolveNodeRenderMetrics(parent, childCountById.get(parent.id) ?? 0),
-          this.resolveNodeRenderMetrics(node, childCountById.get(node.id) ?? 0),
-        )
-        return `<path class="edge edge-hierarchy" d="${buildHierarchyPath(projectPosition(edgePoints.source), projectPosition(edgePoints.target), drawEdgeStyle)}" />`
-      })
-      .join('')
+    const hierarchyEdges =
+      edgeStyle === 'hidden'
+        ? ''
+        : this.state.document.nodes
+            .filter((node) => Boolean(node.parentId) && visibleIds.has(node.id) && visibleIds.has(node.parentId ?? ''))
+            .map((node) => {
+              const parent = this.findNode(node.parentId ?? '')
+              if (!parent) {
+                return ''
+              }
+              const edgePoints = resolveHierarchyEdgeEndpoints(
+                this.resolveNodeRenderMetrics(parent, childCountById.get(parent.id) ?? 0),
+                this.resolveNodeRenderMetrics(node, childCountById.get(node.id) ?? 0),
+              )
+              return `<path class="edge edge-hierarchy" d="${buildHierarchyPath(projectPosition(edgePoints.source), projectPosition(edgePoints.target), drawEdgeStyle)}" />`
+            })
+            .join('')
 
     // Relation edges - always shown (even when hierarchy is hidden), with optional arrows and branches
     const relationEdges = this.state.document.relations
@@ -3831,7 +3631,9 @@ class MindMapApp {
           const branchTarget = projectPosition(resolveNodeAnchorToward(branchMetrics, midpointDoc))
           const branchPath = buildRelationSegmentPath(mid, branchTarget, drawEdgeStyle)
           hitSegments.push(branchPath)
-          branchPaths.push(`<path class="edge edge-relation edge-branch${selectedClass}" d="${branchPath}"${markerEnd} />`)
+          branchPaths.push(
+            `<path class="edge edge-relation edge-branch${selectedClass}" d="${branchPath}"${markerEnd} />`,
+          )
         }
 
         let legacyWaypointLines = ''
@@ -3853,13 +3655,16 @@ class MindMapApp {
           ? `<circle class="edge-midpoint-dot" data-midpoint-dot="${edge.id}" cx="${mid.x}" cy="${mid.y}" r="6" />`
           : ''
 
-        const branchPreview = midpointDrag?.mode === 'branch'
-          ? (() => {
-              const previewTarget = projectPosition(this.clientToCanvasPosition(midpointDrag.currentClientX, midpointDrag.currentClientY))
-              const previewPath = buildRelationSegmentPath(mid, previewTarget, drawEdgeStyle)
-              return `<path class="edge edge-connector-drag edge-branch-preview" d="${previewPath}" />`
-            })()
-          : ''
+        const branchPreview =
+          midpointDrag?.mode === 'branch'
+            ? (() => {
+                const previewTarget = projectPosition(
+                  this.clientToCanvasPosition(midpointDrag.currentClientX, midpointDrag.currentClientY),
+                )
+                const previewPath = buildRelationSegmentPath(mid, previewTarget, drawEdgeStyle)
+                return `<path class="edge edge-connector-drag edge-branch-preview" d="${previewPath}" />`
+              })()
+            : ''
 
         return `<g>
           ${hitPath}
@@ -3883,7 +3688,10 @@ class MindMapApp {
           x: sourceMetrics.position.x + sourceMetrics.width / 2,
           y: sourceMetrics.position.y - sourceMetrics.height / 2,
         })
-        const canvasPos = this.clientToCanvas(this.state.connectorDrag.currentClientX, this.state.connectorDrag.currentClientY)
+        const canvasPos = this.clientToCanvas(
+          this.state.connectorDrag.currentClientX,
+          this.state.connectorDrag.currentClientY,
+        )
         if (canvasPos) {
           connectorLine = `<line class="edge edge-connector-drag" x1="${projSource.x}" y1="${projSource.y}" x2="${canvasPos.x}" y2="${canvasPos.y}" />`
         }
@@ -3946,14 +3754,18 @@ class MindMapApp {
           : ''
 
         const childCount = childrenOf(this.state.document, node.id).length
-        const branchBadge = childCount > 0
-          ? `<span class="node-branch-badge">${node.collapsed ? `+${hiddenDescendantCount(this.state.document, node.id)}` : childCount}</span>`
-          : ''
+        const branchBadge =
+          childCount > 0
+            ? `<span class="node-branch-badge">${node.collapsed ? `+${hiddenDescendantCount(this.state.document, node.id)}` : childCount}</span>`
+            : ''
         const collapseLabel = node.collapsed ? this.t('action.expand') : this.t('action.collapse')
 
-        const nodeDimensions = buildNodeDimensionStyle(node, preview ? { width: preview.width, height: preview.height } : undefined)
+        const nodeDimensions = buildNodeDimensionStyle(
+          node,
+          preview ? { width: preview.width, height: preview.height } : undefined,
+        )
         const nodePresentationStyle = buildNodeColorStyle(nodeColor)
-        const anchorX = isAutoWidthEditingNode ? autoWidthAnchorLeft ?? node.position.x : node.position.x
+        const anchorX = isAutoWidthEditingNode ? (autoWidthAnchorLeft ?? node.position.x) : node.position.x
         const articleStyle = `left: ${anchorX + originX}px; top: ${node.position.y + originY}px; ${nodePresentationStyle}`
 
         const content = isEditingNode
@@ -3966,11 +3778,13 @@ class MindMapApp {
                ${branchBadge}
              </button>`
 
-        const resizeHandle = node.kind !== 'root'
-          ? `<button type="button" class="node-resizer" data-node-resizer="${node.id}" aria-label="Resize node"></button>`
-          : ''
-        const collapseButton = childCount > 0
-          ? `<button
+        const resizeHandle =
+          node.kind !== 'root'
+            ? `<button type="button" class="node-resizer" data-node-resizer="${node.id}" aria-label="Resize node"></button>`
+            : ''
+        const collapseButton =
+          childCount > 0
+            ? `<button
                type="button"
                class="node-collapse-button"
                data-node-collapse-button="${node.id}"
@@ -3978,7 +3792,7 @@ class MindMapApp {
                aria-label="${escapeAttribute(collapseLabel)}"
                title="${escapeAttribute(collapseLabel)}"
              ></button>`
-          : ''
+            : ''
 
         const connectorDot = `<button type="button" class="node-connector-dot" data-node-connector="${node.id}" aria-label="Drag to connect"></button>`
 
@@ -4100,8 +3914,12 @@ class MindMapApp {
               <ul class="snapshot-list">
                 ${snapshots
                   .map((snapshot) => {
-                    const modeLabel = snapshot.mode === 'manual' ? this.t('snapshot.modeManual') : this.t('snapshot.modeAuto')
-                    const metaSuffix = snapshot.mapTitle && snapshot.mapTitle !== snapshot.title ? ` · ${escapeHtml(snapshot.mapTitle)}` : ''
+                    const modeLabel =
+                      snapshot.mode === 'manual' ? this.t('snapshot.modeManual') : this.t('snapshot.modeAuto')
+                    const metaSuffix =
+                      snapshot.mapTitle && snapshot.mapTitle !== snapshot.title
+                        ? ` · ${escapeHtml(snapshot.mapTitle)}`
+                        : ''
                     return `
                       <li class="snapshot-item">
                         <div class="snapshot-item-copy">
@@ -4130,16 +3948,14 @@ class MindMapApp {
     return this.rootEl.querySelector<HTMLTextAreaElement>(`[data-node-editor="${nodeId}"]`)
   }
 
-  private captureActiveNodeEditorDraft():
-    | {
-        nodeId: string
-        value: string
-        selectionStart: number
-        selectionEnd: number
-        anchorLeft: number | null
-        preview: ActiveEditorPreviewState | null
-      }
-    | null {
+  private captureActiveNodeEditorDraft(): {
+    nodeId: string
+    value: string
+    selectionStart: number
+    selectionEnd: number
+    anchorLeft: number | null
+    preview: ActiveEditorPreviewState | null
+  } | null {
     const nodeId = this.state.editingNodeId
     const editor = this.nodeEditor(nodeId)
     if (!nodeId || !editor) {
@@ -4157,16 +3973,14 @@ class MindMapApp {
   }
 
   private restoreActiveNodeEditorDraft(
-    draft:
-        | {
-          nodeId: string
-          value: string
-          selectionStart: number
-          selectionEnd: number
-          anchorLeft: number | null
-          preview: ActiveEditorPreviewState | null
-        }
-      | null,
+    draft: {
+      nodeId: string
+      value: string
+      selectionStart: number
+      selectionEnd: number
+      anchorLeft: number | null
+      preview: ActiveEditorPreviewState | null
+    } | null,
   ): void {
     if (!draft || !this.findNode(draft.nodeId)) {
       return
@@ -4192,8 +4006,8 @@ class MindMapApp {
     const minWidth = Math.max(MIN_NODE_WIDTH, parsePixelValue(computed.minWidth))
     const maxWidth = Math.max(minWidth, parsePixelValue(computed.maxWidth) || AUTO_NODE_EDITOR_MAX_WIDTH)
     const minHeight = Math.max(MIN_NODE_HEIGHT, parsePixelValue(computed.minHeight))
-    let previewWidth = Math.max(node.width ?? minWidth, minWidth)
-    let previewAnchorLeft: number | null = this.activeEditorAnchorLeft
+    let previewWidth: number
+    const previewAnchorLeft: number | null = this.activeEditorAnchorLeft
 
     if (node.width) {
       previewWidth = Math.max(node.width, MIN_NODE_WIDTH)
@@ -4203,14 +4017,17 @@ class MindMapApp {
       const horizontalPadding = parsePixelValue(computed.paddingLeft) + parsePixelValue(computed.paddingRight) + 2
       const longestLineWidth = editor.value
         .split(/\r?\n/)
-        .reduce((maxWidthSoFar, line) => Math.max(maxWidthSoFar, this.measureNodeEditorLineWidth(line || ' ', computed.font)), 0)
+        .reduce(
+          (maxWidthSoFar, line) => Math.max(maxWidthSoFar, this.measureNodeEditorLineWidth(line || ' ', computed.font)),
+          0,
+        )
       previewWidth = clamp(Math.ceil(longestLineWidth + horizontalPadding), minWidth, maxWidth)
       editor.style.width = `${previewWidth}px`
       editor.style.maxWidth = `${maxWidth}px`
     }
 
     editor.style.height = 'auto'
-    let previewHeight = minHeight
+    let previewHeight: number
     if (node.height) {
       previewHeight = Math.max(node.height, minHeight)
       editor.style.height = `${previewHeight}px`
@@ -4232,13 +4049,17 @@ class MindMapApp {
         article.style.left = `${previewAnchorLeft + this.workspaceBounds.originX}px`
         article.style.top = `${node.position.y + this.workspaceBounds.originY}px`
       }
-      this.refs?.edgeLayer && (this.refs.edgeLayer.innerHTML = this.renderEdges())
+      if (this.refs?.edgeLayer) {
+        this.refs.edgeLayer.innerHTML = this.renderEdges()
+      }
       return
     }
 
     if (this.activeEditorPreview?.nodeId === node.id) {
       this.activeEditorPreview = null
-      this.refs?.edgeLayer && (this.refs.edgeLayer.innerHTML = this.renderEdges())
+      if (this.refs?.edgeLayer) {
+        this.refs.edgeLayer.innerHTML = this.renderEdges()
+      }
     }
   }
 
@@ -4317,7 +4138,11 @@ class MindMapApp {
     })
   }
 
-  private restoreEditorSelection(editor: HTMLInputElement | HTMLTextAreaElement, options: EditorLaunchOptions | null | undefined, attempt = 0): void {
+  private restoreEditorSelection(
+    editor: HTMLInputElement | HTMLTextAreaElement,
+    options: EditorLaunchOptions | null | undefined,
+    attempt = 0,
+  ): void {
     if (!editor.isConnected || this.state.editingNodeId !== editor.dataset.nodeEditor) {
       return
     }
@@ -4354,7 +4179,10 @@ class MindMapApp {
     })
   }
 
-  private editorSelectionSettled(editor: HTMLInputElement | HTMLTextAreaElement, options: EditorLaunchOptions | null | undefined): boolean {
+  private editorSelectionSettled(
+    editor: HTMLInputElement | HTMLTextAreaElement,
+    options: EditorLaunchOptions | null | undefined,
+  ): boolean {
     if (document.activeElement !== editor) {
       return false
     }
@@ -4363,7 +4191,11 @@ class MindMapApp {
     const selectionEnd = editor.selectionEnd ?? -1
     if (typeof options?.selectionStart === 'number') {
       const expectedStart = clamp(Math.round(options.selectionStart), 0, editor.value.length)
-      const expectedEnd = clamp(Math.round(options.selectionEnd ?? options.selectionStart), expectedStart, editor.value.length)
+      const expectedEnd = clamp(
+        Math.round(options.selectionEnd ?? options.selectionStart),
+        expectedStart,
+        editor.value.length,
+      )
       return selectionStart === expectedStart && selectionEnd === expectedEnd
     }
 
@@ -4398,12 +4230,16 @@ class MindMapApp {
     return orderedIds
   }
 
-  private applySelectionState(nodeIds: string[], primaryNodeId: string | null = nodeIds[nodeIds.length - 1] ?? null): void {
+  private applySelectionState(
+    nodeIds: string[],
+    primaryNodeId: string | null = nodeIds[nodeIds.length - 1] ?? null,
+  ): void {
     const normalizedIds = nodeIds.filter((nodeId, index) => {
       return nodeIds.indexOf(nodeId) === index && Boolean(this.findNode(nodeId))
     })
     const nextIds = normalizedIds
-    const nextPrimary = primaryNodeId && nextIds.includes(primaryNodeId) ? primaryNodeId : nextIds[nextIds.length - 1] ?? null
+    const nextPrimary =
+      primaryNodeId && nextIds.includes(primaryNodeId) ? primaryNodeId : (nextIds[nextIds.length - 1] ?? null)
 
     this.state.selectedNodeIds = nextIds
     this.state.selectedNodeId = nextPrimary
@@ -4584,7 +4420,11 @@ class MindMapApp {
       const nextId = createId('node')
       idMap.set(snapshot.id, nextId)
       const isClipboardRoot = snapshot.id === this.copiedSubtree.rootId
-      const parentId = isClipboardRoot ? targetNode.id : snapshot.parentId ? idMap.get(snapshot.parentId) : targetNode.id
+      const parentId = isClipboardRoot
+        ? targetNode.id
+        : snapshot.parentId
+          ? idMap.get(snapshot.parentId)
+          : targetNode.id
       const nodeKind: MindNode['kind'] = isClipboardRoot ? 'topic' : snapshot.kind === 'root' ? 'topic' : snapshot.kind
       const position = {
         x: anchor.x + snapshot.offset.x,
@@ -4826,7 +4666,10 @@ class MindMapApp {
       }
     }
 
-    const fallbackNodeId = primaryNode?.parentId && !removeIds.has(primaryNode.parentId) ? primaryNode.parentId : findRoot(this.state.document).id
+    const fallbackNodeId =
+      primaryNode?.parentId && !removeIds.has(primaryNode.parentId)
+        ? primaryNode.parentId
+        : findRoot(this.state.document).id
     const relationCountBefore = this.state.document.relations.length
     const nodeCountBefore = this.state.document.nodes.length
 
@@ -4953,7 +4796,9 @@ class MindMapApp {
       return null
     }
 
-    const element = this.rootEl.querySelector<HTMLElement>(`[data-node-id="${nodeId}"] .node-shell, [data-node-id="${nodeId}"] .node-editor`)
+    const element = this.rootEl.querySelector<HTMLElement>(
+      `[data-node-id="${nodeId}"] .node-shell, [data-node-id="${nodeId}"] .node-editor`,
+    )
     if (!element) {
       return node.position.x - estimateNodeWidth(node, childrenOf(this.state.document, node.id).length) / 2
     }
@@ -4969,7 +4814,9 @@ class MindMapApp {
       return null
     }
 
-    const element = this.rootEl.querySelector<HTMLElement>(`[data-node-id="${nodeId}"] .node-shell, [data-node-id="${nodeId}"] .node-editor`)
+    const element = this.rootEl.querySelector<HTMLElement>(
+      `[data-node-id="${nodeId}"] .node-shell, [data-node-id="${nodeId}"] .node-editor`,
+    )
     if (!element) {
       return null
     }
@@ -5497,7 +5344,16 @@ class MindMapApp {
     const regionTop = region.position.y - region.height / 2
     const regionBottom = region.position.y + region.height / 2
 
-    return rectanglesOverlapCoords(nodeLeft, nodeTop, nodeRight, nodeBottom, regionLeft, regionTop, regionRight, regionBottom)
+    return rectanglesOverlapCoords(
+      nodeLeft,
+      nodeTop,
+      nodeRight,
+      nodeBottom,
+      regionLeft,
+      regionTop,
+      regionRight,
+      regionBottom,
+    )
   }
 
   private nodesInRegion(region: RegionBox): MindNode[] {
@@ -5514,24 +5370,26 @@ class MindMapApp {
     }
     const originX = this.workspaceBounds.originX
     const originY = this.workspaceBounds.originY
-    return this.state.document.regions.map((region) => {
-      const palette = resolveNodeColorPalette(region.color)
-      const accent = palette?.accent ?? '#60a5fa'
-      const bgColor = palette ? `rgba(${palette.surfaceRgb.join(',')}, 0.12)` : 'rgba(96,165,250,0.08)'
-      const borderColor = palette ? `rgba(${palette.accentRgb.join(',')}, 0.4)` : 'rgba(96,165,250,0.3)'
-      const selectedClass = this.state.selectedRegionId === region.id ? ' is-selected' : ''
-      const w = region.width
-      const h = region.height
-      const left = region.position.x - w / 2 + originX
-      const top = region.position.y - h / 2 + originY
-      return `<div class="region-box${selectedClass}" data-region-id="${region.id}" data-region-drag="${region.id}" style="
+    return this.state.document.regions
+      .map((region) => {
+        const palette = resolveNodeColorPalette(region.color)
+        const accent = palette?.accent ?? '#60a5fa'
+        const bgColor = palette ? `rgba(${palette.surfaceRgb.join(',')}, 0.12)` : 'rgba(96,165,250,0.08)'
+        const borderColor = palette ? `rgba(${palette.accentRgb.join(',')}, 0.4)` : 'rgba(96,165,250,0.3)'
+        const selectedClass = this.state.selectedRegionId === region.id ? ' is-selected' : ''
+        const w = region.width
+        const h = region.height
+        const left = region.position.x - w / 2 + originX
+        const top = region.position.y - h / 2 + originY
+        return `<div class="region-box${selectedClass}" data-region-id="${region.id}" data-region-drag="${region.id}" style="
         left: ${left}px; top: ${top}px; width: ${w}px; height: ${h}px;
         background: ${bgColor}; border: 2px dashed ${borderColor};
         --region-accent: ${accent};
       ">
         <span class="region-label">${escapeHtml(region.label)}</span>
       </div>`
-    }).join('')
+      })
+      .join('')
   }
 
   // ---- Relation arrow direction ----
@@ -5620,7 +5478,8 @@ class MindMapApp {
       return null
     }
 
-    const edgeStyle = this.state.preferences.appearance.edgeStyle === 'hidden' ? 'curve' : this.state.preferences.appearance.edgeStyle
+    const edgeStyle =
+      this.state.preferences.appearance.edgeStyle === 'hidden' ? 'curve' : this.state.preferences.appearance.edgeStyle
     const sourceMetrics = this.resolveNodeRenderMetrics(source, childrenOf(this.state.document, source.id).length)
     const targetMetrics = this.resolveNodeRenderMetrics(target, childrenOf(this.state.document, target.id).length)
     return this.resolveRelationMidpointForEdge(relation, sourceMetrics, targetMetrics, edgeStyle)
@@ -5911,7 +5770,8 @@ class MindMapApp {
   }
 
   private async renameMap(mapId: string): Promise<void> {
-    const currentTitle = this.state.currentMapId === mapId ? this.state.document.title : this.findMapSummary(mapId)?.title ?? ''
+    const currentTitle =
+      this.state.currentMapId === mapId ? this.state.document.title : (this.findMapSummary(mapId)?.title ?? '')
     const nextTitle = window.prompt(this.t('dialog.renameMap'), currentTitle)
     if (nextTitle === null) {
       return
@@ -6133,7 +5993,10 @@ class MindMapApp {
     )
   }
 
-  private async applyAINodeNotesForTargets(targetNodeIds: string[], mode: 'replace' | 'children' = 'replace'): Promise<number> {
+  private async applyAINodeNotesForTargets(
+    targetNodeIds: string[],
+    mode: 'replace' | 'children' = 'replace',
+  ): Promise<number> {
     if (this.state.ai.busy) {
       return 0
     }
@@ -6211,7 +6074,9 @@ class MindMapApp {
         )
         this.setSelection(createdIds, createdIds[0] ?? null)
       } else {
-        const changes = nextNotes.filter((item) => normalizeNodeNote(this.findNode(item.id)?.note) !== normalizeNodeNote(item.note))
+        const changes = nextNotes.filter(
+          (item) => normalizeNodeNote(this.findNode(item.id)?.note) !== normalizeNodeNote(item.note),
+        )
         if (changes.length === 0) {
           this.setStatus('status.aiNoNotes')
           return 0
@@ -6278,7 +6143,11 @@ class MindMapApp {
 
       this.captureHistory()
       const now = new Date().toISOString()
-      const existingPairs = new Set(this.state.document.relations.map((relation) => normalizedRelationPairKey(relation.sourceId, relation.targetId)))
+      const existingPairs = new Set(
+        this.state.document.relations.map((relation) =>
+          normalizedRelationPairKey(relation.sourceId, relation.targetId),
+        ),
+      )
       let added = 0
       for (const relation of nextRelations) {
         const key = normalizedRelationPairKey(relation.sourceId, relation.targetId)
@@ -6361,7 +6230,8 @@ class MindMapApp {
 
   private async expandAIMap(): Promise<void> {
     const previousNodeCount = this.state.document.nodes.length
-    const topic = this.state.ai.topic.trim() || this.state.document.title.trim() || findRoot(this.state.document).title.trim()
+    const topic =
+      this.state.ai.topic.trim() || this.state.document.title.trim() || findRoot(this.state.document).title.trim()
     if (!topic) {
       this.setStatus('status.aiTopicRequired')
       this.render()
@@ -6443,7 +6313,7 @@ class MindMapApp {
 
       this.captureHistory()
       const createdIds: string[] = []
-      const parentId = mode === 'siblings' ? selectedNode.parentId ?? '' : selectedNode.id
+      const parentId = mode === 'siblings' ? (selectedNode.parentId ?? '') : selectedNode.id
       const parentNode = this.findNode(parentId)
       if (parentNode) {
         parentNode.collapsed = false
@@ -6511,7 +6381,12 @@ class MindMapApp {
     }
 
     const quickConfig = this.state.preferences.interaction
-    if (!quickConfig.aiQuickChildren && !quickConfig.aiQuickSiblings && !quickConfig.aiQuickNotes && !quickConfig.aiQuickRelations) {
+    if (
+      !quickConfig.aiQuickChildren &&
+      !quickConfig.aiQuickSiblings &&
+      !quickConfig.aiQuickNotes &&
+      !quickConfig.aiQuickRelations
+    ) {
       this.setStatus('status.aiQuickDisabled')
       this.render()
       return
@@ -6674,7 +6549,7 @@ class MindMapApp {
         this.setStatus('status.appearanceUpdated')
         this.render()
         return
-      case 'appearance.layoutMode':
+      case 'appearance.layoutMode': {
         const nextLayoutMode = normalizeLayoutMode(value)
         const layoutModeChanged = this.state.preferences.appearance.layoutMode !== nextLayoutMode
         this.updatePreferences((preferences) => {
@@ -6695,7 +6570,8 @@ class MindMapApp {
         this.setStatus('status.appearanceUpdated')
         this.render()
         return
-      case 'appearance.childGapX':
+      }
+      case 'appearance.childGapX': {
         const nextChildGapX = normalizeChildGapX(value)
         const childGapChanged = this.state.preferences.appearance.childGapX !== nextChildGapX
         this.updatePreferences((preferences) => {
@@ -6716,6 +6592,7 @@ class MindMapApp {
         this.setStatus('status.appearanceUpdated')
         this.render()
         return
+      }
       case 'appearance.chromeLayout':
         this.updatePreferences((preferences) => {
           preferences.appearance.chromeLayout = normalizeChromeLayout(value)
@@ -6791,21 +6668,30 @@ class MindMapApp {
         return
       case 'interaction.doubleClickAction':
         this.updatePreferences((preferences) => {
-          preferences.interaction.doubleClickAction = normalizeGestureAction(value, preferences.interaction.doubleClickAction)
+          preferences.interaction.doubleClickAction = normalizeGestureAction(
+            value,
+            preferences.interaction.doubleClickAction,
+          )
         })
         this.setStatus('status.interactionUpdated')
         this.render()
         return
       case 'interaction.tripleClickAction':
         this.updatePreferences((preferences) => {
-          preferences.interaction.tripleClickAction = normalizeGestureAction(value, preferences.interaction.tripleClickAction)
+          preferences.interaction.tripleClickAction = normalizeGestureAction(
+            value,
+            preferences.interaction.tripleClickAction,
+          )
         })
         this.setStatus('status.interactionUpdated')
         this.render()
         return
       case 'interaction.longPressAction':
         this.updatePreferences((preferences) => {
-          preferences.interaction.longPressAction = normalizeGestureAction(value, preferences.interaction.longPressAction)
+          preferences.interaction.longPressAction = normalizeGestureAction(
+            value,
+            preferences.interaction.longPressAction,
+          )
           preferences.interaction.rightLongPressAction = preferences.interaction.longPressAction
         })
         this.setStatus('status.interactionUpdated')
@@ -6813,21 +6699,30 @@ class MindMapApp {
         return
       case 'interaction.leftLongPressAction':
         this.updatePreferences((preferences) => {
-          preferences.interaction.leftLongPressAction = normalizeGestureAction(value, preferences.interaction.leftLongPressAction)
+          preferences.interaction.leftLongPressAction = normalizeGestureAction(
+            value,
+            preferences.interaction.leftLongPressAction,
+          )
         })
         this.setStatus('status.interactionUpdated')
         this.render()
         return
       case 'interaction.middleLongPressAction':
         this.updatePreferences((preferences) => {
-          preferences.interaction.middleLongPressAction = normalizeGestureAction(value, preferences.interaction.middleLongPressAction)
+          preferences.interaction.middleLongPressAction = normalizeGestureAction(
+            value,
+            preferences.interaction.middleLongPressAction,
+          )
         })
         this.setStatus('status.interactionUpdated')
         this.render()
         return
       case 'interaction.rightLongPressAction':
         this.updatePreferences((preferences) => {
-          preferences.interaction.rightLongPressAction = normalizeGestureAction(value, preferences.interaction.rightLongPressAction)
+          preferences.interaction.rightLongPressAction = normalizeGestureAction(
+            value,
+            preferences.interaction.rightLongPressAction,
+          )
           preferences.interaction.longPressAction = preferences.interaction.rightLongPressAction
         })
         this.setStatus('status.interactionUpdated')
@@ -7021,7 +6916,10 @@ class MindMapApp {
     return this.state.maps.find((item) => item.id === mapId)
   }
 
-  private applyCanvasMetrics(bounds = getWorkspaceBounds(this.state.document), preserveViewportPosition = this.didInitializeViewport): void {
+  private applyCanvasMetrics(
+    bounds = getWorkspaceBounds(this.state.document),
+    preserveViewportPosition = this.didInitializeViewport,
+  ): void {
     if (!this.refs) {
       return
     }
@@ -7088,9 +6986,10 @@ class MindMapApp {
   private applyHistorySnapshot(snapshot: HistorySnapshot): void {
     this.state.document = cloneDocument(snapshot.document)
     this.setSelection(snapshot.selectedNodeIds, snapshot.selectedNodeId)
-    this.state.connectSourceNodeId = snapshot.connectSourceNodeId && findNode(this.state.document, snapshot.connectSourceNodeId)
-      ? snapshot.connectSourceNodeId
-      : null
+    this.state.connectSourceNodeId =
+      snapshot.connectSourceNodeId && findNode(this.state.document, snapshot.connectSourceNodeId)
+        ? snapshot.connectSourceNodeId
+        : null
     this.clearNodeLongPress()
     this.clearNodeEditorState()
     this.state.drag = null
@@ -7180,7 +7079,8 @@ class MindMapApp {
     }
 
     const bounds = getWorkspaceBounds(this.state.document)
-    const originChanged = bounds.originX !== this.workspaceBounds.originX || bounds.originY !== this.workspaceBounds.originY
+    const originChanged =
+      bounds.originX !== this.workspaceBounds.originX || bounds.originY !== this.workspaceBounds.originY
     if (originChanged) {
       this.renderWorkspace()
       return
@@ -7216,7 +7116,12 @@ class MindMapApp {
   }
 
   private applyMarqueeSelection(marquee: MarqueeState): void {
-    const selectionRect = normalizeClientRect(marquee.startClientX, marquee.startClientY, marquee.currentClientX, marquee.currentClientY)
+    const selectionRect = normalizeClientRect(
+      marquee.startClientX,
+      marquee.startClientY,
+      marquee.currentClientX,
+      marquee.currentClientY,
+    )
     const matchedIds = this.state.document.nodes
       .map((node) => {
         const element = this.rootEl.querySelector<HTMLElement>(`[data-node-id="${node.id}"]`)
@@ -7411,7 +7316,14 @@ class MindMapApp {
     context.fillStyle = background
     context.fillRect(0, 0, width, height)
 
-    const atmosphere = context.createRadialGradient(width / 2, height * 0.56, 0, width / 2, height * 0.56, Math.max(width, height) * 0.58)
+    const atmosphere = context.createRadialGradient(
+      width / 2,
+      height * 0.56,
+      0,
+      width / 2,
+      height * 0.56,
+      Math.max(width, height) * 0.58,
+    )
     atmosphere.addColorStop(0, 'rgba(99, 102, 241, 0.12)')
     atmosphere.addColorStop(0.52, 'rgba(56, 189, 248, 0.05)')
     atmosphere.addColorStop(1, 'rgba(15, 23, 42, 0)')
@@ -7436,7 +7348,8 @@ class MindMapApp {
     context.lineJoin = 'round'
     for (const edge of frame.edges) {
       context.beginPath()
-      context.strokeStyle = edge.type === 'relation' ? `rgba(253, 186, 116, ${edge.opacity})` : `rgba(147, 197, 253, ${edge.opacity})`
+      context.strokeStyle =
+        edge.type === 'relation' ? `rgba(253, 186, 116, ${edge.opacity})` : `rgba(147, 197, 253, ${edge.opacity})`
       context.lineWidth = edge.lineWidth
       context.moveTo(edge.x1, edge.y1)
       context.lineTo(edge.x2, edge.y2)
@@ -7471,7 +7384,9 @@ class MindMapApp {
 
       context.save()
       context.beginPath()
-      context.fillStyle = nodePalette ? rgbaFromRgb(nodePalette.plateRgb, node.occlusionOpacity) : `rgba(9, 14, 24, ${node.occlusionOpacity})`
+      context.fillStyle = nodePalette
+        ? rgbaFromRgb(nodePalette.plateRgb, node.occlusionOpacity)
+        : `rgba(9, 14, 24, ${node.occlusionOpacity})`
       context.arc(node.x, node.y, occlusionRadius, 0, Math.PI * 2)
       context.fill()
       context.restore()
@@ -7607,915 +7522,4 @@ class MindMapApp {
   private applyLocale(): void {
     document.documentElement.lang = this.state.preferences.locale
   }
-}
-
-function buildHierarchyPath(source: Position, target: Position, edgeStyle: EdgeStyle): string {
-  return edgeStyle === 'orthogonal'
-    ? buildOrthogonalHierarchyPath(source, target)
-    : buildCurvedHierarchyPath(source, target)
-}
-
-interface NodeRenderMetrics {
-  position: Position
-  width: number
-  height: number
-}
-
-function resolveHierarchyEdgeEndpoints(parent: NodeRenderMetrics, child: NodeRenderMetrics): { source: Position; target: Position } {
-  const direction = child.position.x >= parent.position.x ? 1 : -1
-
-  return {
-    source: {
-      x: parent.position.x + direction * parent.width / 2,
-      y: parent.position.y,
-    },
-    target: {
-      x: child.position.x - direction * child.width / 2,
-      y: child.position.y,
-    },
-  }
-}
-
-function resolveRelationEdgeEndpoints(source: NodeRenderMetrics, target: NodeRenderMetrics): { source: Position; target: Position } {
-  return {
-    source: resolveNodeAnchorToward(source, target.position),
-    target: resolveNodeAnchorToward(target, source.position),
-  }
-}
-
-function resolveNodeAnchorToward(node: NodeRenderMetrics, toward: Position): Position {
-  const halfWidth = node.width / 2
-  const halfHeight = node.height / 2
-  const deltaX = toward.x - node.position.x
-  const deltaY = toward.y - node.position.y
-
-  if (Math.abs(deltaX) * halfHeight >= Math.abs(deltaY) * halfWidth) {
-    return {
-      x: node.position.x + Math.sign(deltaX || 1) * halfWidth,
-      y: node.position.y + clamp(deltaY, -halfHeight + 10, halfHeight - 10),
-    }
-  }
-
-  return {
-    x: node.position.x + clamp(deltaX, -halfWidth + 10, halfWidth - 10),
-    y: node.position.y + Math.sign(deltaY || 1) * halfHeight,
-  }
-}
-
-function buildCurvedHierarchyPath(source: Position, target: Position): string {
-  const controlOffset = Math.max(48, Math.abs(target.x - source.x) * 0.36)
-  const movingRight = target.x >= source.x
-  const controlX1 = movingRight ? source.x + controlOffset : source.x - controlOffset
-  const controlX2 = movingRight ? target.x - controlOffset : target.x + controlOffset
-  return `M ${source.x} ${source.y} C ${controlX1} ${source.y}, ${controlX2} ${target.y}, ${target.x} ${target.y}`
-}
-
-function buildOrthogonalHierarchyPath(source: Position, target: Position): string {
-  const bendX = source.x + (target.x - source.x) / 2
-  return `M ${source.x} ${source.y} L ${bendX} ${source.y} L ${bendX} ${target.y} L ${target.x} ${target.y}`
-}
-
-function buildRelationSegmentPath(source: Position, target: Position, edgeStyle: EdgeStyle): string {
-  return edgeStyle === 'orthogonal'
-    ? buildOrthogonalRelationSegmentPath(source, target)
-    : buildCurvedRelationSegmentPath(source, target)
-}
-
-function buildCurvedRelationSegmentPath(source: Position, target: Position): string {
-  const deltaX = target.x - source.x
-  const deltaY = target.y - source.y
-  if (Math.abs(deltaX) >= Math.abs(deltaY)) {
-    const controlOffset = clamp(Math.abs(deltaX) * 0.32, 20, 92) * Math.sign(deltaX || 1)
-    return `M ${source.x} ${source.y} C ${source.x + controlOffset} ${source.y}, ${target.x - controlOffset} ${target.y}, ${target.x} ${target.y}`
-  }
-
-  const controlOffset = clamp(Math.abs(deltaY) * 0.32, 20, 92) * Math.sign(deltaY || 1)
-  return `M ${source.x} ${source.y} C ${source.x} ${source.y + controlOffset}, ${target.x} ${target.y - controlOffset}, ${target.x} ${target.y}`
-}
-
-function buildOrthogonalRelationSegmentPath(source: Position, target: Position): string {
-  const points = buildOrthogonalRelationPolyline(source, target)
-  return points.map((point, index) => `${index === 0 ? 'M' : 'L'} ${point.x} ${point.y}`).join(' ')
-}
-
-function getRelationDefaultMidpoint(source: Position, target: Position, edgeStyle: EdgeStyle): Position {
-  if (edgeStyle !== 'orthogonal') {
-    return {
-      x: (source.x + target.x) / 2,
-      y: (source.y + target.y) / 2,
-    }
-  }
-
-  return polylineMidpoint(buildOrthogonalRelationPolyline(source, target))
-}
-
-function buildOrthogonalRelationPolyline(source: Position, target: Position): Position[] {
-  if (Math.abs(target.x - source.x) >= Math.abs(target.y - source.y)) {
-    const bendX = source.x + (target.x - source.x) / 2
-    return [source, { x: bendX, y: source.y }, { x: bendX, y: target.y }, target]
-  }
-
-  const bendY = source.y + (target.y - source.y) / 2
-  return [source, { x: source.x, y: bendY }, { x: target.x, y: bendY }, target]
-}
-
-function polylineMidpoint(points: Position[]): Position {
-  if (points.length < 2) {
-    return points[0] ?? { x: 0, y: 0 }
-  }
-
-  let totalLength = 0
-  for (let index = 1; index < points.length; index += 1) {
-    totalLength += Math.hypot(points[index].x - points[index - 1].x, points[index].y - points[index - 1].y)
-  }
-
-  const halfway = totalLength / 2
-  let traversed = 0
-  for (let index = 1; index < points.length; index += 1) {
-    const start = points[index - 1]
-    const end = points[index]
-    const segmentLength = Math.hypot(end.x - start.x, end.y - start.y)
-    if (traversed + segmentLength >= halfway) {
-      const segmentRatio = segmentLength === 0 ? 0 : (halfway - traversed) / segmentLength
-      return {
-        x: start.x + (end.x - start.x) * segmentRatio,
-        y: start.y + (end.y - start.y) * segmentRatio,
-      }
-    }
-    traversed += segmentLength
-  }
-
-  return points[points.length - 1]
-}
-
-function rectanglesOverlapCoords(
-  leftA: number,
-  topA: number,
-  rightA: number,
-  bottomA: number,
-  leftB: number,
-  topB: number,
-  rightB: number,
-  bottomB: number,
-): boolean {
-  return leftA <= rightB && rightA >= leftB && topA <= bottomB && bottomA >= topB
-}
-
-function escapeHtml(value: string): string {
-  return value
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;')
-    .replaceAll("'", '&#39;')
-}
-
-function escapeAttribute(value: string): string {
-  return escapeHtml(value)
-}
-
-function shorten(value: string, maxLength: number): string {
-  if (value.length <= maxLength) {
-    return value
-  }
-  return `${value.slice(0, Math.max(0, maxLength - 3))}...`
-}
-
-function normalizeAITemplateId(value: string): AITemplateId {
-  switch (value) {
-    case 'project-planning':
-      return 'project-planning'
-    case 'character-network':
-      return 'character-network'
-    default:
-      return 'concept-graph'
-  }
-}
-
-function templateLabel(templateId: AITemplateId, locale: Locale): string {
-  if (locale === 'zh-CN') {
-    switch (templateId) {
-      case 'project-planning':
-        return '项目规划图谱'
-      case 'character-network':
-        return '人物关系图谱'
-      default:
-        return '概念知识图谱'
-    }
-  }
-
-  switch (templateId) {
-    case 'project-planning':
-      return 'Project Planning Graph'
-    case 'character-network':
-      return 'Character Network'
-    default:
-      return 'Concept Graph'
-  }
-}
-
-function promptTemplateCopy(templateId: AITemplateId, locale: Locale): string {
-  if (locale === 'zh-CN') {
-    switch (templateId) {
-      case 'project-planning':
-        return '模板提示词：围绕目标、范围、里程碑、风险、依赖、资源和成功指标，生成一个可直接用于执行沟通的项目脑图。'
-      case 'character-network':
-        return '模板提示词：围绕人物、阵营、动机、冲突、盟友、关键事件，生成一个便于阅读关系线的角色网络图。'
-      default:
-        return '模板提示词：围绕定义、核心概念、机制、应用、对比、风险和案例，生成一个高密度概念知识图谱。'
-    }
-  }
-
-  switch (templateId) {
-    case 'project-planning':
-      return 'Template prompt: generate a project map around goals, scope, milestones, risks, dependencies, resources, and success metrics.'
-    case 'character-network':
-      return 'Template prompt: generate a character network around roles, factions, motivations, conflicts, alliances, and turning points.'
-    default:
-      return 'Template prompt: generate a concept graph around definition, components, mechanisms, applications, comparisons, risks, and examples.'
-  }
-}
-
-function createTemplateDocument(templateId: AITemplateId, locale: Locale): MindMapDocument {
-  const doc = createDefaultDocument()
-  const root = findRoot(doc)
-  const rootTitle =
-    templateId === 'project-planning'
-      ? locale === 'zh-CN'
-        ? '项目规划模板'
-        : 'Project Planning Template'
-      : templateId === 'character-network'
-        ? locale === 'zh-CN'
-          ? '人物关系模板'
-          : 'Character Network Template'
-        : locale === 'zh-CN'
-          ? '概念图谱模板'
-          : 'Concept Graph Template'
-
-  root.title = rootTitle
-  doc.title = rootTitle
-
-  const now = new Date().toISOString()
-  const addNode = (title: string, x: number, y: number, parentId = 'root', priority: Priority = ''): string => {
-    const node = createNode({
-      title,
-      position: { x, y },
-      kind: parentId ? 'topic' : 'floating',
-      parentId: parentId || undefined,
-    })
-    node.priority = priority
-    node.createdAt = now
-    node.updatedAt = now
-    doc.nodes.push(node)
-    return node.id
-  }
-
-  if (templateId === 'project-planning') {
-    const goals = addNode(locale === 'zh-CN' ? '目标' : 'Goals', root.position.x + 280, root.position.y - 140, 'root', 'P1')
-    const scope = addNode(locale === 'zh-CN' ? '范围' : 'Scope', root.position.x + 280, root.position.y - 20)
-    const timeline = addNode(locale === 'zh-CN' ? '里程碑' : 'Milestones', root.position.x + 280, root.position.y + 120)
-    const risks = addNode(locale === 'zh-CN' ? '风险' : 'Risks', root.position.x - 280, root.position.y - 90)
-    const resources = addNode(locale === 'zh-CN' ? '资源' : 'Resources', root.position.x - 280, root.position.y + 70)
-    const metrics = addNode(locale === 'zh-CN' ? '指标' : 'Metrics', root.position.x - 280, root.position.y + 190)
-    addNode(locale === 'zh-CN' ? '验收标准' : 'Acceptance', root.position.x + 560, root.position.y - 140, goals)
-    addNode(locale === 'zh-CN' ? '边界' : 'Boundaries', root.position.x + 560, root.position.y - 20, scope)
-    addNode(locale === 'zh-CN' ? '关键日期' : 'Dates', root.position.x + 560, root.position.y + 120, timeline)
-    addNode(locale === 'zh-CN' ? '依赖' : 'Dependencies', root.position.x - 560, root.position.y - 120, risks)
-    addNode(locale === 'zh-CN' ? '预算' : 'Budget', root.position.x - 560, root.position.y + 30, resources)
-    addNode(locale === 'zh-CN' ? '复盘' : 'Review', root.position.x - 560, root.position.y + 210, metrics)
-    doc.relations.push(createTemplateRelation(scope, timeline, locale === 'zh-CN' ? '影响排期' : 'affects timeline'))
-    doc.relations.push(createTemplateRelation(resources, risks, locale === 'zh-CN' ? '缓解' : 'mitigates'))
-  } else if (templateId === 'character-network') {
-    const roles = addNode(locale === 'zh-CN' ? '主要角色' : 'Main Roles', root.position.x + 280, root.position.y - 130)
-    const factions = addNode(locale === 'zh-CN' ? '阵营' : 'Factions', root.position.x + 280, root.position.y + 20)
-    const motives = addNode(locale === 'zh-CN' ? '动机' : 'Motivations', root.position.x - 280, root.position.y - 70)
-    const conflicts = addNode(locale === 'zh-CN' ? '冲突' : 'Conflicts', root.position.x - 280, root.position.y + 120, 'root', 'P1')
-    const hero = addNode(locale === 'zh-CN' ? '主角' : 'Protagonist', root.position.x + 560, root.position.y - 180, roles)
-    const rival = addNode(locale === 'zh-CN' ? '对手' : 'Rival', root.position.x + 560, root.position.y - 70, roles)
-    const guild = addNode(locale === 'zh-CN' ? '公会' : 'Guild', root.position.x + 560, root.position.y + 20, factions)
-    const empire = addNode(locale === 'zh-CN' ? '帝国' : 'Empire', root.position.x + 560, root.position.y + 120, factions)
-    const freedom = addNode(locale === 'zh-CN' ? '自由' : 'Freedom', root.position.x - 560, root.position.y - 90, motives)
-    const revenge = addNode(locale === 'zh-CN' ? '复仇' : 'Revenge', root.position.x - 560, root.position.y + 10, motives)
-    const betrayal = addNode(locale === 'zh-CN' ? '背叛' : 'Betrayal', root.position.x - 560, root.position.y + 120, conflicts)
-    doc.relations.push(createTemplateRelation(hero, rival, locale === 'zh-CN' ? '宿敌' : 'rivals'))
-    doc.relations.push(createTemplateRelation(guild, freedom, locale === 'zh-CN' ? '推动' : 'drives'))
-    doc.relations.push(createTemplateRelation(empire, betrayal, locale === 'zh-CN' ? '诱发' : 'triggers'))
-    doc.relations.push(createTemplateRelation(revenge, rival, locale === 'zh-CN' ? '针对' : 'targets'))
-  } else {
-    const definition = addNode(locale === 'zh-CN' ? '定义' : 'Definition', root.position.x + 280, root.position.y - 150, 'root', 'P1')
-    const concepts = addNode(locale === 'zh-CN' ? '核心概念' : 'Core Concepts', root.position.x + 280, root.position.y - 10)
-    const workflow = addNode(locale === 'zh-CN' ? '工作流' : 'Workflow', root.position.x + 280, root.position.y + 130)
-    const applications = addNode(locale === 'zh-CN' ? '应用场景' : 'Use Cases', root.position.x - 280, root.position.y - 100)
-    const tradeoffs = addNode(locale === 'zh-CN' ? '权衡' : 'Tradeoffs', root.position.x - 280, root.position.y + 40)
-    const examples = addNode(locale === 'zh-CN' ? '案例' : 'Examples', root.position.x - 280, root.position.y + 180)
-    const ontology = addNode(locale === 'zh-CN' ? '本体' : 'Ontology', root.position.x + 560, root.position.y - 60, concepts)
-    const entities = addNode(locale === 'zh-CN' ? '实体与关系' : 'Entities & Edges', root.position.x + 560, root.position.y + 20, concepts)
-    const pipeline = addNode(locale === 'zh-CN' ? '采集到推理' : 'Ingest to Reasoning', root.position.x + 560, root.position.y + 130, workflow)
-    const recommendation = addNode(locale === 'zh-CN' ? '推荐系统' : 'Recommendation', root.position.x - 560, root.position.y - 120, applications)
-    const quality = addNode(locale === 'zh-CN' ? '数据质量' : 'Data Quality', root.position.x - 560, root.position.y + 40, tradeoffs)
-    const search = addNode(locale === 'zh-CN' ? '搜索增强' : 'Search Augment', root.position.x - 560, root.position.y + 180, examples)
-    doc.relations.push(createTemplateRelation(ontology, quality, locale === 'zh-CN' ? '依赖一致性' : 'needs consistency'))
-    doc.relations.push(createTemplateRelation(recommendation, entities, locale === 'zh-CN' ? '使用' : 'uses'))
-    doc.relations.push(createTemplateRelation(search, pipeline, locale === 'zh-CN' ? '接入' : 'plugs into'))
-    doc.relations.push(createTemplateRelation(definition, applications, locale === 'zh-CN' ? '落地到' : 'applies to'))
-  }
-
-  touchDocument(doc)
-  return doc
-}
-
-function createTemplateRelation(sourceId: string, targetId: string, label: string): RelationEdge {
-  const now = new Date().toISOString()
-  return {
-    id: createId('rel'),
-    sourceId,
-    targetId,
-    label,
-    createdAt: now,
-    updatedAt: now,
-  }
-}
-
-function normalizedRelationPairKey(left: string, right: string): string {
-  return left < right ? `${left}::${right}` : `${right}::${left}`
-}
-
-function buildGraphFrame(
-  document: MindMapDocument,
-  width: number,
-  height: number,
-  rotation: number,
-  tilt: number,
-  graphZoom: number,
-  searchQuery: string,
-  selectedNodeId: string | null,
-): {
-  nodes: Array<{
-    id: string
-    x: number
-    y: number
-    radius: number
-    label: string
-    color: NodeColor
-    opacity: number
-    occlusionOpacity: number
-    surfaceOpacity: number
-    strokeOpacity: number
-    textOpacity: number
-    lineWidth: number
-    fontSize: number
-    glow: number
-    selected: boolean
-    highlighted: boolean
-  }>
-  edges: Array<{ x1: number; y1: number; x2: number; y2: number; opacity: number; lineWidth: number; type: 'hierarchy' | 'relation' }>
-  hitNodes: GraphHitNode[]
-} {
-  const root = findRoot(document)
-  const query = searchQuery.trim().toLowerCase()
-  const centerX = width / 2
-  const centerY = height / 2 + height * 0.04
-  const cameraDistance = Math.max(880, Math.min(width, height) * 1.68)
-  const minScale = 0.58
-  const maxScale = 1.74
-  const nodeById = new Map(document.nodes.map((node) => [node.id, node] as const))
-  const childrenByParent = new Map<string, MindNode[]>()
-  const siblingPlacement = new Map<string, { centeredIndex: number; count: number }>()
-  let maxAbsOffsetX = 1
-  let maxAbsOffsetY = 1
-
-  for (const node of document.nodes) {
-    maxAbsOffsetX = Math.max(maxAbsOffsetX, Math.abs(node.position.x - root.position.x))
-    maxAbsOffsetY = Math.max(maxAbsOffsetY, Math.abs(node.position.y - root.position.y))
-    if (!node.parentId) {
-      continue
-    }
-
-    const siblings = childrenByParent.get(node.parentId) ?? []
-    siblings.push(node)
-    childrenByParent.set(node.parentId, siblings)
-  }
-
-  for (const siblings of childrenByParent.values()) {
-    const orderedSiblings = [...siblings].sort((left, right) => {
-      return left.position.y - right.position.y || left.position.x - right.position.x || left.title.localeCompare(right.title)
-    })
-    const midpoint = (orderedSiblings.length - 1) / 2
-    orderedSiblings.forEach((sibling, index) => {
-      siblingPlacement.set(sibling.id, {
-        centeredIndex: index - midpoint,
-        count: orderedSiblings.length,
-      })
-    })
-  }
-
-  const planeScale = clamp(
-    Math.min((width * 0.34) / maxAbsOffsetX, (height * 0.28) / maxAbsOffsetY),
-    0.12,
-    0.72,
-  ) * graphZoom
-  const depthSpread = clamp(0.9 + (graphZoom - 1) * 0.38, 0.72, 1.34)
-  const base3dById = new Map<string, { x: number; y: number; z: number }>()
-  const projected = new Map<
-    string,
-    {
-      id: string
-      x: number
-      y: number
-      radius: number
-      depth: number
-      z: number
-      scale: number
-      color: NodeColor
-      opacity: number
-      occlusionOpacity: number
-      surfaceOpacity: number
-      strokeOpacity: number
-      textOpacity: number
-      lineWidth: number
-      fontSize: number
-      glow: number
-      selected: boolean
-      highlighted: boolean
-      label: string
-    }
-  >()
-
-  const nodesByDepth = [...document.nodes].sort((left, right) => {
-    return (
-      graphNodeDepth(document, left) - graphNodeDepth(document, right) ||
-      left.position.y - right.position.y ||
-      left.position.x - right.position.x ||
-      left.title.localeCompare(right.title)
-    )
-  })
-
-  nodesByDepth.forEach((node) => {
-    const depth = graphNodeDepth(document, node)
-    const relationCount = connectedRelations(document, node.id).length
-    const siblingMeta = siblingPlacement.get(node.id)
-    const siblingOffset = siblingMeta?.centeredIndex ?? 0
-    let baseX = 0
-    let baseY = 0
-    let baseZ = 0
-
-    if (node.id === root.id) {
-      baseZ = -26 * depthSpread
-    } else {
-      const parent = node.parentId ? nodeById.get(node.parentId) : undefined
-      if (parent) {
-        const parentBase = base3dById.get(parent.id) ?? { x: 0, y: 0, z: 0 }
-        const rawDx = (node.position.x - parent.position.x) * planeScale
-        const rawDy = (node.position.y - parent.position.y) * planeScale
-        const branchDistance = Math.hypot(rawDx, rawDy)
-        const branchAngle = Math.atan2(rawDy || 0.001, rawDx || 1)
-        const lateralSpacing = clamp(branchDistance * 0.16, 10, 26)
-        const crossX = -Math.sin(branchAngle)
-        const crossY = Math.cos(branchAngle)
-
-        baseX = parentBase.x + rawDx + crossX * siblingOffset * lateralSpacing * 0.28
-        baseY = parentBase.y + rawDy + crossY * siblingOffset * lateralSpacing * 0.22
-        baseZ = parentBase.z + (clamp(branchDistance * 0.22 + depth * 3.5, 18, 52) + siblingOffset * 8 + relationCount * 4) * depthSpread
-      } else {
-        const rawDx = (node.position.x - root.position.x) * planeScale
-        const rawDy = (node.position.y - root.position.y) * planeScale
-        const radialDistance = Math.hypot(rawDx, rawDy)
-        const branchAngle = Math.atan2(rawDy || 0.001, rawDx || 1)
-
-        baseX = rawDx
-        baseY = rawDy
-        baseZ = (clamp(radialDistance * 0.18 + depth * 18, 12, 72) + Math.sin(branchAngle) * 8) * depthSpread
-      }
-    }
-
-    base3dById.set(node.id, {
-      x: baseX,
-      y: baseY,
-      z: baseZ,
-    })
-
-    const yawX = baseX * Math.cos(rotation) - baseZ * Math.sin(rotation)
-    const yawZ = baseX * Math.sin(rotation) + baseZ * Math.cos(rotation)
-    const pitchY = baseY * Math.cos(tilt) - yawZ * Math.sin(tilt)
-    const pitchZ = baseY * Math.sin(tilt) + yawZ * Math.cos(tilt)
-    const scale = clamp(cameraDistance / (cameraDistance + pitchZ), minScale, maxScale)
-    const depthProgress = clamp((scale - minScale) / (maxScale - minScale), 0, 1)
-    const x = centerX + yawX * scale
-    const y = centerY + pitchY * scale - pitchZ * 0.08
-    const radiusBase = clamp(11 + relationCount * 1.4 + (node.kind === 'root' ? 10 : 0), 11, 28)
-    const radius = radiusBase * clamp(0.74 + depthProgress * 0.72, 0.74, 1.46)
-    const selected = node.id === selectedNodeId
-    const highlighted = selected || (query !== '' && node.title.toLowerCase().includes(query))
-    const emphasisBoost = selected ? 0.2 : highlighted ? 0.1 : 0
-    projected.set(node.id, {
-      id: node.id,
-      x,
-      y,
-      radius,
-      depth,
-      z: pitchZ,
-      scale,
-      color: normalizeNodeColor(node.color),
-      opacity: clamp(0.2 + depthProgress * 0.78 + emphasisBoost, 0.2, 1),
-      occlusionOpacity: clamp(0.9 + depthProgress * 0.08, 0.9, 0.98),
-      surfaceOpacity: clamp(0.72 + depthProgress * 0.24 + emphasisBoost * 0.08, 0.72, 0.98),
-      strokeOpacity: clamp(0.28 + depthProgress * 0.48 + emphasisBoost * 0.18, 0.28, 0.96),
-      textOpacity: clamp(0.56 + depthProgress * 0.36 + emphasisBoost * 0.12, 0.56, 1),
-      lineWidth: clamp(1 + depthProgress * 1.6 + (selected ? 0.45 : 0), 1, 3.05),
-      fontSize: clamp((selected ? 15 : highlighted ? 13 : 12) + depthProgress * 3, 12, 18),
-      glow: clamp(8 + depthProgress * 14 + (selected ? 8 : highlighted ? 4 : 0), 8, 30),
-      selected,
-      highlighted,
-      label: shorten(node.title, selected ? 18 : highlighted ? 12 : 6),
-    })
-  })
-
-  const edges: Array<{ x1: number; y1: number; x2: number; y2: number; opacity: number; lineWidth: number; type: 'hierarchy' | 'relation' }> = []
-  for (const node of document.nodes) {
-    if (!node.parentId) {
-      continue
-    }
-
-    const source = projected.get(node.parentId)
-    const target = projected.get(node.id)
-    if (!source || !target) {
-      continue
-    }
-
-    const trimmed = trimGraphEdge(source, target)
-    edges.push({
-      x1: trimmed.x1,
-      y1: trimmed.y1,
-      x2: trimmed.x2,
-      y2: trimmed.y2,
-      opacity: clamp((source.opacity + target.opacity) / 2 * 0.6, 0.1, 0.76),
-      lineWidth: clamp((source.lineWidth + target.lineWidth) / 2 * 0.72, 0.9, 2.2),
-      type: 'hierarchy',
-    })
-  }
-
-  for (const relation of document.relations) {
-    const source = projected.get(relation.sourceId)
-    const target = projected.get(relation.targetId)
-    if (!source || !target) {
-      continue
-    }
-
-    const trimmed = trimGraphEdge(source, target)
-    edges.push({
-      x1: trimmed.x1,
-      y1: trimmed.y1,
-      x2: trimmed.x2,
-      y2: trimmed.y2,
-      opacity: clamp((source.opacity + target.opacity) / 2 * 0.7, 0.12, 0.88),
-      lineWidth: clamp((source.lineWidth + target.lineWidth) / 2 * 0.9, 1, 2.6),
-      type: 'relation',
-    })
-  }
-
-  const nodes = [...projected.values()].sort((left, right) => right.z - left.z || left.depth - right.depth)
-  return {
-    nodes,
-    edges,
-    hitNodes: [...nodes].reverse().map((node) => ({
-      id: node.id,
-      x: node.x,
-      y: node.y,
-      radius: node.radius,
-    })),
-  }
-}
-
-function trimGraphEdge(
-  source: { x: number; y: number; radius: number; lineWidth: number },
-  target: { x: number; y: number; radius: number; lineWidth: number },
-): { x1: number; y1: number; x2: number; y2: number } {
-  const dx = target.x - source.x
-  const dy = target.y - source.y
-  const distance = Math.hypot(dx, dy)
-  if (distance < 0.0001) {
-    return {
-      x1: source.x,
-      y1: source.y,
-      x2: target.x,
-      y2: target.y,
-    }
-  }
-
-  const unitX = dx / distance
-  const unitY = dy / distance
-  const sourcePadding = source.radius + Math.max(4.5, source.lineWidth * 1.5)
-  const targetPadding = target.radius + Math.max(4.5, target.lineWidth * 1.5)
-  const safeDistance = Math.max(distance - sourcePadding - targetPadding, 0)
-  return {
-    x1: source.x + unitX * sourcePadding,
-    y1: source.y + unitY * sourcePadding,
-    x2: source.x + unitX * (sourcePadding + safeDistance),
-    y2: source.y + unitY * (sourcePadding + safeDistance),
-  }
-}
-
-function traceRoundedRectPath(
-  context: CanvasRenderingContext2D,
-  x: number,
-  y: number,
-  width: number,
-  height: number,
-  radius: number,
-): void {
-  const safeRadius = Math.min(radius, width / 2, height / 2)
-  context.moveTo(x + safeRadius, y)
-  context.lineTo(x + width - safeRadius, y)
-  context.quadraticCurveTo(x + width, y, x + width, y + safeRadius)
-  context.lineTo(x + width, y + height - safeRadius)
-  context.quadraticCurveTo(x + width, y + height, x + width - safeRadius, y + height)
-  context.lineTo(x + safeRadius, y + height)
-  context.quadraticCurveTo(x, y + height, x, y + height - safeRadius)
-  context.lineTo(x, y + safeRadius)
-  context.quadraticCurveTo(x, y, x + safeRadius, y)
-}
-
-function graphNodeDepth(document: MindMapDocument, node: MindNode): number {
-  let depth = 0
-  let current = node
-  while (current.parentId) {
-    const parent = findNode(document, current.parentId)
-    if (!parent) {
-      break
-    }
-    depth += 1
-    current = parent
-  }
-  return depth
-}
-
-function buildNodeDimensionStyle(node: MindNode, preview?: { width: number; height: number }): string {
-  const styles: string[] = []
-  if (preview) {
-    styles.push(`width: ${Math.max(preview.width, MIN_NODE_WIDTH)}px;`)
-    styles.push(`height: ${Math.max(preview.height, MIN_NODE_HEIGHT)}px;`)
-    styles.push('max-width: none;')
-  } else if (node.width) {
-    styles.push(`width: ${Math.max(node.width, MIN_NODE_WIDTH)}px;`)
-    styles.push('max-width: none;')
-  }
-  if (!preview && node.height) {
-    styles.push(`height: ${Math.max(node.height, MIN_NODE_HEIGHT)}px;`)
-  }
-  return styles.join(' ')
-}
-
-function nodeVisibleTitle(node: MindNode): string {
-  return node.title
-}
-
-function buildNodeColorStyle(color: NodeColor): string {
-  const palette = resolveNodeColorPalette(color)
-  if (!palette) {
-    return ''
-  }
-
-  return `--node-color: ${palette.accent}; --node-color-text-override: ${palette.text};`
-}
-
-function normalizeNodeColor(value: string | null | undefined): NodeColor {
-  return NODE_COLOR_VALUES.includes(value as NodeColor) ? (value as NodeColor) : ''
-}
-
-function normalizeNodeNote(value: string | null | undefined): string | undefined {
-  if (typeof value !== 'string') {
-    return undefined
-  }
-
-  const normalized = value.replace(/\r\n/g, '\n').trim()
-  return normalized ? normalized : undefined
-}
-
-function deriveNoteChildTitle(parent: MindNode, note: string, locale: Locale): string {
-  const normalized = note.replace(/\s+/g, ' ').trim()
-  const firstChunk = normalized.split(/(?<=[。！？.!?])\s+|\n+/).find((item) => item.trim().length > 0) ?? normalized
-  const maxLength = locale === 'zh-CN' ? 18 : 28
-  const compact = shorten(firstChunk.trim(), maxLength)
-
-  if (compact.length >= (locale === 'zh-CN' ? 6 : 10)) {
-    return compact
-  }
-
-  return locale === 'zh-CN' ? `${parent.title} 注释` : `${parent.title} Note`
-}
-
-function resolveNodeColorPalette(color: NodeColor): NodeColorPalette | null {
-  return color ? NODE_COLOR_PALETTES[color] : null
-}
-
-function rgbaFromRgb(rgb: [number, number, number], alpha: number): string {
-  return `rgba(${rgb[0]}, ${rgb[1]}, ${rgb[2]}, ${clamp(alpha, 0, 1)})`
-}
-
-function applyAlphaToHex(hex: string, alpha: number): string {
-  const rgb = hexToRgb(hex)
-  return rgbaFromRgb(rgb ?? [241, 245, 249], alpha)
-}
-
-function hexToRgb(hex: string): [number, number, number] | null {
-  const normalized = hex.trim().replace('#', '')
-  const expanded = normalized.length === 3 ? normalized.split('').map((value) => `${value}${value}`).join('') : normalized
-  if (expanded.length !== 6) {
-    return null
-  }
-
-  const value = Number.parseInt(expanded, 16)
-  if (Number.isNaN(value)) {
-    return null
-  }
-
-  return [
-    (value >> 16) & 0xff,
-    (value >> 8) & 0xff,
-    value & 0xff,
-  ]
-}
-
-function formatRelativeTime(value: string, locale: Locale): string {
-  const targetTime = Date.parse(value)
-  if (Number.isNaN(targetTime)) {
-    return value
-  }
-
-  const diffMinutes = Math.round((targetTime - Date.now()) / (60 * 1000))
-  const formatter = new Intl.RelativeTimeFormat(locale, { numeric: 'auto' })
-  const absMinutes = Math.abs(diffMinutes)
-
-  if (absMinutes < 60) {
-    return formatter.format(diffMinutes, 'minute')
-  }
-
-  const diffHours = Math.round(diffMinutes / 60)
-  if (Math.abs(diffHours) < 24) {
-    return formatter.format(diffHours, 'hour')
-  }
-
-  const diffDays = Math.round(diffHours / 24)
-  if (Math.abs(diffDays) < 30) {
-    return formatter.format(diffDays, 'day')
-  }
-
-  const diffMonths = Math.round(diffDays / 30)
-  if (Math.abs(diffMonths) < 12) {
-    return formatter.format(diffMonths, 'month')
-  }
-
-  const diffYears = Math.round(diffDays / 365)
-  return formatter.format(diffYears, 'year')
-}
-
-function clampMin(value: number, min: number): number {
-  return Math.max(value, min)
-}
-
-function clamp(value: number, min: number, max: number): number {
-  return Math.min(Math.max(value, min), max)
-}
-
-function getWorkspaceBounds(document: MindMapDocument): WorkspaceBounds {
-  let minX = 0
-  let minY = 0
-  let maxX = WORKSPACE_MIN_WIDTH
-  let maxY = WORKSPACE_MIN_HEIGHT
-
-  for (const node of document.nodes) {
-    const childCount = childrenOf(document, node.id).length
-    const nodeWidth = estimateNodeWidth(node, childCount)
-    const nodeHeight = estimateNodeHeight(node, childCount, nodeWidth)
-    minX = Math.min(minX, node.position.x - nodeWidth / 2 - WORKSPACE_PADDING)
-    minY = Math.min(minY, node.position.y - nodeHeight / 2 - WORKSPACE_PADDING)
-    maxX = Math.max(maxX, node.position.x + nodeWidth / 2 + WORKSPACE_PADDING)
-    maxY = Math.max(maxY, node.position.y + nodeHeight / 2 + WORKSPACE_PADDING)
-  }
-
-  // Also account for region boxes
-  if (document.regions) {
-    for (const region of document.regions) {
-      minX = Math.min(minX, region.position.x - region.width / 2 - WORKSPACE_PADDING)
-      minY = Math.min(minY, region.position.y - region.height / 2 - WORKSPACE_PADDING)
-      maxX = Math.max(maxX, region.position.x + region.width / 2 + WORKSPACE_PADDING)
-      maxY = Math.max(maxY, region.position.y + region.height / 2 + WORKSPACE_PADDING)
-    }
-  }
-
-  const width = Math.max(WORKSPACE_MIN_WIDTH, Math.ceil(maxX - minX))
-  const height = Math.max(WORKSPACE_MIN_HEIGHT, Math.ceil(maxY - minY))
-  return {
-    minX,
-    minY,
-    width,
-    height,
-    originX: -minX,
-    originY: -minY,
-  }
-}
-
-function nodeCenter(node: MindNode): Position {
-  return {
-    x: node.position.x,
-    y: node.position.y,
-  }
-}
-
-function downloadTextFile(filename: string, content: string): void {
-  const blob = new Blob([content], { type: 'text/plain;charset=utf-8' })
-  const url = URL.createObjectURL(blob)
-  const anchor = document.createElement('a')
-  anchor.href = url
-  anchor.download = filename
-  anchor.click()
-  URL.revokeObjectURL(url)
-}
-
-function slugify(value: string): string {
-  const normalized = value
-    .trim()
-    .toLowerCase()
-    .replaceAll(/[^a-z0-9\u4e00-\u9fa5]+/g, '-')
-    .replaceAll(/^-+|-+$/g, '')
-
-  return normalized || 'code-mind'
-}
-
-function isTypingTarget(target: EventTarget | null): boolean {
-  return target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement
-}
-
-function parsePixelValue(value: string | null | undefined): number {
-  const parsed = Number.parseFloat(value ?? '')
-  return Number.isFinite(parsed) ? parsed : 0
-}
-
-function directionalPrimaryDelta(direction: string, deltaX: number, deltaY: number): number {
-  if (direction === 'ArrowUp') {
-    return -deltaY
-  }
-  if (direction === 'ArrowDown') {
-    return deltaY
-  }
-  if (direction === 'ArrowLeft') {
-    return -deltaX
-  }
-  return deltaX
-}
-
-function directionalCrossDelta(direction: string, deltaX: number, deltaY: number): number {
-  if (direction === 'ArrowUp' || direction === 'ArrowDown') {
-    return deltaX
-  }
-  return deltaY
-}
-
-function getAIDebugInfo(error: unknown): AIDebugInfo | undefined {
-  if (!error || typeof error !== 'object' || !('debug' in error)) {
-    return undefined
-  }
-
-  const candidate = (error as { debug?: Partial<AIDebugInfo> }).debug
-  if (!candidate) {
-    return undefined
-  }
-
-  return {
-    rawMode: Boolean(candidate.rawMode),
-    upstreamRequest: typeof candidate.upstreamRequest === 'string' ? candidate.upstreamRequest : '',
-    upstreamResponse: typeof candidate.upstreamResponse === 'string' ? candidate.upstreamResponse : '',
-    assistantContent: typeof candidate.assistantContent === 'string' ? candidate.assistantContent : '',
-  }
-}
-
-function getErrorMessage(error: unknown): string {
-  if (error instanceof Error) {
-    return error.message
-  }
-  return 'Unknown error'
-}
-
-function cloneDocument(document: MindMapDocument): MindMapDocument {
-  return JSON.parse(JSON.stringify(document)) as MindMapDocument
-}
-
-function normalizeClientRect(startX: number, startY: number, endX: number, endY: number): DOMRect {
-  const left = Math.min(startX, endX)
-  const top = Math.min(startY, endY)
-  const width = Math.abs(endX - startX)
-  const height = Math.abs(endY - startY)
-  return new DOMRect(left, top, width, height)
-}
-
-function rectanglesIntersect(left: Pick<DOMRect, 'left' | 'right' | 'top' | 'bottom'>, right: Pick<DOMRect, 'left' | 'right' | 'top' | 'bottom'>): boolean {
-  return left.left <= right.right && left.right >= right.left && left.top <= right.bottom && left.bottom >= right.top
-}
-
-function requiredElement<T extends Element>(root: ParentNode, selector: string): T {
-  const element = root.querySelector<T>(selector)
-  if (!element) {
-    throw new Error(`Missing required element: ${selector}`)
-  }
-  return element
 }

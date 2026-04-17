@@ -1,4 +1,13 @@
-import type { AppPreferences, CanvasDragAction, ChromeLayout, EdgeStyle, GestureAction, LayoutMode, Locale, TopPanelPosition } from './types'
+import type {
+  AppPreferences,
+  CanvasDragAction,
+  ChromeLayout,
+  EdgeStyle,
+  GestureAction,
+  LayoutMode,
+  Locale,
+  TopPanelPosition,
+} from './types'
 
 const STORAGE_KEY = 'code-mind.preferences'
 export const DEFAULT_LM_STUDIO_URL = 'http://127.0.0.1:1234/v1'
@@ -64,8 +73,13 @@ export function loadPreferences(): AppPreferences {
   try {
     const parsed = JSON.parse(raw) as Partial<AppPreferences>
     const parsedInteraction = (parsed.interaction ?? {}) as Partial<AppPreferences['interaction']>
-    const legacyCanvasInteraction = parsedInteraction as Partial<Record<'canvasLeftLongPressAction' | 'canvasMiddleLongPressAction' | 'canvasRightLongPressAction', unknown>>
-    const legacyLongPressAction = normalizeGestureAction(parsedInteraction.longPressAction, defaults.interaction.longPressAction)
+    const legacyCanvasInteraction = parsedInteraction as Partial<
+      Record<'canvasLeftLongPressAction' | 'canvasMiddleLongPressAction' | 'canvasRightLongPressAction', unknown>
+    >
+    const legacyLongPressAction = normalizeGestureAction(
+      parsedInteraction.longPressAction,
+      defaults.interaction.longPressAction,
+    )
     const usesLegacySplitLongPressDefaults =
       parsedInteraction.leftLongPressAction === 'ai-wheel' &&
       (parsedInteraction.middleLongPressAction === undefined || parsedInteraction.middleLongPressAction === 'none') &&
@@ -77,7 +91,10 @@ export function loadPreferences(): AppPreferences {
     const rawLeftLongPressAction = usesLegacySplitLongPressDefaults
       ? defaults.interaction.leftLongPressAction
       : normalizeGestureAction(parsedInteraction.leftLongPressAction, defaults.interaction.leftLongPressAction)
-    const rawMiddleLongPressAction = normalizeGestureAction(parsedInteraction.middleLongPressAction, defaults.interaction.middleLongPressAction)
+    const rawMiddleLongPressAction = normalizeGestureAction(
+      parsedInteraction.middleLongPressAction,
+      defaults.interaction.middleLongPressAction,
+    )
     const leftLongPress = resolveSplitLongPressActions(
       rawLeftLongPressAction,
       parsedInteraction.canvasLeftDragAction ?? legacyCanvasInteraction.canvasLeftLongPressAction,
@@ -107,16 +124,28 @@ export function loadPreferences(): AppPreferences {
         topPanelPosition: normalizeTopPanelPosition(parsed.appearance?.topPanelPosition),
       },
       interaction: {
-        dragSubtreeWithParent: normalizeBoolean(parsedInteraction.dragSubtreeWithParent, defaults.interaction.dragSubtreeWithParent),
+        dragSubtreeWithParent: normalizeBoolean(
+          parsedInteraction.dragSubtreeWithParent,
+          defaults.interaction.dragSubtreeWithParent,
+        ),
         dragSnap: normalizeBoolean(parsedInteraction.dragSnap, defaults.interaction.dragSnap),
-        autoLayoutOnCollapse: normalizeBoolean(parsedInteraction.autoLayoutOnCollapse, defaults.interaction.autoLayoutOnCollapse),
+        autoLayoutOnCollapse: normalizeBoolean(
+          parsedInteraction.autoLayoutOnCollapse,
+          defaults.interaction.autoLayoutOnCollapse,
+        ),
         autoSnapshots: normalizeBoolean(parsedInteraction.autoSnapshots, defaults.interaction.autoSnapshots),
         aiQuickChildren: normalizeBoolean(parsedInteraction.aiQuickChildren, defaults.interaction.aiQuickChildren),
         aiQuickSiblings: normalizeBoolean(parsedInteraction.aiQuickSiblings, defaults.interaction.aiQuickSiblings),
         aiQuickNotes: normalizeBoolean(parsedInteraction.aiQuickNotes, defaults.interaction.aiQuickNotes),
         aiQuickRelations: normalizeBoolean(parsedInteraction.aiQuickRelations, defaults.interaction.aiQuickRelations),
-        doubleClickAction: normalizeGestureAction(parsedInteraction.doubleClickAction, defaults.interaction.doubleClickAction),
-        tripleClickAction: normalizeGestureAction(parsedInteraction.tripleClickAction, defaults.interaction.tripleClickAction),
+        doubleClickAction: normalizeGestureAction(
+          parsedInteraction.doubleClickAction,
+          defaults.interaction.doubleClickAction,
+        ),
+        tripleClickAction: normalizeGestureAction(
+          parsedInteraction.tripleClickAction,
+          defaults.interaction.tripleClickAction,
+        ),
         longPressAction: rightLongPress.nodeAction,
         leftLongPressAction: leftLongPress.nodeAction,
         middleLongPressAction: middleLongPress.nodeAction,
@@ -157,7 +186,10 @@ function normalizeLocale(value: string | undefined): Locale | null {
 }
 
 export function normalizeEdgeStyle(value: unknown): EdgeStyle {
-  return value === 'orthogonal' ? 'orthogonal' : 'curve'
+  if (value === 'orthogonal' || value === 'hidden') {
+    return value
+  }
+  return 'curve'
 }
 
 export function normalizeLayoutMode(value: unknown): LayoutMode {
@@ -204,10 +236,7 @@ export function normalizeGestureAction(value: unknown, fallback: GestureAction =
   }
 }
 
-export function normalizeCanvasDragAction(
-  value: unknown,
-  fallback: CanvasDragAction = 'none',
-): CanvasDragAction {
+export function normalizeCanvasDragAction(value: unknown, fallback: CanvasDragAction = 'none'): CanvasDragAction {
   switch (value) {
     case 'pan-canvas':
     case 'marquee-select':
