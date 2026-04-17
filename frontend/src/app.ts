@@ -198,6 +198,7 @@ class MindMapApp {
   private pendingEditorOptions: EditorLaunchOptions | null = null
   private activeEditorAnchorLeft: number | null = null
   private activeEditorPreview: ActiveEditorPreviewState | null = null
+  private editingOriginalTitle: string | null = null
   private nodeEditorMeasureCanvas: HTMLCanvasElement | null = null
   private pendingImportMode: PendingImportMode = 'auto'
   private workspaceBounds: WorkspaceBounds = {
@@ -1316,6 +1317,12 @@ class MindMapApp {
       return
     }
 
+    if (event.key === 'Escape' && this.state.editingNodeId) {
+      event.preventDefault()
+      this.cancelNodeEditor()
+      return
+    }
+
     const activeTypingTarget = isTypingTarget(document.activeElement)
     if (
       this.state.view !== 'map' ||
@@ -2025,7 +2032,7 @@ class MindMapApp {
                   <p class="eyebrow" data-app-eyebrow></p>
                   <div class="top-panel-title-row">
                     <h1 data-app-title></h1>
-                    <p class="status-pill" data-app-status></p>
+                    <p class="status-pill" data-app-status aria-live="polite"></p>
                   </div>
                 </div>
                 <div class="top-panel-actions">
@@ -2226,7 +2233,7 @@ class MindMapApp {
             <p class="eyebrow">${this.t('app.eyebrow')}</p>
             <strong>${escapeHtml(this.state.document.title)}</strong>
           </div>
-          <p class="fixed-toolbar-status">${escapeHtml(this.t(this.state.status.key, this.state.status.values))}</p>
+          <p class="fixed-toolbar-status" aria-live="polite">${escapeHtml(this.t(this.state.status.key, this.state.status.values))}</p>
         </div>
 
         <div class="fixed-toolbar-menus">
@@ -4783,6 +4790,7 @@ class MindMapApp {
   }
 
   private openNodeEditor(nodeId: string, options: EditorLaunchOptions = {}): void {
+    this.editingOriginalTitle = this.findNode(nodeId)?.title ?? null
     this.state.editingNodeId = nodeId
     this.activeEditorAnchorLeft = this.resolveNodeEditorAnchorLeft(nodeId)
     this.activeEditorPreview = this.resolveNodeEditorPreviewState(nodeId)
@@ -4835,6 +4843,20 @@ class MindMapApp {
     this.pendingEditorOptions = null
     this.activeEditorAnchorLeft = null
     this.activeEditorPreview = null
+    this.editingOriginalTitle = null
+  }
+
+  private cancelNodeEditor(): void {
+    const nodeId = this.state.editingNodeId
+    if (!nodeId) {
+      return
+    }
+    const node = this.findNode(nodeId)
+    if (node && this.editingOriginalTitle !== null) {
+      node.title = this.editingOriginalTitle
+    }
+    this.clearNodeEditorState()
+    this.render()
   }
 
   private commitNodeEditor(
