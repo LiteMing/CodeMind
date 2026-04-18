@@ -7411,13 +7411,51 @@ class MindMapApp {
     }
     const scroll = this.refs.scroll
     const rect = scroll.getBoundingClientRect()
-    const bounds = getWorkspaceBounds(this.state.document)
-    const scaleX = rect.width / bounds.width
-    const scaleY = rect.height / bounds.height
-    const fitScale = clamp(Math.min(scaleX, scaleY) * 0.9, MIN_ZOOM, MAX_ZOOM)
+    const nodes = this.state.document.nodes
+    const regions = this.state.document.regions ?? []
+
+    if (nodes.length === 0 && regions.length === 0) {
+      this.viewport.scale = 1
+      this.viewport.x = (rect.width - this.workspaceBounds.width) / 2
+      this.viewport.y = (rect.height - this.workspaceBounds.height) / 2
+      this.applyCanvasMetrics()
+      this.updateCanvasViewportView()
+      this.renderInspector()
+      return
+    }
+
+    let minX = Infinity
+    let minY = Infinity
+    let maxX = -Infinity
+    let maxY = -Infinity
+    for (const node of nodes) {
+      const childCount = childrenOf(this.state.document, node.id).length
+      const width = node.width ?? estimateNodeWidth(node, childCount)
+      const height = node.height ?? estimateNodeHeight(node, childCount, width)
+      minX = Math.min(minX, node.position.x - width / 2)
+      minY = Math.min(minY, node.position.y - height / 2)
+      maxX = Math.max(maxX, node.position.x + width / 2)
+      maxY = Math.max(maxY, node.position.y + height / 2)
+    }
+    for (const region of regions) {
+      minX = Math.min(minX, region.position.x - region.width / 2)
+      minY = Math.min(minY, region.position.y - region.height / 2)
+      maxX = Math.max(maxX, region.position.x + region.width / 2)
+      maxY = Math.max(maxY, region.position.y + region.height / 2)
+    }
+    const contentWidth = Math.max(1, maxX - minX)
+    const contentHeight = Math.max(1, maxY - minY)
+
+    const margin = 80
+    const availableWidth = Math.max(1, rect.width - margin * 2)
+    const availableHeight = Math.max(1, rect.height - margin * 2)
+    const fitScale = clamp(Math.min(availableWidth / contentWidth, availableHeight / contentHeight), MIN_ZOOM, MAX_ZOOM)
+
+    const layerCenterX = (minX + maxX) / 2 + this.workspaceBounds.originX
+    const layerCenterY = (minY + maxY) / 2 + this.workspaceBounds.originY
     this.viewport.scale = fitScale
-    this.viewport.x = (rect.width - bounds.width * fitScale) / 2
-    this.viewport.y = (rect.height - bounds.height * fitScale) / 2
+    this.viewport.x = rect.width / 2 - layerCenterX * fitScale
+    this.viewport.y = rect.height / 2 - layerCenterY * fitScale
     this.applyCanvasMetrics()
     this.updateCanvasViewportView()
     this.renderInspector()
