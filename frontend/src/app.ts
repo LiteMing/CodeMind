@@ -5163,7 +5163,9 @@ class MindMapApp {
   }
 
   private async runCommand(rawCommand: string): Promise<void> {
-    const [command, argument = ''] = rawCommand.split(':')
+    const colonIdx = rawCommand.indexOf(':')
+    const command = colonIdx === -1 ? rawCommand : rawCommand.slice(0, colonIdx)
+    const argument = colonIdx === -1 ? '' : rawCommand.slice(colonIdx + 1)
 
     try {
       switch (command) {
