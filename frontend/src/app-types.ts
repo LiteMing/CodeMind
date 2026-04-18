@@ -79,6 +79,20 @@ export interface RegionDragState {
   historyCaptured: boolean
 }
 
+export type RegionResizeHandle = 'nw' | 'n' | 'ne' | 'e' | 'se' | 's' | 'sw' | 'w'
+
+export interface RegionResizeState {
+  regionId: string
+  handle: RegionResizeHandle
+  startX: number
+  startY: number
+  startCenterX: number
+  startCenterY: number
+  startWidth: number
+  startHeight: number
+  historyCaptured: boolean
+}
+
 export interface ConnectorDragState {
   sourceNodeId: string
   pointerId: number
@@ -211,6 +225,7 @@ export interface AppState {
   selectedRelationId: string | null
   regionDraw: RegionDrawState | null
   regionDrag: RegionDragState | null
+  regionResize: RegionResizeState | null
   connectorDrag: ConnectorDragState | null
   midpointDrag: MidpointDragState | null
   dirty: boolean

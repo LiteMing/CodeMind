@@ -277,6 +277,7 @@ class MindMapApp {
       selectedRelationId: null,
       regionDraw: null,
       regionDrag: null,
+      regionResize: null,
       connectorDrag: null,
       midpointDrag: null,
       dirty: false,
@@ -680,6 +681,30 @@ class MindMapApp {
       }
     }
 
+    // Handle region box resize
+    const regionResizerEl = element.closest<HTMLElement>('[data-region-resizer]')
+    if (regionResizerEl && event.button === 0) {
+      const handle = regionResizerEl.dataset.regionResizer as import('./app-types').RegionResizeHandle
+      const regionId = regionResizerEl.dataset.regionResizerId
+      const region = regionId ? this.state.document.regions?.find((r) => r.id === regionId) : null
+      if (region && handle) {
+        this.selectRegion(region.id)
+        this.state.regionResize = {
+          regionId: region.id,
+          handle,
+          startX: event.clientX,
+          startY: event.clientY,
+          startCenterX: region.position.x,
+          startCenterY: region.position.y,
+          startWidth: region.width,
+          startHeight: region.height,
+          historyCaptured: false,
+        }
+        event.preventDefault()
+        return
+      }
+    }
+
     // Handle region box drag
     const regionDragEl = element.closest<HTMLElement>('[data-region-drag]')
     if (regionDragEl && event.button === 0 && !this.state.regionDraw) {
@@ -903,6 +928,50 @@ class MindMapApp {
       this.state.regionDraw.currentCanvasX = docPos.x
       this.state.regionDraw.currentCanvasY = docPos.y
       this.renderRegionDrawPreview()
+      event.preventDefault()
+      return
+    }
+
+    // Region resize
+    if (this.state.regionResize) {
+      const rs = this.state.regionResize
+      const scale = this.viewport.scale
+      const dx = (event.clientX - rs.startX) / scale
+      const dy = (event.clientY - rs.startY) / scale
+      if (!rs.historyCaptured && (Math.abs(dx) > 1 || Math.abs(dy) > 1)) {
+        this.captureHistory()
+        rs.historyCaptured = true
+      }
+      const MIN_REGION = 30
+      const h = rs.handle
+      let newW = rs.startWidth
+      let newH = rs.startHeight
+      let newCx = rs.startCenterX
+      let newCy = rs.startCenterY
+      // horizontal
+      if (h === 'w' || h === 'nw' || h === 'sw') {
+        newW = Math.max(MIN_REGION, rs.startWidth - dx)
+        newCx = rs.startCenterX + (rs.startWidth - newW) / 2
+      } else if (h === 'e' || h === 'ne' || h === 'se') {
+        newW = Math.max(MIN_REGION, rs.startWidth + dx)
+        newCx = rs.startCenterX + (newW - rs.startWidth) / 2
+      }
+      // vertical
+      if (h === 'n' || h === 'nw' || h === 'ne') {
+        newH = Math.max(MIN_REGION, rs.startHeight - dy)
+        newCy = rs.startCenterY + (rs.startHeight - newH) / 2
+      } else if (h === 's' || h === 'sw' || h === 'se') {
+        newH = Math.max(MIN_REGION, rs.startHeight + dy)
+        newCy = rs.startCenterY + (newH - rs.startHeight) / 2
+      }
+      const region = this.state.document.regions?.find((r) => r.id === rs.regionId)
+      if (region) {
+        region.width = Math.round(newW)
+        region.height = Math.round(newH)
+        region.position = { x: Math.round(newCx), y: Math.round(newCy) }
+        region.updatedAt = new Date().toISOString()
+        this.renderWorkspace()
+      }
       event.preventDefault()
       return
     }
@@ -1214,6 +1283,18 @@ class MindMapApp {
       return
     }
 
+    // Region resize finish
+    if (this.state.regionResize) {
+      const wasResized = this.state.regionResize.historyCaptured
+      this.state.regionResize = null
+      if (wasResized) {
+        touchDocument(this.state.document)
+        this.renderWorkspace()
+        this.scheduleAutosave('status.layoutSaveScheduled')
+      }
+      return
+    }
+
     // Region drag finish
     if (this.state.regionDrag) {
       const wasMoved = this.state.regionDrag.historyCaptured
@@ -1395,7 +1476,23 @@ class MindMapApp {
     if (event.key === 'Escape' && this.state.regionDraw) {
       event.preventDefault()
       this.state.regionDraw = null
+      this.refs?.scroll?.classList.remove('is-region-drawing')
       this.render()
+      return
+    }
+
+    if (event.key === 'Escape' && this.state.regionResize) {
+      event.preventDefault()
+      // Restore original dimensions
+      const rs = this.state.regionResize
+      const region = this.state.document.regions?.find((r) => r.id === rs.regionId)
+      if (region) {
+        region.width = rs.startWidth
+        region.height = rs.startHeight
+        region.position = { x: rs.startCenterX, y: rs.startCenterY }
+      }
+      this.state.regionResize = null
+      this.renderWorkspace()
       return
     }
 
@@ -2716,13 +2813,16 @@ class MindMapApp {
 
     // Region context menu
     if (this.state.contextMenu.regionId) {
+      const ctxRegion = this.state.document.regions?.find((r) => r.id === this.state.contextMenu!.regionId)
+      const currentRegionColor = ctxRegion?.color ?? ''
       return `
         <section class="context-menu" data-context-menu style="left: ${Math.round(left)}px; top: ${Math.round(top)}px;">
           <p class="section-label">${this.t('context.regionActions')}</p>
           ${NODE_COLOR_VALUES.filter((c) => c !== '')
             .map((color) => {
               const palette = NODE_COLOR_PALETTES[color as Exclude<NodeColor, ''>]
-              return `<button type="button" class="chip-button context-menu-button" data-command="set-region-color:${color}:${this.state.contextMenu!.regionId}" style="border-left: 4px solid ${palette.accent};">${this.t(palette.labelKey)}</button>`
+              const activeClass = color === currentRegionColor ? ' is-active' : ''
+              return `<button type="button" class="chip-button context-menu-button${activeClass}" data-command="set-region-color:${color}:${this.state.contextMenu!.regionId}" style="border-left: 4px solid ${palette.accent};">${this.t(palette.labelKey)}</button>`
             })
             .join('')}
           <div class="context-menu-divider"></div>
@@ -5345,13 +5445,15 @@ class MindMapApp {
       currentCanvasY: 0,
       color: 'blue',
     }
-    this.setStatus('status.regionCreated')
+    this.refs?.scroll?.classList.add('is-region-drawing')
+    this.setStatus('status.regionDrawHint')
     this.render()
   }
 
   private finishRegionDraw(x: number, y: number, w: number, h: number): void {
     if (w < 30 || h < 30) {
       this.state.regionDraw = null
+      this.refs?.scroll?.classList.remove('is-region-drawing')
       this.render()
       return
     }
@@ -5372,6 +5474,7 @@ class MindMapApp {
     this.captureHistory()
     this.state.document.regions.push(region)
     this.state.regionDraw = null
+    this.refs?.scroll?.classList.remove('is-region-drawing')
     touchDocument(this.state.document)
     this.setStatus('status.regionCreated')
     this.render()
@@ -5438,23 +5541,32 @@ class MindMapApp {
     }
     const originX = this.workspaceBounds.originX
     const originY = this.workspaceBounds.originY
+    const HANDLES: readonly string[] = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w']
     return this.state.document.regions
       .map((region) => {
         const palette = resolveNodeColorPalette(region.color)
         const accent = palette?.accent ?? '#60a5fa'
         const bgColor = palette ? `rgba(${palette.surfaceRgb.join(',')}, 0.12)` : 'rgba(96,165,250,0.08)'
         const borderColor = palette ? `rgba(${palette.accentRgb.join(',')}, 0.4)` : 'rgba(96,165,250,0.3)'
-        const selectedClass = this.state.selectedRegionId === region.id ? ' is-selected' : ''
+        const isSelected = this.state.selectedRegionId === region.id
+        const selectedClass = isSelected ? ' is-selected' : ''
         const w = region.width
         const h = region.height
         const left = region.position.x - w / 2 + originX
         const top = region.position.y - h / 2 + originY
+        const handles = isSelected
+          ? HANDLES.map(
+              (dir) =>
+                `<div class="region-resizer region-resizer-${dir}" data-region-resizer="${dir}" data-region-resizer-id="${region.id}"></div>`,
+            ).join('')
+          : ''
         return `<div class="region-box${selectedClass}" data-region-id="${region.id}" data-region-drag="${region.id}" style="
         left: ${left}px; top: ${top}px; width: ${w}px; height: ${h}px;
         background: ${bgColor}; border: 2px dashed ${borderColor};
         --region-accent: ${accent};
       ">
         <span class="region-label">${escapeHtml(region.label)}</span>
+        ${handles}
       </div>`
       })
       .join('')
@@ -6548,7 +6660,7 @@ class MindMapApp {
     this.setSelection([findRoot(document).id], findRoot(document).id)
     this.state.connectSourceNodeId = null
     this.state.resize = null
-    this.viewport.scale = 1
+    this.state.regionResize = null
     this.didInitializeViewport = false
     this.refs = null
     this.resetHistory()
@@ -7064,6 +7176,7 @@ class MindMapApp {
     this.state.drag = null
     this.pan = null
     this.state.resize = null
+    this.state.regionResize = null
     this.state.contextMenu = null
     this.state.marquee = null
     this.applyTheme()
