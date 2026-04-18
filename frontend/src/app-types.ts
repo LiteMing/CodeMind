@@ -213,6 +213,7 @@ export interface AppState {
   regionDrag: RegionDragState | null
   connectorDrag: ConnectorDragState | null
   midpointDrag: MidpointDragState | null
+  dirty: boolean
 }
 
 export interface ShellRefs {
@@ -221,6 +222,7 @@ export interface ShellRefs {
   fixedToolbar: HTMLElement
   eyebrow: HTMLParagraphElement
   title: HTMLHeadingElement
+  saveIndicator: HTMLElement
   status: HTMLParagraphElement
   homeButton: HTMLButtonElement
   topPanelButton: HTMLButtonElement
@@ -248,6 +250,8 @@ export interface ShellRefs {
   settingsLayer: HTMLElement
   onboardingLayer: HTMLElement
   overlayLayer: HTMLElement
+  zoomControls: HTMLElement
+  zoomLevel: HTMLElement
   aiLayer: HTMLElement
   graphLayer: HTMLElement
 }

@@ -279,6 +279,7 @@ class MindMapApp {
       regionDrag: null,
       connectorDrag: null,
       midpointDrag: null,
+      dirty: false,
     }
 
     this.applyLocale()
@@ -1361,6 +1362,24 @@ class MindMapApp {
       return
     }
 
+    if ((event.ctrlKey || event.metaKey) && (event.key === '=' || event.key === '+')) {
+      event.preventDefault()
+      this.zoomBy(1.25)
+      return
+    }
+
+    if ((event.ctrlKey || event.metaKey) && event.key === '-') {
+      event.preventDefault()
+      this.zoomBy(0.8)
+      return
+    }
+
+    if ((event.ctrlKey || event.metaKey) && event.key === '0') {
+      event.preventDefault()
+      this.zoomReset()
+      return
+    }
+
     if ((event.ctrlKey || event.metaKey) && !event.shiftKey && event.key.toLowerCase() === 'c') {
       event.preventDefault()
       this.copySelectedSubtree()
@@ -2032,6 +2051,7 @@ class MindMapApp {
                   <p class="eyebrow" data-app-eyebrow></p>
                   <div class="top-panel-title-row">
                     <h1 data-app-title></h1>
+                    <span class="save-indicator" data-save-indicator></span>
                     <p class="status-pill" data-app-status aria-live="polite"></p>
                   </div>
                 </div>
@@ -2078,6 +2098,13 @@ class MindMapApp {
 
           <aside class="inspector" data-inspector></aside>
           <div class="overlay-layer" data-overlay-layer></div>
+          <div class="zoom-controls" data-zoom-controls>
+            <button type="button" class="zoom-button" data-command="zoom-out" title="">−</button>
+            <span class="zoom-level" data-zoom-level></span>
+            <button type="button" class="zoom-button" data-command="zoom-in" title="">+</button>
+            <button type="button" class="zoom-button" data-command="zoom-reset" title=""></button>
+            <button type="button" class="zoom-button" data-command="zoom-fit" title=""></button>
+          </div>
           <div data-ai-layer></div>
           <div data-graph-layer></div>
           <div data-settings-layer></div>
@@ -2092,6 +2119,7 @@ class MindMapApp {
       fixedToolbar: requiredElement(this.rootEl, '[data-fixed-toolbar]'),
       eyebrow: requiredElement(this.rootEl, '[data-app-eyebrow]'),
       title: requiredElement(this.rootEl, '[data-app-title]'),
+      saveIndicator: requiredElement(this.rootEl, '[data-save-indicator]'),
       status: requiredElement(this.rootEl, '[data-app-status]'),
       homeButton: requiredElement(this.rootEl, '[data-command="go-home"]'),
       topPanelButton: requiredElement(this.rootEl, '[data-role="top-panel-button"]'),
@@ -2119,6 +2147,8 @@ class MindMapApp {
       settingsLayer: requiredElement(this.rootEl, '[data-settings-layer]'),
       onboardingLayer: requiredElement(this.rootEl, '[data-onboarding-layer]'),
       overlayLayer: requiredElement(this.rootEl, '[data-overlay-layer]'),
+      zoomControls: requiredElement(this.rootEl, '[data-zoom-controls]'),
+      zoomLevel: requiredElement(this.rootEl, '[data-zoom-level]'),
       aiLayer: requiredElement(this.rootEl, '[data-ai-layer]'),
       graphLayer: requiredElement(this.rootEl, '[data-graph-layer]'),
     }
@@ -2139,6 +2169,8 @@ class MindMapApp {
     this.refs.fixedToolbar.innerHTML = chromeLayout === 'fixed' ? this.renderFixedToolbar() : ''
     this.refs.eyebrow.textContent = this.t('app.eyebrow')
     this.refs.title.textContent = this.state.document.title
+    this.refs.saveIndicator.classList.toggle('is-dirty', this.state.dirty)
+    this.refs.saveIndicator.title = this.t(this.state.dirty ? 'status.unsaved' : 'status.allSaved')
     this.refs.status.textContent = this.t(this.state.status.key, this.state.status.values)
     this.refs.homeButton.textContent = this.t('toolbar.home')
     this.refs.topPanelButton.textContent = this.t(this.state.topPanelCollapsed ? 'panel.top.show' : 'panel.top.hide')
@@ -2167,6 +2199,7 @@ class MindMapApp {
     this.refs.settingsButton.classList.toggle('is-active', this.state.settingsOpen)
     this.refs.panelButton.classList.toggle('is-active', !this.state.inspectorCollapsed)
     this.refs.topPanelButton.setAttribute('aria-pressed', String(!this.state.topPanelCollapsed))
+    this.updateZoomControlTitles()
     document.title = `${this.state.document.title} - Code Mind`
   }
 
@@ -2233,6 +2266,7 @@ class MindMapApp {
             <p class="eyebrow">${this.t('app.eyebrow')}</p>
             <strong>${escapeHtml(this.state.document.title)}</strong>
           </div>
+          <span class="save-indicator ${this.state.dirty ? 'is-dirty' : ''}" title="${escapeAttribute(this.t(this.state.dirty ? 'status.unsaved' : 'status.allSaved'))}"></span>
           <p class="fixed-toolbar-status" aria-live="polite">${escapeHtml(this.t(this.state.status.key, this.state.status.values))}</p>
         </div>
 
@@ -5118,6 +5152,18 @@ class MindMapApp {
         case 'auto-layout':
           this.autoLayout()
           return
+        case 'zoom-in':
+          this.zoomBy(1.25)
+          return
+        case 'zoom-out':
+          this.zoomBy(0.8)
+          return
+        case 'zoom-reset':
+          this.zoomReset()
+          return
+        case 'zoom-fit':
+          this.zoomFit()
+          return
         case 'export-markdown':
           await this.exportMarkdown()
           return
@@ -5578,6 +5624,7 @@ class MindMapApp {
       const savedDocument = await api.saveMap(this.state.document)
       this.state.document = savedDocument
       this.state.currentMapId = savedDocument.id
+      this.state.dirty = false
       await this.refreshMaps()
       this.maybeSaveAutoSnapshot(savedDocument)
       this.setStatus(statusKey, values)
@@ -7169,6 +7216,8 @@ class MindMapApp {
       window.clearTimeout(this.autosaveHandle)
     }
 
+    this.state.dirty = true
+
     this.autosaveHandle = window.setTimeout(() => {
       void this.saveDocument(statusKey, values)
     }, 700)
@@ -7180,6 +7229,83 @@ class MindMapApp {
 
   private setCanvasPanning(active: boolean): void {
     this.refs?.scroll.classList.toggle('is-panning', active)
+  }
+
+  private updateZoomControlTitles(): void {
+    if (!this.refs) {
+      return
+    }
+    const zc = this.refs.zoomControls
+    const btn = (cmd: string) => zc.querySelector<HTMLButtonElement>(`[data-command="${cmd}"]`)
+    const zoomOut = btn('zoom-out')
+    const zoomIn = btn('zoom-in')
+    const zoomReset = btn('zoom-reset')
+    const zoomFit = btn('zoom-fit')
+    if (zoomOut) zoomOut.title = this.t('zoom.out')
+    if (zoomIn) zoomIn.title = this.t('zoom.in')
+    if (zoomReset) {
+      zoomReset.title = this.t('zoom.reset')
+      zoomReset.textContent = this.t('zoom.reset')
+    }
+    if (zoomFit) {
+      zoomFit.title = this.t('zoom.fit')
+      zoomFit.textContent = this.t('zoom.fit')
+    }
+  }
+
+  private zoomBy(factor: number): void {
+    if (!this.refs) {
+      return
+    }
+    const scroll = this.refs.scroll
+    const rect = scroll.getBoundingClientRect()
+    const centerX = rect.width / 2
+    const centerY = rect.height / 2
+    const worldX = (centerX - this.viewport.x) / this.viewport.scale
+    const worldY = (centerY - this.viewport.y) / this.viewport.scale
+    const nextScale = clamp(this.viewport.scale * factor, MIN_ZOOM, MAX_ZOOM)
+    this.viewport.x = centerX - worldX * nextScale
+    this.viewport.y = centerY - worldY * nextScale
+    this.viewport.scale = nextScale
+    this.applyCanvasMetrics()
+    this.updateCanvasViewportView()
+    this.renderInspector()
+  }
+
+  private zoomReset(): void {
+    if (!this.refs) {
+      return
+    }
+    const scroll = this.refs.scroll
+    const rect = scroll.getBoundingClientRect()
+    const centerX = rect.width / 2
+    const centerY = rect.height / 2
+    const worldX = (centerX - this.viewport.x) / this.viewport.scale
+    const worldY = (centerY - this.viewport.y) / this.viewport.scale
+    this.viewport.x = centerX - worldX
+    this.viewport.y = centerY - worldY
+    this.viewport.scale = 1
+    this.applyCanvasMetrics()
+    this.updateCanvasViewportView()
+    this.renderInspector()
+  }
+
+  private zoomFit(): void {
+    if (!this.refs) {
+      return
+    }
+    const scroll = this.refs.scroll
+    const rect = scroll.getBoundingClientRect()
+    const bounds = getWorkspaceBounds(this.state.document)
+    const scaleX = rect.width / bounds.width
+    const scaleY = rect.height / bounds.height
+    const fitScale = clamp(Math.min(scaleX, scaleY) * 0.9, MIN_ZOOM, MAX_ZOOM)
+    this.viewport.scale = fitScale
+    this.viewport.x = (rect.width - bounds.width * fitScale) / 2
+    this.viewport.y = (rect.height - bounds.height * fitScale) / 2
+    this.applyCanvasMetrics()
+    this.updateCanvasViewportView()
+    this.renderInspector()
   }
 
   private clientToCanvasPosition(clientX: number, clientY: number): Position {
@@ -7208,6 +7334,7 @@ class MindMapApp {
     }
 
     this.refs.canvas.style.transform = `translate(${Math.round(this.viewport.x)}px, ${Math.round(this.viewport.y)}px)`
+    this.refs.zoomLevel.textContent = `${Math.round(this.viewport.scale * 100)}%`
   }
 
   private renderGraphResultsList(): string {

@@ -74,8 +74,7 @@ html {
   color: var(--text);
   background:
     radial-gradient(circle at top left, rgba(159, 167, 217, 0.18), transparent 26%),
-    radial-gradient(circle at bottom right, rgba(214, 224, 255, 0.18), transparent 24%),
-    var(--bg);
+    radial-gradient(circle at bottom right, rgba(214, 224, 255, 0.18), transparent 24%), var(--bg);
   overflow: hidden;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
@@ -127,8 +126,7 @@ kbd {
   overflow: auto;
   background:
     radial-gradient(circle at top left, rgba(159, 167, 217, 0.2), transparent 24%),
-    radial-gradient(circle at bottom right, rgba(205, 219, 255, 0.2), transparent 22%),
-    var(--bg);
+    radial-gradient(circle at bottom right, rgba(205, 219, 255, 0.2), transparent 22%), var(--bg);
 }
 
 .home-hero {
@@ -248,8 +246,7 @@ kbd {
   border-radius: 20px;
   border: 1px solid var(--line);
   background:
-    linear-gradient(145deg, color-mix(in srgb, var(--accent-soft) 48%, transparent), transparent 48%),
-    var(--surface);
+    linear-gradient(145deg, color-mix(in srgb, var(--accent-soft) 48%, transparent), transparent 48%), var(--surface);
 }
 
 .workspace-stage {
@@ -257,9 +254,7 @@ kbd {
   height: calc(100vh - 24px);
   border-radius: 32px;
   overflow: clip;
-  background:
-    radial-gradient(circle at top left, rgba(202, 211, 255, 0.16), transparent 20%),
-    var(--canvas);
+  background: radial-gradient(circle at top left, rgba(202, 211, 255, 0.16), transparent 20%), var(--canvas);
   border: 1px solid var(--line);
   box-shadow: var(--shadow-soft);
 }
@@ -303,9 +298,12 @@ kbd {
   background:
     radial-gradient(circle at center, rgba(158, 167, 216, 0.12), transparent 42%),
     linear-gradient(var(--canvas-grid) 1px, transparent 1px),
-    linear-gradient(90deg, var(--canvas-grid) 1px, transparent 1px),
-    var(--canvas);
-  background-size: auto, 32px 32px, 32px 32px, auto;
+    linear-gradient(90deg, var(--canvas-grid) 1px, transparent 1px), var(--canvas);
+  background-size:
+    auto,
+    32px 32px,
+    32px 32px,
+    auto;
 }
 
 .workspace-scroll.is-panning {
@@ -704,6 +702,80 @@ kbd {
 
 .overlay-layer.is-visible {
   display: block;
+}
+
+/* Zoom controls */
+.zoom-controls {
+  position: absolute;
+  left: 16px;
+  bottom: 16px;
+  z-index: 6;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px 6px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--panel-strong) 92%, transparent);
+  border: 1px solid var(--line);
+  backdrop-filter: blur(8px);
+  box-shadow: var(--shadow-card);
+}
+
+.zoom-button {
+  all: unset;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 28px;
+  height: 28px;
+  padding: 0 6px;
+  border-radius: 8px;
+  font-size: 0.78rem;
+  font-weight: 500;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition:
+    background 0.12s,
+    color 0.12s;
+}
+
+.zoom-button:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.zoom-button:active {
+  background: var(--active);
+}
+
+.zoom-level {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 44px;
+  height: 28px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-align: center;
+  user-select: none;
+}
+
+/* Save indicator */
+.save-indicator {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: transparent;
+  transition: background 0.2s;
+  flex-shrink: 0;
+  vertical-align: middle;
+  margin-left: 6px;
+}
+
+.save-indicator.is-dirty {
+  background: var(--accent);
 }
 
 .marquee-box {
@@ -1688,7 +1760,9 @@ kbd {
 .node-editor.is-all-selected {
   border-color: color-mix(in srgb, var(--accent) 78%, transparent);
   background: color-mix(in srgb, var(--accent-soft) 70%, var(--node));
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-soft) 82%, transparent), var(--shadow-card);
+  box-shadow:
+    0 0 0 3px color-mix(in srgb, var(--accent-soft) 82%, transparent),
+    var(--shadow-card);
 }
 
 .node-editor::selection {
@@ -1782,17 +1856,13 @@ kbd {
 
 .node-topic .node-shell,
 .node-topic .node-editor {
-  background:
-    linear-gradient(135deg, var(--node-soft), transparent 70%),
-    var(--node);
+  background: linear-gradient(135deg, var(--node-soft), transparent 70%), var(--node);
 }
 
 .node-floating .node-shell,
 .node-floating .node-editor {
   border-style: dashed;
-  background:
-    linear-gradient(135deg, rgba(241, 183, 103, 0.1), transparent 70%),
-    var(--node);
+  background: linear-gradient(135deg, rgba(241, 183, 103, 0.1), transparent 70%), var(--node);
 }
 
 .node-card.has-color .node-shell,
@@ -1821,18 +1891,24 @@ kbd {
 .node-card.is-selected .node-shell,
 .node-card.is-selected .node-editor {
   border-color: var(--accent);
-  box-shadow: 0 0 0 4px var(--accent-soft), var(--shadow-card);
+  box-shadow:
+    0 0 0 4px var(--accent-soft),
+    var(--shadow-card);
 }
 
 .node-card.is-selected-secondary .node-shell,
 .node-card.is-selected-secondary .node-editor {
   border-color: color-mix(in srgb, var(--accent) 72%, var(--node-border));
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-soft) 82%, transparent), var(--shadow-card);
+  box-shadow:
+    0 0 0 2px color-mix(in srgb, var(--accent-soft) 82%, transparent),
+    var(--shadow-card);
 }
 
 .node-card.is-connect-source .node-shell {
   border-color: var(--relation);
-  box-shadow: 0 0 0 4px rgba(241, 183, 103, 0.18), var(--shadow-card);
+  box-shadow:
+    0 0 0 4px rgba(241, 183, 103, 0.18),
+    var(--shadow-card);
 }
 
 .node-card.is-collapsed .node-shell {
@@ -2122,12 +2198,12 @@ code {
 }
 
 .region-box:hover {
-  box-shadow: 0 0 0 2px var(--region-accent, rgba(96,165,250,0.4));
+  box-shadow: 0 0 0 2px var(--region-accent, rgba(96, 165, 250, 0.4));
 }
 
 .region-box.is-selected {
   box-shadow:
-    0 0 0 2px var(--region-accent, rgba(96,165,250,0.72)),
+    0 0 0 2px var(--region-accent, rgba(96, 165, 250, 0.72)),
     0 18px 34px rgba(15, 23, 42, 0.18);
   border-style: solid !important;
 }
@@ -2164,7 +2240,9 @@ code {
   border: 2px solid var(--node);
   cursor: crosshair;
   opacity: 0;
-  transition: opacity 0.15s ease, transform 0.15s ease;
+  transition:
+    opacity 0.15s ease,
+    transform 0.15s ease;
   z-index: 10;
   padding: 0;
   appearance: none;

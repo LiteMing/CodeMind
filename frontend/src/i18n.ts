@@ -74,7 +74,8 @@ const messages = {
     'inspector.relationIdle': 'Manual relation mode is idle.',
     'inspector.relationConnecting': 'Connecting from "{{title}}". Click another node to finish or press Esc to cancel.',
     'inspector.relationPlaceholder': 'Optional relation label',
-    'inspector.deferredCopy': 'Multi-user collaboration, AI semantic relations, and 2D/3D graph view stay in docs/open-issues.md until this local editor path is stable.',
+    'inspector.deferredCopy':
+      'Multi-user collaboration, AI semantic relations, and 2D/3D graph view stay in docs/open-issues.md until this local editor path is stable.',
     'action.newChild': 'New Child',
     'action.newSibling': 'New Sibling',
     'action.newFloating': 'New Floating',
@@ -115,7 +116,8 @@ const messages = {
     'settings.layoutMode.balanced': 'Balanced',
     'settings.layoutMode.right': 'Right-side only',
     'settings.childGapX': 'Parent-child gap',
-    'settings.childGapXHint': 'Horizontal distance between the parent edge and child edge during auto layout and auto creation.',
+    'settings.childGapXHint':
+      'Horizontal distance between the parent edge and child edge during auto layout and auto creation.',
     'settings.chromeLayout': 'Chrome Layout',
     'settings.chromeLayout.floating': 'Floating Panel',
     'settings.chromeLayout.fixed': 'Fixed Panel',
@@ -155,10 +157,13 @@ const messages = {
     'settings.aiModel': 'Model',
     'settings.aiModelPlaceholder': 'Optional, for example qwen2.5-7b-instruct',
     'settings.aiMaxTokens': 'Max Output Tokens',
-    'settings.aiMaxTokensHint': 'Used by AI generation, node note completion, and semantic relation analysis. Increase this if generated maps or notes are too short.',
+    'settings.aiMaxTokensHint':
+      'Used by AI generation, node note completion, and semantic relation analysis. Increase this if generated maps or notes are too short.',
     'settings.aiTimeout': 'Timeout (seconds)',
-    'settings.aiTimeoutHint': 'Applies to upstream AI /models and /chat/completions requests. Increase this when remote models respond slowly.',
-    'settings.aiHint': 'These settings stay local. LM Studio can usually leave API Key empty; OpenAI-compatible endpoints often need it.',
+    'settings.aiTimeoutHint':
+      'Applies to upstream AI /models and /chat/completions requests. Increase this when remote models respond slowly.',
+    'settings.aiHint':
+      'These settings stay local. LM Studio can usually leave API Key empty; OpenAI-compatible endpoints often need it.',
     'settings.close': 'Close',
     'settings.language.zh-CN': '简体中文',
     'settings.language.en': 'English',
@@ -261,13 +266,17 @@ const messages = {
     'ai.expandAction': 'Expand Current Map',
     'ai.templateAction': 'Create Example Template',
     'ai.import': 'AI Import',
-    'ai.importHint': 'Use AI to normalize JSON, CSV, HTML, XML, YAML, Mermaid, logs, and other text-like files into the current mind-map schema.',
-    'ai.importPlaceholder': 'Optional: tell AI what to ignore, what hierarchy to preserve, or what to emphasize during import.',
+    'ai.importHint':
+      'Use AI to normalize JSON, CSV, HTML, XML, YAML, Mermaid, logs, and other text-like files into the current mind-map schema.',
+    'ai.importPlaceholder':
+      'Optional: tell AI what to ignore, what hierarchy to preserve, or what to emphasize during import.',
     'ai.importAction': 'Choose File for AI Import',
     'ai.notes': 'Complete Node Notes',
     'ai.notesSelectionHint': 'Complete notes for {{value}} selected node(s).',
-    'ai.notesAllHint': 'No non-root selection detected, so notes will be completed for {{value}} node(s) across the current map.',
-    'ai.notesPlaceholder': 'For example: add practical examples, explain tradeoffs, and expand existing notes instead of replacing them with generic text.',
+    'ai.notesAllHint':
+      'No non-root selection detected, so notes will be completed for {{value}} node(s) across the current map.',
+    'ai.notesPlaceholder':
+      'For example: add practical examples, explain tradeoffs, and expand existing notes instead of replacing them with generic text.',
     'ai.notesAction': 'Complete Notes',
     'ai.connect': 'Auto Relation Lines',
     'ai.connectHint': 'Analyze the current map with {{nodes}} nodes and {{relations}} relations.',
@@ -283,7 +292,8 @@ const messages = {
     'ai.lastResult': 'Latest AI Result',
     'ai.templateExamples': 'Built-in AI Templates',
     'ai.templateExamplesTitle': 'Example Prompt and Template Maps',
-    'ai.templateExamplesCopy': 'Each card creates a ready-to-edit example mind map that also mirrors the prompt style used for AI generation.',
+    'ai.templateExamplesCopy':
+      'Each card creates a ready-to-edit example mind map that also mirrors the prompt style used for AI generation.',
     'graph.title': '3D Floating Graph',
     'graph.subtitle': 'Use search and selection to inspect large node sets, then jump back to the editable mind map.',
     'graph.focusAction': 'Jump to Mind Map',
@@ -350,6 +360,12 @@ const messages = {
     'context.regionActions': 'Region actions',
     'inspector.regions': 'Regions',
     'inspector.regionsCount': 'Regions: {{value}}',
+    'zoom.in': 'Zoom In',
+    'zoom.out': 'Zoom Out',
+    'zoom.reset': 'Reset Zoom',
+    'zoom.fit': 'Fit to View',
+    'status.unsaved': 'Unsaved changes',
+    'status.allSaved': 'All changes saved',
   },
   'zh-CN': {
     'app.eyebrow': '本地优先思维导图',
@@ -396,7 +412,8 @@ const messages = {
     'panel.side.show': '\u5c55\u5f00\u53f3\u4fa7\u9762\u677f',
     'panel.side.hide': '\u6536\u8d77\u53f3\u4fa7\u9762\u677f',
     'inspector.noneSelected': '\u672a\u9009\u4e2d\u8282\u70b9',
-    'inspector.emptySelectionCopy': '\u70b9\u51fb\u4efb\u610f\u8282\u70b9\u53ef\u67e5\u770b\u8be6\u60c5\uff0c\u53cc\u51fb\u53ef\u5feb\u901f\u91cd\u547d\u540d\u3002',
+    'inspector.emptySelectionCopy':
+      '\u70b9\u51fb\u4efb\u610f\u8282\u70b9\u53ef\u67e5\u770b\u8be6\u60c5\uff0c\u53cc\u51fb\u53ef\u5feb\u901f\u91cd\u547d\u540d\u3002',
     'context.node': '节点操作',
     'context.canvas': '画布操作',
     'context.selectionCount': '已选中 {{value}} 个节点',
@@ -424,7 +441,8 @@ const messages = {
     'inspector.relationIdle': '手动关系模式当前未启用。',
     'inspector.relationConnecting': '正在从“{{title}}”建立关系。点击另一个节点完成，或按 Esc 取消。',
     'inspector.relationPlaceholder': '可选的关系说明',
-    'inspector.deferredCopy': '多人协作、AI 语义连线和 2D/3D 图谱视图暂时继续放在 docs/open-issues.md，先把本地编辑器路径做稳。',
+    'inspector.deferredCopy':
+      '多人协作、AI 语义连线和 2D/3D 图谱视图暂时继续放在 docs/open-issues.md，先把本地编辑器路径做稳。',
     'action.newChild': '新建子节点',
     'action.newSibling': '新建同级',
     'action.newFloating': '新建自由节点',
@@ -505,7 +523,8 @@ const messages = {
     'settings.aiModel': '模型名',
     'settings.aiModelPlaceholder': '可选，例如 qwen2.5-7b-instruct',
     'settings.aiMaxTokens': '最大输出 Tokens',
-    'settings.aiMaxTokensHint': '会同时用于 AI 生成脑图、节点注释补全和语义连线分析。若生成内容或注释过短，就把这里调大。',
+    'settings.aiMaxTokensHint':
+      '会同时用于 AI 生成脑图、节点注释补全和语义连线分析。若生成内容或注释过短，就把这里调大。',
     'settings.aiTimeout': '超时时间（秒）',
     'settings.aiTimeoutHint': '会用于上游 AI 的 /models 和 /chat/completions 请求。远程模型响应较慢时，可以适当调大。',
     'settings.aiHint': '这些设置先保存在本地。LM Studio 一般可以不填 API Key；OpenAI 兼容接口通常需要填写。',
@@ -574,7 +593,8 @@ const messages = {
     'status.themeSaveScheduled': '主题变更已加入待保存队列。',
     'status.layoutSaveScheduled': '布局变更已加入待保存队列。',
     'status.prioritySaveScheduled': '优先级变更已加入待保存队列。',
-    'status.colorSaveScheduled': '\u8282\u70b9\u989c\u8272\u53d8\u66f4\u5df2\u52a0\u5165\u5f85\u4fdd\u5b58\u961f\u5217\u3002',
+    'status.colorSaveScheduled':
+      '\u8282\u70b9\u989c\u8272\u53d8\u66f4\u5df2\u52a0\u5165\u5f85\u4fdd\u5b58\u961f\u5217\u3002',
     'status.deletionSaveScheduled': '删除操作已加入待保存队列。',
     'status.relationSaveScheduled': '关系线已加入待保存队列。',
     'status.relationRemovalSaveScheduled': '关系线移除已加入待保存队列。',
@@ -611,7 +631,8 @@ const messages = {
     'ai.expandAction': 'AI 拓展当前脑图',
     'ai.templateAction': '创建示例模板',
     'ai.import': 'AI 导入',
-    'ai.importHint': '将 JSON、CSV、HTML、XML、YAML、Mermaid、日志等文本格式整理为当前思维导图 schema；普通 MD/TXT 仍可直接规则导入。',
+    'ai.importHint':
+      '将 JSON、CSV、HTML、XML、YAML、Mermaid、日志等文本格式整理为当前思维导图 schema；普通 MD/TXT 仍可直接规则导入。',
     'ai.importPlaceholder': '可选：说明导入时要忽略什么、保留什么层级、重点强调什么信息。',
     'ai.importAction': '选择文件并 AI 导入',
     'ai.notes': 'AI 补全节点注释',
@@ -700,6 +721,12 @@ const messages = {
     'context.regionActions': '区域操作',
     'inspector.regions': '区域框',
     'inspector.regionsCount': '区域框：{{value}}',
+    'zoom.in': '放大',
+    'zoom.out': '缩小',
+    'zoom.reset': '重置缩放',
+    'zoom.fit': '适合视图',
+    'status.unsaved': '有未保存的更改',
+    'status.allSaved': '所有更改已保存',
   },
 } as const
 
