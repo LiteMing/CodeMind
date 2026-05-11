@@ -104,6 +104,7 @@ func (s *Server) handleNodeBatchPost(w http.ResponseWriter, r *http.Request, map
 		return
 	}
 
+	s.recordAPIModification(mapID)
 	writeJSON(w, http.StatusOK, batchResponse{
 		Results:      results,
 		DeletedCount: deletedCount,

@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"code-mind/internal/mindmap"
@@ -34,9 +35,10 @@ var (
 )
 
 type Server struct {
-	store       *store.FileStore
-	httpClient  *http.Client
-	settingsDir string
+	store            *store.FileStore
+	httpClient       *http.Client
+	settingsDir      string
+	apiModifications sync.Map // map[string]time.Time — tracks last API modification time per mapId
 }
 
 type importRequest struct {
@@ -381,6 +383,9 @@ func (s *Server) handleMapByID(w http.ResponseWriter, r *http.Request) {
 		case subPath == "version":
 			s.handleMapVersion(w, r, mapID)
 			return
+		case subPath == "poll":
+			s.handleMapPoll(w, r, mapID)
+			return
 		}
 	}
 
@@ -526,6 +531,57 @@ func (s *Server) handleMapVersion(w http.ResponseWriter, r *http.Request, mapID 
 	writeJSON(w, http.StatusOK, mapVersionResponse{
 		LastEditedAt: doc.Meta.LastEditedAt,
 		NodeCount:    len(doc.Nodes),
+	})
+}
+
+// recordAPIModification records the current time as the last API modification for a map.
+func (s *Server) recordAPIModification(mapID string) {
+	s.apiModifications.Store(mapID, time.Now().UTC())
+}
+
+// pollResponse is the response for GET /api/maps/{mapId}/poll.
+type pollResponse struct {
+	LastEditedAt   time.Time `json:"lastEditedAt"`
+	NodeCount      int       `json:"nodeCount"`
+	ModifiedViaAPI bool      `json:"modifiedViaAPI"`
+}
+
+func (s *Server) handleMapPoll(w http.ResponseWriter, r *http.Request, mapID string) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", "GET")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	doc, err := s.store.Load(mapID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, err)
+		return
+	}
+
+	modifiedViaAPI := false
+	sinceStr := r.URL.Query().Get("since")
+	if sinceStr != "" {
+		since, parseErr := time.Parse(time.RFC3339Nano, sinceStr)
+		if parseErr == nil {
+			if val, ok := s.apiModifications.Load(mapID); ok {
+				lastMod := val.(time.Time)
+				if lastMod.After(since) {
+					modifiedViaAPI = true
+				}
+			}
+		}
+	} else {
+		// If no since parameter, just check if there's any recorded API modification
+		if _, ok := s.apiModifications.Load(mapID); ok {
+			modifiedViaAPI = true
+		}
+	}
+
+	writeJSON(w, http.StatusOK, pollResponse{
+		LastEditedAt:   doc.Meta.LastEditedAt,
+		NodeCount:      len(doc.Nodes),
+		ModifiedViaAPI: modifiedViaAPI,
 	})
 }
 

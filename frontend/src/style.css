@@ -1513,6 +1513,20 @@ kbd {
   margin-bottom: 2px;
 }
 
+.collab-api-key-display {
+  font-family: monospace;
+  word-break: break-all;
+  min-height: 1.6em;
+  user-select: none;
+}
+
+.collab-api-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+
 .graph-sheet {
   position: absolute;
   inset: 20px;
@@ -2379,4 +2393,49 @@ code {
 
 .edge-midpoint-dot:hover {
   r: 8;
+}
+
+/* API polling toast notification */
+.api-toast {
+  position: fixed;
+  top: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(99, 102, 241, 0.92);
+  color: #ffffff;
+  padding: 10px 20px;
+  border-radius: 12px;
+  font-size: 14px;
+  font-weight: 500;
+  z-index: 9999;
+  pointer-events: none;
+  animation: toastSlideIn 0.3s ease-out;
+  box-shadow: 0 8px 24px rgba(99, 102, 241, 0.3);
+}
+
+@keyframes toastSlideIn {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(-20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
+}
+
+/* Node appear animation for API-created nodes */
+.node-api-new {
+  animation: nodeAppear 0.5s ease-out;
+}
+
+@keyframes nodeAppear {
+  from {
+    opacity: 0;
+    transform: scale(0.8);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
 }

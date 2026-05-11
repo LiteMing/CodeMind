@@ -210,6 +210,9 @@ class MindMapApp {
     originY: 0,
   }
   private collabApiKey = ''
+  private pollHandle: number | null = null
+  private lastKnownEditTime: string = ''
+  private lastFrontendSaveTime: string = ''
   private state: AppState
 
   constructor(rootEl: HTMLElement) {
@@ -5770,6 +5773,8 @@ class MindMapApp {
       this.state.document = savedDocument
       this.state.currentMapId = savedDocument.id
       this.state.dirty = false
+      this.lastFrontendSaveTime = savedDocument.meta.lastEditedAt || new Date().toISOString()
+      this.lastKnownEditTime = this.lastFrontendSaveTime
       await this.refreshMaps()
       this.maybeSaveAutoSnapshot(savedDocument)
       this.setStatus(statusKey, values)
@@ -5972,6 +5977,7 @@ class MindMapApp {
 
   private async goHome(): Promise<void> {
     await this.refreshMaps('status.mapListLoaded')
+    this.stopPolling()
     this.state.view = 'home'
     this.state.currentMapId = null
     this.state.snapshotDraftName = ''
@@ -6698,6 +6704,7 @@ class MindMapApp {
     this.refs = null
     this.resetHistory()
     this.setStatus(statusKey)
+    this.startPolling()
   }
 
   private focusNodeFromGraph(nodeId: string): void {
@@ -7084,6 +7091,106 @@ class MindMapApp {
     } catch {
       // If backend is unavailable, keep the key empty.
     }
+  }
+
+  private startPolling(): void {
+    this.stopPolling()
+    if (!this.state.currentMapId) {
+      return
+    }
+    this.lastKnownEditTime = this.state.document.meta.lastEditedAt || new Date().toISOString()
+    this.lastFrontendSaveTime = this.lastKnownEditTime
+    this.pollHandle = window.setInterval(() => {
+      void this.pollForAPIChanges()
+    }, 2000)
+  }
+
+  private stopPolling(): void {
+    if (this.pollHandle !== null) {
+      window.clearInterval(this.pollHandle)
+      this.pollHandle = null
+    }
+  }
+
+  private async pollForAPIChanges(): Promise<void> {
+    const mapId = this.state.currentMapId
+    if (!mapId || this.state.view !== 'map') {
+      return
+    }
+
+    try {
+      const result = await api.pollMap(mapId, this.lastKnownEditTime)
+      if (!result.modifiedViaAPI) {
+        return
+      }
+
+      // Check if the modification is newer than our last frontend save to avoid loops
+      const modifiedAt = new Date(result.lastEditedAt).getTime()
+      const lastSave = new Date(this.lastFrontendSaveTime).getTime()
+      if (modifiedAt <= lastSave) {
+        return
+      }
+
+      // Store current node IDs before reload
+      const previousNodeIds = new Set(this.state.document.nodes.map((n) => n.id))
+
+      // Reload the document from the server
+      const doc = await api.loadMap(mapId)
+
+      // Find newly added nodes
+      const newNodeIds = new Set<string>()
+      for (const node of doc.nodes) {
+        if (!previousNodeIds.has(node.id)) {
+          newNodeIds.add(node.id)
+        }
+      }
+
+      // Update the document
+      this.state.document = doc
+      this.state.currentMapId = doc.id
+      this.lastKnownEditTime = doc.meta.lastEditedAt || new Date().toISOString()
+      this.lastFrontendSaveTime = this.lastKnownEditTime
+
+      // Show toast notification
+      this.showAPIToast('🤖 AI 已更新脑图')
+
+      // Re-render
+      this.render()
+
+      // Apply animation classes to new nodes after render
+      if (newNodeIds.size > 0) {
+        requestAnimationFrame(() => {
+          for (const nodeId of newNodeIds) {
+            const el = this.rootEl.querySelector<HTMLElement>(`[data-node-id="${nodeId}"]`)
+            if (el) {
+              el.classList.add('node-api-new')
+              el.addEventListener('animationend', () => {
+                el.classList.remove('node-api-new')
+              }, { once: true })
+            }
+          }
+        })
+      }
+    } catch {
+      // Silently ignore polling errors to avoid spamming the user
+    }
+  }
+
+  private showAPIToast(message: string): void {
+    // Remove existing toast if any
+    const existing = document.querySelector('.api-toast')
+    if (existing) {
+      existing.remove()
+    }
+
+    const toast = document.createElement('div')
+    toast.className = 'api-toast'
+    toast.textContent = message
+    document.body.appendChild(toast)
+
+    window.setTimeout(() => {
+      toast.remove()
+    }, 3000)
   }
 
   private setLocale(locale: Locale, announce: boolean): void {

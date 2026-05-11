@@ -109,6 +109,7 @@ func (s *Server) handleNodesPost(w http.ResponseWriter, r *http.Request, mapID s
 		return
 	}
 
+	s.recordAPIModification(mapID)
 	writeJSON(w, http.StatusCreated, node)
 }
 
@@ -228,6 +229,7 @@ func (s *Server) handleNodeByIDPatch(w http.ResponseWriter, r *http.Request, map
 		return
 	}
 
+	s.recordAPIModification(mapID)
 	writeJSON(w, http.StatusOK, *node)
 }
 
@@ -300,6 +302,7 @@ func (s *Server) handleNodeByIDDelete(w http.ResponseWriter, r *http.Request, ma
 		return
 	}
 
+	s.recordAPIModification(mapID)
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"status":       "deleted",
 		"deletedCount": deletedCount,

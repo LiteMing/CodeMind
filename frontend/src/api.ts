@@ -265,6 +265,15 @@ export const api = {
     return await readJSON<CollabSettings>(response, '/api/settings')
   },
 
+  async pollMap(mapId: string, since: string): Promise<{ lastEditedAt: string; nodeCount: number; modifiedViaAPI: boolean }> {
+    const response = await fetch(`${API_BASE}/maps/${encodeURIComponent(mapId)}/poll?since=${encodeURIComponent(since)}`)
+    if (!response.ok) {
+      throw await createAPIError(response)
+    }
+
+    return await readJSON<{ lastEditedAt: string; nodeCount: number; modifiedViaAPI: boolean }>(response, `/api/maps/${encodeURIComponent(mapId)}/poll`)
+  },
+
   async saveSettings(settings: CollabSettings): Promise<CollabSettings> {
     const response = await fetch(`${API_BASE}/settings`, {
       method: 'PUT',

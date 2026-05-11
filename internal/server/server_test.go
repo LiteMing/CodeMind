@@ -956,7 +956,7 @@ func TestAISuggestChildrenEndpointSupportsSiblingMode(t *testing.T) {
 
 func TestListMapsPreservesLastEditedAt(t *testing.T) {
 	storePath := t.TempDir()
-	handler := New(store.NewFileStore(storePath)).Handler()
+	handler := New(store.NewFileStore(storePath), storePath).Handler()
 
 	lastEditedAt := time.Date(2026, time.March, 1, 9, 30, 0, 0, time.UTC)
 	lastOpenedAt := time.Date(2026, time.March, 2, 10, 0, 0, 0, time.UTC)
@@ -987,7 +987,7 @@ func TestListMapsPreservesLastEditedAt(t *testing.T) {
 
 func TestLoadMapTouchesLastOpenedAtWithoutEditing(t *testing.T) {
 	storePath := t.TempDir()
-	handler := New(store.NewFileStore(storePath)).Handler()
+	handler := New(store.NewFileStore(storePath), storePath).Handler()
 
 	lastEditedAt := time.Date(2026, time.March, 1, 9, 30, 0, 0, time.UTC)
 	lastOpenedAt := time.Date(2026, time.March, 2, 10, 0, 0, 0, time.UTC)
@@ -1023,7 +1023,7 @@ func TestLoadMapTouchesLastOpenedAtWithoutEditing(t *testing.T) {
 
 func TestSaveMapUpdatesLastEditedAt(t *testing.T) {
 	storePath := t.TempDir()
-	handler := New(store.NewFileStore(storePath)).Handler()
+	handler := New(store.NewFileStore(storePath), storePath).Handler()
 
 	lastEditedAt := time.Date(2026, time.March, 1, 9, 30, 0, 0, time.UTC)
 	lastOpenedAt := time.Date(2026, time.March, 2, 10, 0, 0, 0, time.UTC)
@@ -1065,7 +1065,7 @@ func TestSaveMapUpdatesLastEditedAt(t *testing.T) {
 
 func TestSaveMapPersistsNodeColor(t *testing.T) {
 	storePath := t.TempDir()
-	handler := New(store.NewFileStore(storePath)).Handler()
+	handler := New(store.NewFileStore(storePath), storePath).Handler()
 
 	lastEditedAt := time.Date(2026, time.March, 1, 9, 30, 0, 0, time.UTC)
 	lastOpenedAt := time.Date(2026, time.March, 2, 10, 0, 0, 0, time.UTC)
@@ -1114,7 +1114,7 @@ func TestSaveMapPersistsNodeColor(t *testing.T) {
 
 func TestSaveMapPersistsNodeNote(t *testing.T) {
 	storePath := t.TempDir()
-	handler := New(store.NewFileStore(storePath)).Handler()
+	handler := New(store.NewFileStore(storePath), storePath).Handler()
 
 	lastEditedAt := time.Date(2026, time.March, 1, 9, 30, 0, 0, time.UTC)
 	lastOpenedAt := time.Date(2026, time.March, 2, 10, 0, 0, 0, time.UTC)
@@ -1171,7 +1171,7 @@ func newTestServer(t *testing.T) *Server {
 
 	storePath := t.TempDir()
 	fileStore := store.NewFileStore(storePath)
-	return New(fileStore)
+	return New(fileStore, storePath)
 }
 
 func newStoredDocument(id string, title string, lastEditedAt time.Time, lastOpenedAt time.Time) mindmap.Document {

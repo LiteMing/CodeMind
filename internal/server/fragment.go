@@ -84,6 +84,7 @@ func (s *Server) handleImportFragmentPost(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	s.recordAPIModification(mapID)
 	writeJSON(w, http.StatusCreated, created)
 }
 
