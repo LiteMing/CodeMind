@@ -29,6 +29,21 @@ X-API-Key: {配置的key}
 - **Root Node**：每个 map 有且仅有一个根节点（kind="root"），不可删除
 - **Position**：节点在画布上的坐标 {x, y}，创建时可省略（自动计算）
 
+### 字段有效值
+
+| 字段 | 有效值 | 默认值 |
+|------|--------|--------|
+| kind | `root`、`topic`、`floating` | `topic` |
+| priority | `""`、`P0`、`P1`、`P2`、`P3` | `""` |
+| color | `""`、`slate`、`blue`、`teal`、`green`、`amber`、`rose`、`violet` | `""` |
+
+### 实时刷新行为
+
+当 AI 通过 API 修改脑图后，前端会在 2 秒内自动检测变更并刷新画布：
+- 新增节点有淡入+缩放动画
+- 顶部显示"🤖 AI 已更新脑图"toast 提示
+- 用户无需手动刷新或重新打开文件
+
 ---
 
 ## API 端点
@@ -178,6 +193,25 @@ GET /api/maps/{mapId}/version
 
 写入前先读取，写入后对比，可检测是否有其他客户端同时修改。
 
+### 变更轮询（前端实时刷新用）
+
+```
+GET /api/maps/{mapId}/poll?since=2026-05-11T12:00:00Z
+```
+
+返回：
+```json
+{
+  "lastEditedAt": "2026-05-11T12:52:02Z",
+  "nodeCount": 32,
+  "modifiedViaAPI": true
+}
+```
+
+- `since` 参数为 ISO 时间戳，表示"自从这个时间之后是否有 API 写入"
+- `modifiedViaAPI` 为 true 表示有外部 API 修改（非前端自身保存）
+- 前端每 2 秒调用一次，检测到变更后自动重新加载文档
+
 ---
 
 ## 典型 AI 工作流
@@ -246,3 +280,42 @@ PUT /api/settings          # 保存配置
 Content-Type: application/json
 {"collabApiKey": "your-32-char-hex-key"}
 ```
+
+---
+
+## 跨脑图操作
+
+AI Agent 可以在一次会话中操作多个脑图，只需使用不同的 `mapId`：
+
+```bash
+# 读取架构图
+GET /api/maps/map-architecture-001/tree
+
+# 读取策划图
+GET /api/maps/map-planning-001/tree
+
+# 在策划图中创建任务
+POST /api/maps/map-planning-001/nodes
+{"parentId": "root", "title": "新任务"}
+
+# 在架构图中标记变更
+PATCH /api/maps/map-architecture-001/nodes/node-xxx
+{"note": "- [2026-05-11: 新增用户模块](link:map-planning-001/node-task-id)"}
+```
+
+### 跨图链接约定
+
+在 note 字段中使用格式 `[link:mapId/nodeId]` 表示跨图引用：
+```
+- [2026-05-11: 完成登录功能](link:map-planning-001/node-summary-123)
+```
+
+---
+
+## 注意事项
+
+1. **前端保存后 API 立即可读**：用户在 UI 中 Ctrl+S 保存后，API 调用能立即获取最新数据
+2. **API 写入后前端自动刷新**：无需通知用户手动刷新
+3. **根节点不可删除**：每个 map 必须有且仅有一个 root 节点
+4. **position 自动计算**：创建节点时无需指定坐标，后端会自动放置在合适位置
+5. **批量操作原子性**：batch 中任何一个操作失败，整个请求回滚，文档不变
