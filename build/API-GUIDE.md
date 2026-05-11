@@ -60,12 +60,14 @@ GET /api/maps
 
 ```
 GET /api/maps/{mapId}/nodes
+GET /api/maps/{mapId}/nodes?compact=true   ← 省略 position/timestamps
 ```
 
 ### 获取地图树结构（嵌套 JSON，推荐 AI 用于理解上下文）
 
 ```
 GET /api/maps/{mapId}/tree
+GET /api/maps/{mapId}/tree?compact=true   ← 推荐，省略 position/timestamps，节省 ~43% token
 ```
 
 返回嵌套结构：
@@ -88,6 +90,7 @@ GET /api/maps/{mapId}/tree
 
 ```
 GET /api/maps/{mapId}/nodes/{nodeId}
+GET /api/maps/{mapId}/nodes/{nodeId}?compact=true   ← 省略 position/timestamps
 ```
 
 返回：
@@ -319,3 +322,4 @@ PATCH /api/maps/map-architecture-001/nodes/node-xxx
 3. **根节点不可删除**：每个 map 必须有且仅有一个 root 节点
 4. **position 自动计算**：创建节点时无需指定坐标，后端会自动放置在合适位置
 5. **批量操作原子性**：batch 中任何一个操作失败，整个请求回滚，文档不变
+6. **推荐使用 compact 模式**：AI 读取时加 `?compact=true`，省略 position/createdAt/updatedAt 和默认 kind，节省约 43% 响应体积
