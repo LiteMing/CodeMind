@@ -34,8 +34,9 @@ var (
 )
 
 type Server struct {
-	store      *store.FileStore
-	httpClient *http.Client
+	store       *store.FileStore
+	httpClient  *http.Client
+	settingsDir string
 }
 
 type importRequest struct {
@@ -268,26 +269,36 @@ func (e *aiDebugError) Unwrap() error {
 	return e.Err
 }
 
-func New(fileStore *store.FileStore) *Server {
+func New(fileStore *store.FileStore, settingsDir string) *Server {
 	return &Server{
-		store: fileStore,
+		store:       fileStore,
+		settingsDir: settingsDir,
 		httpClient: &http.Client{
 			Timeout: 0,
 		},
 	}
 }
 
+// GetCollabAPIKey implements APIKeyProvider by loading the current key from settings.
+func (s *Server) GetCollabAPIKey() string {
+	settings, err := store.LoadSettings(s.settingsDir)
+	if err != nil {
+		return ""
+	}
+	return settings.CollabAPIKey
+}
+
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	s.registerAPI(mux)
 	mux.HandleFunc("/", s.handleFrontend)
-	return loggingMiddleware(mux)
+	return loggingMiddleware(apiKeyMiddleware(s, mux))
 }
 
 func (s *Server) APIHandler() http.Handler {
 	mux := http.NewServeMux()
 	s.registerAPI(mux)
-	return loggingMiddleware(corsMiddleware(mux))
+	return loggingMiddleware(corsMiddleware(apiKeyMiddleware(s, mux)))
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
@@ -298,6 +309,7 @@ func (s *Server) registerAPI(mux *http.ServeMux) {
 	mux.HandleFunc("/api/health", s.handleHealth)
 	mux.HandleFunc("/api/maps", s.handleMaps)
 	mux.HandleFunc("/api/maps/", s.handleMapByID)
+	mux.HandleFunc("/api/settings", s.handleSettings)
 	mux.HandleFunc("/api/export/markdown", s.handleExportMarkdown)
 	mux.HandleFunc("/api/import", s.handleImport)
 	mux.HandleFunc("/api/ai/test", s.handleAITest)
@@ -336,12 +348,44 @@ func (s *Server) handleMaps(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleMapByID(w http.ResponseWriter, r *http.Request) {
-	mapID := strings.TrimPrefix(r.URL.Path, "/api/maps/")
-	mapID = strings.TrimSpace(mapID)
-	if mapID == "" {
+	suffix := strings.TrimPrefix(r.URL.Path, "/api/maps/")
+	suffix = strings.TrimSpace(suffix)
+	if suffix == "" {
 		writeError(w, http.StatusBadRequest, errors.New("map id is required"))
 		return
 	}
+
+	// Check if the path contains sub-resource segments (nodes, tree, batch, etc.)
+	// Format: {mapId}/nodes, {mapId}/nodes/{nodeId}, {mapId}/tree, etc.
+	if idx := strings.Index(suffix, "/"); idx >= 0 {
+		mapID := suffix[:idx]
+		subPath := suffix[idx+1:] // e.g. "nodes", "nodes/abc", "tree", "batch", etc.
+
+		switch {
+		case subPath == "nodes":
+			s.handleNodes(w, r, mapID)
+			return
+		case strings.HasPrefix(subPath, "nodes/"):
+			nodeID := strings.TrimPrefix(subPath, "nodes/")
+			s.handleNodeByID(w, r, mapID, nodeID)
+			return
+		case subPath == "tree":
+			s.handleNodeTree(w, r, mapID)
+			return
+		case subPath == "batch":
+			s.handleNodeBatch(w, r, mapID)
+			return
+		case subPath == "import-fragment":
+			s.handleImportFragment(w, r, mapID)
+			return
+		case subPath == "version":
+			s.handleMapVersion(w, r, mapID)
+			return
+		}
+	}
+
+	// Original map-level CRUD (no sub-resource)
+	mapID := suffix
 
 	switch r.Method {
 	case http.MethodGet:
@@ -385,6 +429,104 @@ func (s *Server) handleMapByID(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Allow", "GET, PUT, PATCH, DELETE")
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		settings, err := store.LoadSettings(s.settingsDir)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, settings)
+	case http.MethodPut:
+		var settings store.Settings
+		if err := json.NewDecoder(r.Body).Decode(&settings); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		if err := store.SaveSettings(s.settingsDir, settings); err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, settings)
+	default:
+		w.Header().Set("Allow", "GET, PUT")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// Placeholder handlers for node-level CRUD (to be implemented in later tasks)
+
+func (s *Server) handleNodeByID(w http.ResponseWriter, r *http.Request, mapID string, nodeID string) {
+	switch r.Method {
+	case http.MethodGet:
+		s.handleNodeByIDGet(w, mapID, nodeID)
+	case http.MethodPatch:
+		s.handleNodeByIDPatch(w, r, mapID, nodeID)
+	case http.MethodDelete:
+		s.handleNodeByIDDelete(w, r, mapID, nodeID)
+	default:
+		w.Header().Set("Allow", "GET, PATCH, DELETE")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Server) handleNodeTree(w http.ResponseWriter, r *http.Request, mapID string) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", "GET")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	doc, err := s.store.Load(mapID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, err)
+		return
+	}
+
+	tree := buildTree(doc)
+	writeJSON(w, http.StatusOK, tree)
+}
+
+func (s *Server) handleNodeBatch(w http.ResponseWriter, r *http.Request, mapID string) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", "POST")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	s.handleNodeBatchPost(w, r, mapID)
+}
+
+func (s *Server) handleImportFragment(w http.ResponseWriter, r *http.Request, mapID string) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", "POST")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	s.handleImportFragmentPost(w, r, mapID)
+}
+
+func (s *Server) handleMapVersion(w http.ResponseWriter, r *http.Request, mapID string) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", "GET")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	doc, err := s.store.Load(mapID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, mapVersionResponse{
+		LastEditedAt: doc.Meta.LastEditedAt,
+		NodeCount:    len(doc.Nodes),
+	})
 }
 
 func (s *Server) handleExportMarkdown(w http.ResponseWriter, r *http.Request) {

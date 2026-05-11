@@ -18,7 +18,8 @@ func main() {
 
 	dataPath := filepath.Join("data", "maps")
 	fileStore := store.NewFileStore(dataPath)
-	appServer := server.New(fileStore)
+	settingsDir := filepath.Dir(dataPath) // "data/"
+	appServer := server.New(fileStore, settingsDir)
 
 	log.Printf("Code Mind server listening on http://localhost:%s", port)
 	if err := http.ListenAndServe(":"+port, appServer.Handler()); err != nil {

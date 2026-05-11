@@ -34,6 +34,11 @@ func NewFileStore(dir string) *FileStore {
 	}
 }
 
+// Dir returns the directory path used by the file store.
+func (s *FileStore) Dir() string {
+	return s.dir
+}
+
 func (s *FileStore) List() ([]MapSummary, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

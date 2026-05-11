@@ -209,6 +209,7 @@ class MindMapApp {
     originX: 0,
     originY: 0,
   }
+  private collabApiKey = ''
   private state: AppState
 
   constructor(rootEl: HTMLElement) {
@@ -295,6 +296,7 @@ class MindMapApp {
       this.setStatus('status.mapListFailed', { reason: getErrorMessage(error) })
     }
 
+    await this.loadCollabApiKey()
     this.render()
   }
 
@@ -3220,6 +3222,23 @@ class MindMapApp {
             <p class="inspector-copy">${this.t('settings.aiTimeoutHint')}</p>
             <p class="inspector-copy">${this.t('settings.aiHint')}</p>
           </section>
+
+          <section class="settings-card">
+            <p class="section-label">${this.t('settings.collabApi')}</p>
+            <div class="field-stack">
+              <span>${this.t('settings.collabApiKey')}</span>
+              <p class="settings-input collab-api-key-display" data-collab-key-display>${this.collabApiKeyMasked()}</p>
+            </div>
+            <div class="collab-api-actions">
+              <button type="button" class="ghost-button" data-command="collab-generate-key">${this.t('settings.collabApiKeyGenerate')}</button>
+              <button type="button" class="ghost-button" data-command="collab-copy-key">${this.t('settings.collabApiKeyCopy')}</button>
+              <button type="button" class="ghost-button" data-command="collab-clear-key">${this.t('settings.collabApiKeyClear')}</button>
+            </div>
+            <div class="collab-api-actions">
+              <button type="button" class="ghost-button" data-command="collab-save-key">${this.t('settings.collabApiKeySave')}</button>
+            </div>
+            <p class="inspector-copy">${this.t('settings.collabApiKeyHint')}</p>
+          </section>
         </section>
       </div>
     `
@@ -5346,6 +5365,18 @@ class MindMapApp {
         case 'test-ai-connection':
           await this.testAIConnection()
           return
+        case 'collab-generate-key':
+          this.generateCollabApiKey()
+          return
+        case 'collab-copy-key':
+          await this.copyCollabApiKey()
+          return
+        case 'collab-clear-key':
+          this.clearCollabApiKey()
+          return
+        case 'collab-save-key':
+          await this.saveCollabApiKey()
+          return
         case 'new-child':
           this.createChildNode(this.selectedNode()?.id ?? 'root')
           return
@@ -6997,6 +7028,61 @@ class MindMapApp {
         return
       default:
         break
+    }
+  }
+
+  private collabApiKeyMasked(): string {
+    if (!this.collabApiKey) {
+      return this.t('settings.collabApiKeyEmpty')
+    }
+    const last4 = this.collabApiKey.slice(-4)
+    return '•'.repeat(this.collabApiKey.length - 4) + last4
+  }
+
+  private generateCollabApiKey(): void {
+    const bytes = new Uint8Array(16)
+    crypto.getRandomValues(bytes)
+    this.collabApiKey = Array.from(bytes)
+      .map((b) => b.toString(16).padStart(2, '0'))
+      .join('')
+    this.setStatus('settings.collabApiKeyGenerated')
+    this.renderSettings()
+  }
+
+  private async copyCollabApiKey(): Promise<void> {
+    if (!this.collabApiKey) {
+      return
+    }
+    try {
+      await navigator.clipboard.writeText(this.collabApiKey)
+      this.setStatus('settings.collabApiKeyCopied')
+    } catch {
+      // Clipboard API may fail in some environments; silently ignore.
+    }
+  }
+
+  private clearCollabApiKey(): void {
+    this.collabApiKey = ''
+    this.setStatus('settings.collabApiKeyCleared')
+    this.renderSettings()
+  }
+
+  private async saveCollabApiKey(): Promise<void> {
+    try {
+      await api.saveSettings({ collabApiKey: this.collabApiKey })
+      this.setStatus('settings.collabApiKeySaved')
+    } catch (error) {
+      this.setStatus('settings.collabApiKeySaveFailed', { reason: getErrorMessage(error) })
+    }
+    this.render()
+  }
+
+  private async loadCollabApiKey(): Promise<void> {
+    try {
+      const settings = await api.getSettings()
+      this.collabApiKey = settings.collabApiKey ?? ''
+    } catch {
+      // If backend is unavailable, keep the key empty.
     }
   }
 

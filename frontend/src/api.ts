@@ -9,6 +9,7 @@ import type {
   AITestResponse,
   AITemplateId,
   AISettings,
+  CollabSettings,
   MindMapDocument,
   MindMapSummary,
 } from './types'
@@ -253,6 +254,29 @@ export const api = {
     }
 
     return await readJSON<AITestResponse>(response, '/api/ai/test')
+  },
+
+  async getSettings(): Promise<CollabSettings> {
+    const response = await fetch(`${API_BASE}/settings`)
+    if (!response.ok) {
+      throw await createAPIError(response)
+    }
+
+    return await readJSON<CollabSettings>(response, '/api/settings')
+  },
+
+  async saveSettings(settings: CollabSettings): Promise<CollabSettings> {
+    const response = await fetch(`${API_BASE}/settings`, {
+      method: 'PUT',
+      headers: JSON_HEADERS,
+      body: JSON.stringify(settings),
+    })
+
+    if (!response.ok) {
+      throw await createAPIError(response)
+    }
+
+    return await readJSON<CollabSettings>(response, '/api/settings')
   },
 }
 

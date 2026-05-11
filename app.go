@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"path/filepath"
 
 	"code-mind/internal/server"
 	"code-mind/internal/store"
@@ -27,7 +28,9 @@ func NewApp(fileStore *store.FileStore) *App {
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 
-	apiHandler := server.New(a.store).APIHandler()
+	// settingsDir is the parent of the maps directory (i.e. "data/")
+	settingsDir := filepath.Dir(a.store.Dir())
+	apiHandler := server.New(a.store, settingsDir).APIHandler()
 	a.apiServer = &http.Server{
 		Addr:    desktopAPIAddress,
 		Handler: apiHandler,

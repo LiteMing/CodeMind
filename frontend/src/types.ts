@@ -218,6 +218,10 @@ export interface AITestResponse {
   message: string
 }
 
+export interface CollabSettings {
+  collabApiKey: string
+}
+
 export interface AppPreferences {
   locale: Locale
   onboardingCompleted: boolean
