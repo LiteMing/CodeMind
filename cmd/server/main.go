@@ -16,9 +16,17 @@ func main() {
 		port = "7979"
 	}
 
-	dataPath := filepath.Join("data", "maps")
+	// Resolve data directory relative to the executable's location,
+	// so the server works regardless of the working directory.
+	exePath, err := os.Executable()
+	if err != nil {
+		log.Fatal("failed to resolve executable path:", err)
+	}
+	exeDir := filepath.Dir(exePath)
+	dataPath := filepath.Join(exeDir, "data", "maps")
+
 	fileStore := store.NewFileStore(dataPath)
-	settingsDir := filepath.Dir(dataPath) // "data/"
+	settingsDir := filepath.Dir(dataPath) // "{exeDir}/data/"
 	appServer := server.New(fileStore, settingsDir)
 
 	log.Printf("Code Mind server listening on http://localhost:%s", port)

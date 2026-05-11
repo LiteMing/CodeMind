@@ -3,6 +3,7 @@ package main
 import (
 	"embed"
 	"log"
+	"os"
 	"path/filepath"
 
 	"code-mind/internal/store"
@@ -17,10 +18,19 @@ import (
 var assets embed.FS
 
 func main() {
-	fileStore := store.NewFileStore(filepath.Join("data", "maps"))
+	// Resolve data directory relative to the executable's location,
+	// so the app works regardless of the working directory.
+	exePath, err := os.Executable()
+	if err != nil {
+		log.Fatal("failed to resolve executable path:", err)
+	}
+	exeDir := filepath.Dir(exePath)
+	dataDir := filepath.Join(exeDir, "data", "maps")
+
+	fileStore := store.NewFileStore(dataDir)
 	app := NewApp(fileStore)
 
-	err := wails.Run(&options.App{
+	err = wails.Run(&options.App{
 		Title:  "Code Mind",
 		Width:  1440,
 		Height: 920,
