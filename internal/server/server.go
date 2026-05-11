@@ -467,7 +467,7 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleNodeByID(w http.ResponseWriter, r *http.Request, mapID string, nodeID string) {
 	switch r.Method {
 	case http.MethodGet:
-		s.handleNodeByIDGet(w, mapID, nodeID)
+		s.handleNodeByIDGet(w, r, mapID, nodeID)
 	case http.MethodPatch:
 		s.handleNodeByIDPatch(w, r, mapID, nodeID)
 	case http.MethodDelete:
@@ -488,6 +488,12 @@ func (s *Server) handleNodeTree(w http.ResponseWriter, r *http.Request, mapID st
 	doc, err := s.store.Load(mapID)
 	if err != nil {
 		writeError(w, http.StatusNotFound, err)
+		return
+	}
+
+	if r.URL.Query().Get("compact") == "true" {
+		tree := buildCompactTree(doc)
+		writeJSON(w, http.StatusOK, tree)
 		return
 	}
 

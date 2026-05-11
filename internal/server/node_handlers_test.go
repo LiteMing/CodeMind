@@ -748,3 +748,295 @@ func TestHandleNodeByIDDelete_Returns400ForRootNode(t *testing.T) {
 		t.Fatalf("expected error about root node, got %s", res.Body.String())
 	}
 }
+
+func TestHandleNodesGet_CompactOmitsPositionAndTimestamps(t *testing.T) {
+	server := newTestServer(t)
+	handler := server.Handler()
+
+	// Create a map
+	createReq := httptest.NewRequest(http.MethodPost, "/api/maps", strings.NewReader(`{"title":"Test Map"}`))
+	createReq.Header.Set("Content-Type", "application/json")
+	createRes := httptest.NewRecorder()
+	handler.ServeHTTP(createRes, createReq)
+
+	var doc mindmap.Document
+	if err := json.Unmarshal(createRes.Body.Bytes(), &doc); err != nil {
+		t.Fatalf("failed to decode created document: %v", err)
+	}
+
+	rootID := ""
+	for _, n := range doc.Nodes {
+		if n.Kind == mindmap.NodeKindRoot {
+			rootID = n.ID
+			break
+		}
+	}
+
+	// Create a child node
+	body := `{"parentId":"` + rootID + `","title":"Child Node","priority":"P1"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/maps/"+doc.ID+"/nodes", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	res := httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+	if res.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d", res.Code)
+	}
+
+	// GET nodes with compact=true
+	req = httptest.NewRequest(http.MethodGet, "/api/maps/"+doc.ID+"/nodes?compact=true", nil)
+	res = httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", res.Code, res.Body.String())
+	}
+
+	// Parse as raw JSON to check field presence
+	var nodes []map[string]interface{}
+	if err := json.Unmarshal(res.Body.Bytes(), &nodes); err != nil {
+		t.Fatalf("failed to decode compact nodes: %v", err)
+	}
+
+	if len(nodes) < 2 {
+		t.Fatalf("expected at least 2 nodes, got %d", len(nodes))
+	}
+
+	for _, n := range nodes {
+		// position, createdAt, updatedAt should be absent
+		if _, ok := n["position"]; ok {
+			t.Fatalf("compact node should not have 'position' field, got %v", n)
+		}
+		if _, ok := n["createdAt"]; ok {
+			t.Fatalf("compact node should not have 'createdAt' field, got %v", n)
+		}
+		if _, ok := n["updatedAt"]; ok {
+			t.Fatalf("compact node should not have 'updatedAt' field, got %v", n)
+		}
+
+		// "topic" kind should be omitted
+		if kind, ok := n["kind"]; ok {
+			if kind == "topic" {
+				t.Fatalf("compact node should omit 'topic' kind, got %v", n)
+			}
+		}
+
+		// id and title should still be present
+		if _, ok := n["id"]; !ok {
+			t.Fatalf("compact node should have 'id' field")
+		}
+		if _, ok := n["title"]; !ok {
+			t.Fatalf("compact node should have 'title' field")
+		}
+	}
+
+	// Verify the root node has kind "root" (non-default, should be present)
+	foundRoot := false
+	for _, n := range nodes {
+		if n["kind"] == "root" {
+			foundRoot = true
+			break
+		}
+	}
+	if !foundRoot {
+		t.Fatal("expected root node to retain 'root' kind in compact mode")
+	}
+}
+
+func TestHandleNodesGet_CompactFalseReturnsFullResponse(t *testing.T) {
+	server := newTestServer(t)
+	handler := server.Handler()
+
+	// Create a map
+	createReq := httptest.NewRequest(http.MethodPost, "/api/maps", strings.NewReader(`{"title":"Test Map"}`))
+	createReq.Header.Set("Content-Type", "application/json")
+	createRes := httptest.NewRecorder()
+	handler.ServeHTTP(createRes, createReq)
+
+	var doc mindmap.Document
+	json.Unmarshal(createRes.Body.Bytes(), &doc)
+
+	// GET nodes without compact (default behavior)
+	req := httptest.NewRequest(http.MethodGet, "/api/maps/"+doc.ID+"/nodes", nil)
+	res := httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+
+	var nodes []map[string]interface{}
+	json.Unmarshal(res.Body.Bytes(), &nodes)
+
+	// Full response should have position, createdAt, updatedAt
+	for _, n := range nodes {
+		if _, ok := n["position"]; !ok {
+			t.Fatalf("full node should have 'position' field")
+		}
+		if _, ok := n["createdAt"]; !ok {
+			t.Fatalf("full node should have 'createdAt' field")
+		}
+		if _, ok := n["updatedAt"]; !ok {
+			t.Fatalf("full node should have 'updatedAt' field")
+		}
+	}
+}
+
+func TestHandleNodeTree_CompactOmitsPositionAndTimestamps(t *testing.T) {
+	server := newTestServer(t)
+	handler := server.Handler()
+
+	// Create a map
+	createReq := httptest.NewRequest(http.MethodPost, "/api/maps", strings.NewReader(`{"title":"Test Map"}`))
+	createReq.Header.Set("Content-Type", "application/json")
+	createRes := httptest.NewRecorder()
+	handler.ServeHTTP(createRes, createReq)
+
+	var doc mindmap.Document
+	json.Unmarshal(createRes.Body.Bytes(), &doc)
+
+	rootID := ""
+	for _, n := range doc.Nodes {
+		if n.Kind == mindmap.NodeKindRoot {
+			rootID = n.ID
+			break
+		}
+	}
+
+	// Create a child
+	body := `{"parentId":"` + rootID + `","title":"Child"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/maps/"+doc.ID+"/nodes", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	res := httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+
+	// GET tree with compact=true
+	req = httptest.NewRequest(http.MethodGet, "/api/maps/"+doc.ID+"/tree?compact=true", nil)
+	res = httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", res.Code, res.Body.String())
+	}
+
+	var tree map[string]interface{}
+	if err := json.Unmarshal(res.Body.Bytes(), &tree); err != nil {
+		t.Fatalf("failed to decode compact tree: %v", err)
+	}
+
+	// Root should not have position/timestamps
+	if _, ok := tree["position"]; ok {
+		t.Fatal("compact tree root should not have 'position'")
+	}
+	if _, ok := tree["createdAt"]; ok {
+		t.Fatal("compact tree root should not have 'createdAt'")
+	}
+	if _, ok := tree["updatedAt"]; ok {
+		t.Fatal("compact tree root should not have 'updatedAt'")
+	}
+
+	// Root kind should be "root" (non-default)
+	if tree["kind"] != "root" {
+		t.Fatalf("expected root kind 'root', got %v", tree["kind"])
+	}
+
+	// Check children
+	children, ok := tree["children"].([]interface{})
+	if !ok || len(children) == 0 {
+		t.Fatal("expected at least one child in compact tree")
+	}
+
+	child := children[0].(map[string]interface{})
+	if _, ok := child["position"]; ok {
+		t.Fatal("compact tree child should not have 'position'")
+	}
+	if _, ok := child["createdAt"]; ok {
+		t.Fatal("compact tree child should not have 'createdAt'")
+	}
+	// "topic" kind should be omitted
+	if kind, ok := child["kind"]; ok && kind == "topic" {
+		t.Fatal("compact tree child should omit 'topic' kind")
+	}
+}
+
+func TestHandleNodeByIDGet_CompactOmitsPositionAndTimestamps(t *testing.T) {
+	server := newTestServer(t)
+	handler := server.Handler()
+
+	// Create a map
+	createReq := httptest.NewRequest(http.MethodPost, "/api/maps", strings.NewReader(`{"title":"Test Map"}`))
+	createReq.Header.Set("Content-Type", "application/json")
+	createRes := httptest.NewRecorder()
+	handler.ServeHTTP(createRes, createReq)
+
+	var doc mindmap.Document
+	json.Unmarshal(createRes.Body.Bytes(), &doc)
+
+	rootID := ""
+	for _, n := range doc.Nodes {
+		if n.Kind == mindmap.NodeKindRoot {
+			rootID = n.ID
+			break
+		}
+	}
+
+	// Create parent -> child
+	body := `{"parentId":"` + rootID + `","title":"Parent"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/maps/"+doc.ID+"/nodes", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	res := httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+	var parent mindmap.Node
+	json.Unmarshal(res.Body.Bytes(), &parent)
+
+	body = `{"parentId":"` + parent.ID + `","title":"Child"}`
+	req = httptest.NewRequest(http.MethodPost, "/api/maps/"+doc.ID+"/nodes", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	res = httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+
+	// GET node detail with compact=true
+	req = httptest.NewRequest(http.MethodGet, "/api/maps/"+doc.ID+"/nodes/"+parent.ID+"?compact=true", nil)
+	res = httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", res.Code, res.Body.String())
+	}
+
+	var detail map[string]interface{}
+	json.Unmarshal(res.Body.Bytes(), &detail)
+
+	// Check the node field
+	node := detail["node"].(map[string]interface{})
+	if _, ok := node["position"]; ok {
+		t.Fatal("compact node detail should not have 'position'")
+	}
+	if _, ok := node["createdAt"]; ok {
+		t.Fatal("compact node detail should not have 'createdAt'")
+	}
+	if _, ok := node["updatedAt"]; ok {
+		t.Fatal("compact node detail should not have 'updatedAt'")
+	}
+
+	// Check ancestors
+	ancestors := detail["ancestors"].([]interface{})
+	if len(ancestors) == 0 {
+		t.Fatal("expected at least one ancestor")
+	}
+	ancestor := ancestors[0].(map[string]interface{})
+	if _, ok := ancestor["position"]; ok {
+		t.Fatal("compact ancestor should not have 'position'")
+	}
+	if _, ok := ancestor["createdAt"]; ok {
+		t.Fatal("compact ancestor should not have 'createdAt'")
+	}
+
+	// Check children
+	children := detail["children"].([]interface{})
+	if len(children) == 0 {
+		t.Fatal("expected at least one child")
+	}
+	child := children[0].(map[string]interface{})
+	if _, ok := child["position"]; ok {
+		t.Fatal("compact child should not have 'position'")
+	}
+	if _, ok := child["createdAt"]; ok {
+		t.Fatal("compact child should not have 'createdAt'")
+	}
+}

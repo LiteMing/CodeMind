@@ -24,7 +24,7 @@ type createNodeRequest struct {
 func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request, mapID string) {
 	switch r.Method {
 	case http.MethodGet:
-		s.handleNodesGet(w, mapID)
+		s.handleNodesGet(w, r, mapID)
 	case http.MethodPost:
 		s.handleNodesPost(w, r, mapID)
 	default:
@@ -33,10 +33,14 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request, mapID strin
 	}
 }
 
-func (s *Server) handleNodesGet(w http.ResponseWriter, mapID string) {
+func (s *Server) handleNodesGet(w http.ResponseWriter, r *http.Request, mapID string) {
 	doc, err := s.store.Load(mapID)
 	if err != nil {
 		writeError(w, http.StatusNotFound, err)
+		return
+	}
+	if r.URL.Query().Get("compact") == "true" {
+		writeJSON(w, http.StatusOK, toCompactNodes(doc.Nodes))
 		return
 	}
 	writeJSON(w, http.StatusOK, doc.Nodes)
@@ -129,7 +133,7 @@ type nodeDetailResponse struct {
 	Children  []mindmap.Node `json:"children"`
 }
 
-func (s *Server) handleNodeByIDGet(w http.ResponseWriter, mapID string, nodeID string) {
+func (s *Server) handleNodeByIDGet(w http.ResponseWriter, r *http.Request, mapID string, nodeID string) {
 	doc, err := s.store.Load(mapID)
 	if err != nil {
 		writeError(w, http.StatusNotFound, err)
@@ -157,6 +161,15 @@ func (s *Server) handleNodeByIDGet(w http.ResponseWriter, mapID string, nodeID s
 
 	// Get direct children
 	children := doc.ChildrenOf(nodeID)
+
+	if r.URL.Query().Get("compact") == "true" {
+		writeJSON(w, http.StatusOK, compactNodeDetailResponse{
+			Node:      toCompactNode(node),
+			Ancestors: toCompactNodes(ancestors),
+			Children:  toCompactNodes(children),
+		})
+		return
+	}
 
 	writeJSON(w, http.StatusOK, nodeDetailResponse{
 		Node:      node,
@@ -342,6 +355,108 @@ func buildTreeNode(node mindmap.Node, childrenMap map[string][]mindmap.Node) Tre
 	return TreeNode{
 		Node:     node,
 		Children: treeChildren,
+	}
+}
+
+// --- Compact representations for AI consumption ---
+
+// compactNode is a minimal representation of a node for AI consumption.
+// It omits position, createdAt, updatedAt, and the default "topic" kind.
+type compactNode struct {
+	ID        string            `json:"id"`
+	ParentID  string            `json:"parentId,omitempty"`
+	Kind      mindmap.NodeKind  `json:"kind,omitempty"`
+	Title     string            `json:"title"`
+	Note      string            `json:"note,omitempty"`
+	Priority  mindmap.Priority  `json:"priority,omitempty"`
+	Color     mindmap.NodeColor `json:"color,omitempty"`
+	Collapsed bool              `json:"collapsed,omitempty"`
+}
+
+// compactNodeDetailResponse is the compact response for GET /api/maps/{mapId}/nodes/{nodeId}?compact=true.
+type compactNodeDetailResponse struct {
+	Node      compactNode   `json:"node"`
+	Ancestors []compactNode `json:"ancestors"`
+	Children  []compactNode `json:"children"`
+}
+
+// compactTreeNode is a compact nested tree node for AI consumption.
+type compactTreeNode struct {
+	ID        string            `json:"id"`
+	ParentID  string            `json:"parentId,omitempty"`
+	Kind      mindmap.NodeKind  `json:"kind,omitempty"`
+	Title     string            `json:"title"`
+	Note      string            `json:"note,omitempty"`
+	Priority  mindmap.Priority  `json:"priority,omitempty"`
+	Color     mindmap.NodeColor `json:"color,omitempty"`
+	Collapsed bool              `json:"collapsed,omitempty"`
+	Children  []compactTreeNode `json:"children"`
+}
+
+func toCompactNode(n mindmap.Node) compactNode {
+	kind := n.Kind
+	if kind == mindmap.NodeKindTopic {
+		kind = "" // omit default kind
+	}
+	return compactNode{
+		ID:        n.ID,
+		ParentID:  n.ParentID,
+		Kind:      kind,
+		Title:     n.Title,
+		Note:      n.Note,
+		Priority:  n.Priority,
+		Color:     n.Color,
+		Collapsed: n.Collapsed,
+	}
+}
+
+func toCompactNodes(nodes []mindmap.Node) []compactNode {
+	result := make([]compactNode, len(nodes))
+	for i, n := range nodes {
+		result[i] = toCompactNode(n)
+	}
+	return result
+}
+
+// buildCompactTree converts a flat list of nodes into a compact nested tree.
+func buildCompactTree(doc mindmap.Document) compactTreeNode {
+	childrenMap := make(map[string][]mindmap.Node)
+	var root mindmap.Node
+
+	for _, n := range doc.Nodes {
+		if n.Kind == mindmap.NodeKindRoot {
+			root = n
+		} else {
+			childrenMap[n.ParentID] = append(childrenMap[n.ParentID], n)
+		}
+	}
+
+	return buildCompactTreeNode(root, childrenMap)
+}
+
+// buildCompactTreeNode recursively constructs a compactTreeNode.
+func buildCompactTreeNode(node mindmap.Node, childrenMap map[string][]mindmap.Node) compactTreeNode {
+	children := childrenMap[node.ID]
+	treeChildren := make([]compactTreeNode, 0, len(children))
+	for _, child := range children {
+		treeChildren = append(treeChildren, buildCompactTreeNode(child, childrenMap))
+	}
+
+	kind := node.Kind
+	if kind == mindmap.NodeKindTopic {
+		kind = ""
+	}
+
+	return compactTreeNode{
+		ID:        node.ID,
+		ParentID:  node.ParentID,
+		Kind:      kind,
+		Title:     node.Title,
+		Note:      node.Note,
+		Priority:  node.Priority,
+		Color:     node.Color,
+		Collapsed: node.Collapsed,
+		Children:  treeChildren,
 	}
 }
 
