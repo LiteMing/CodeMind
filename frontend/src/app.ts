@@ -40,6 +40,7 @@ import {
   nextChildPosition,
   nextFloatingPosition,
   nextSiblingPosition,
+  tidySubtree,
   toggleCollapse,
   touchDocument,
   updateRelationLabel,
@@ -213,6 +214,25 @@ class MindMapApp {
   private pollHandle: number | null = null
   private lastKnownEditTime: string = ''
   private lastFrontendSaveTime: string = ''
+  private inspectorDrag: { x: number; y: number; width: number; dragged: boolean } = {
+    x: 0,
+    y: 0,
+    width: 340,
+    dragged: false,
+  }
+  private inspectorDragActive: {
+    pointerId: number
+    startX: number
+    startY: number
+    startLeft: number
+    startTop: number
+  } | null = null
+  private inspectorResizeActive: {
+    pointerId: number
+    startX: number
+    startWidth: number
+    rightEdge: number
+  } | null = null
   private state: AppState
 
   constructor(rootEl: HTMLElement) {
@@ -1395,6 +1415,8 @@ class MindMapApp {
     this.applyCanvasMetrics()
     this.updateCanvasViewportView()
     this.renderInspector()
+    this.syncInspectorNoteInputs()
+    this.syncInspectorDrag()
   }
 
   private readonly handleGlobalKeyDown = (event: KeyboardEvent): void => {
@@ -2065,6 +2087,7 @@ class MindMapApp {
     this.renderOnboarding()
     this.initializeViewportIfNeeded()
     this.syncFloatingLayout()
+    this.syncInspectorDrag()
     this.focusEditorIfNeeded()
   }
 
@@ -2254,6 +2277,12 @@ class MindMapApp {
       aiLayer: requiredElement(this.rootEl, '[data-ai-layer]'),
       graphLayer: requiredElement(this.rootEl, '[data-graph-layer]'),
     }
+
+    // Attach inspector drag/resize event listeners (stable element, only bound once)
+    this.refs.inspector.addEventListener('pointerdown', this.handleInspectorPointerDown)
+    this.refs.inspector.addEventListener('pointermove', this.handleInspectorPointerMove)
+    this.refs.inspector.addEventListener('pointerup', this.handleInspectorPointerUp)
+    this.refs.inspector.addEventListener('pointercancel', this.handleInspectorPointerUp)
   }
 
   private renderHeader(): void {
@@ -2735,7 +2764,181 @@ class MindMapApp {
     }
 
     const nextTop = Math.round(chromeRect.bottom - stageRect.top + 12)
-    this.refs.inspector.style.top = `${nextTop}px`
+    if (!this.inspectorDrag.dragged) {
+      this.refs.inspector.style.top = `${nextTop}px`
+    }
+  }
+
+  private syncInspectorDrag(): void {
+    if (!this.refs) {
+      return
+    }
+
+    const inspector = this.refs.inspector
+
+    // On mobile, clear any drag state styles
+    if (window.innerWidth <= 980) {
+      inspector.classList.remove('is-dragged')
+      inspector.style.left = ''
+      inspector.style.right = ''
+      inspector.style.bottom = ''
+      inspector.style.width = ''
+      return
+    }
+
+    // Ensure resize handle exists
+    if (!inspector.querySelector('.inspector-resize-handle')) {
+      const handle = document.createElement('div')
+      handle.className = 'inspector-resize-handle'
+      handle.dataset.inspectorResize = '1'
+      inspector.insertBefore(handle, inspector.firstChild)
+    }
+
+    // Apply dragged state
+    if (this.inspectorDrag.dragged) {
+      inspector.classList.add('is-dragged')
+      inspector.style.left = `${this.inspectorDrag.x}px`
+      inspector.style.top = `${this.inspectorDrag.y}px`
+      inspector.style.right = 'auto'
+      inspector.style.bottom = 'auto'
+      inspector.style.width = `${this.inspectorDrag.width}px`
+    } else {
+      inspector.classList.remove('is-dragged')
+      inspector.style.left = ''
+      inspector.style.right = ''
+      inspector.style.bottom = ''
+      inspector.style.width = ''
+    }
+  }
+
+  private handleInspectorPointerDown = (event: PointerEvent): void => {
+    if (!this.refs || window.innerWidth <= 980) {
+      return
+    }
+
+    const target = event.target
+    if (!(target instanceof HTMLElement)) {
+      return
+    }
+
+    const inspector = this.refs.inspector
+
+    // Resize handle
+    if (target.closest('[data-inspector-resize]')) {
+      event.preventDefault()
+      event.stopPropagation()
+      const rect = inspector.getBoundingClientRect()
+      const stageRect = inspector.parentElement?.getBoundingClientRect()
+      const currentWidth = rect.width
+      const rightEdge = stageRect ? rect.right - stageRect.left : rect.right
+      this.inspectorResizeActive = {
+        pointerId: event.pointerId,
+        startX: event.clientX,
+        startWidth: this.inspectorDrag.dragged ? this.inspectorDrag.width : currentWidth,
+        rightEdge,
+      }
+      inspector.setPointerCapture(event.pointerId)
+      return
+    }
+
+    // Drag via header or collapsed handle card
+    const header = target.closest('.inspector-header') || target.closest('.inspector-handle-card')
+    if (header && event.button === 0) {
+      // Don't drag if clicking a button inside the header
+      if (target.closest('button')) {
+        return
+      }
+      event.preventDefault()
+      event.stopPropagation()
+
+      const rect = inspector.getBoundingClientRect()
+      const stageRect = inspector.parentElement?.getBoundingClientRect()
+      if (!stageRect) {
+        return
+      }
+
+      const currentLeft = rect.left - stageRect.left
+      const currentTop = rect.top - stageRect.top
+
+      this.inspectorDragActive = {
+        pointerId: event.pointerId,
+        startX: event.clientX,
+        startY: event.clientY,
+        startLeft: this.inspectorDrag.dragged ? this.inspectorDrag.x : currentLeft,
+        startTop: this.inspectorDrag.dragged ? this.inspectorDrag.y : currentTop,
+      }
+      inspector.setPointerCapture(event.pointerId)
+    }
+  }
+
+  private handleInspectorPointerMove = (event: PointerEvent): void => {
+    if (!this.refs) {
+      return
+    }
+
+    const inspector = this.refs.inspector
+
+    // Handle drag
+    if (this.inspectorDragActive && event.pointerId === this.inspectorDragActive.pointerId) {
+      const dx = event.clientX - this.inspectorDragActive.startX
+      const dy = event.clientY - this.inspectorDragActive.startY
+      this.inspectorDrag.x = this.inspectorDragActive.startLeft + dx
+      this.inspectorDrag.y = this.inspectorDragActive.startTop + dy
+      this.inspectorDrag.dragged = true
+
+      if (!this.inspectorDrag.width || this.inspectorDrag.width < 240) {
+        this.inspectorDrag.width = inspector.getBoundingClientRect().width
+      }
+
+      inspector.classList.add('is-dragged')
+      inspector.style.left = `${this.inspectorDrag.x}px`
+      inspector.style.top = `${this.inspectorDrag.y}px`
+      inspector.style.right = 'auto'
+      inspector.style.bottom = 'auto'
+      inspector.style.width = `${this.inspectorDrag.width}px`
+      return
+    }
+
+    // Handle resize
+    if (this.inspectorResizeActive && event.pointerId === this.inspectorResizeActive.pointerId) {
+      const dx = event.clientX - this.inspectorResizeActive.startX
+      const newWidth = clamp(this.inspectorResizeActive.startWidth - dx, 240, 600)
+
+      if (!this.inspectorDrag.dragged) {
+        // Switch to dragged mode to allow explicit width
+        const stageRect = inspector.parentElement?.getBoundingClientRect()
+        if (stageRect) {
+          const rect = inspector.getBoundingClientRect()
+          this.inspectorDrag.y = rect.top - stageRect.top
+          this.inspectorDrag.dragged = true
+        }
+      }
+
+      // Right edge stays fixed, left edge moves
+      this.inspectorDrag.width = newWidth
+      this.inspectorDrag.x = this.inspectorResizeActive.rightEdge - newWidth
+
+      this.syncInspectorDrag()
+      return
+    }
+  }
+
+  private handleInspectorPointerUp = (event: PointerEvent): void => {
+    if (!this.refs) {
+      return
+    }
+
+    if (this.inspectorDragActive && event.pointerId === this.inspectorDragActive.pointerId) {
+      this.refs.inspector.releasePointerCapture(event.pointerId)
+      this.inspectorDragActive = null
+      return
+    }
+
+    if (this.inspectorResizeActive && event.pointerId === this.inspectorResizeActive.pointerId) {
+      this.refs.inspector.releasePointerCapture(event.pointerId)
+      this.inspectorResizeActive = null
+      return
+    }
   }
 
   private renderOverlay(): void {
@@ -2860,6 +3063,7 @@ class MindMapApp {
         <button type="button" class="chip-button context-menu-button" data-command="toggle-collapse" ${canUseSingleNodeActions && primaryChildren > 0 ? '' : 'disabled'}>
           ${primaryNode?.collapsed ? this.t('action.expand') : this.t('action.collapse')}
         </button>
+        <button type="button" class="chip-button context-menu-button" data-command="tidy-subtree:${this.state.contextMenu.nodeId ?? ''}" ${canUseSingleNodeActions && primaryChildren > 0 ? '' : 'disabled'}>${this.t('context.tidyChildren')}</button>
         <button type="button" class="chip-button context-menu-button" data-command="connect-selected" ${canUseSingleNodeActions ? '' : 'disabled'}>${this.t('action.linkRelation')}</button>
         <div class="context-menu-divider"></div>
         <button type="button" class="chip-button context-menu-button" data-command="create-region">${this.t('action.createRegion')}</button>
@@ -5135,6 +5339,34 @@ class MindMapApp {
     this.scheduleAutosave('status.layoutSaveScheduled')
   }
 
+  private tidySubtreeCommand(nodeId: string): void {
+    const node = this.findNode(nodeId)
+    if (!node) {
+      return
+    }
+
+    const children = childrenOf(this.state.document, nodeId)
+    if (children.length === 0) {
+      this.setStatus('status.subtreeNoChildren')
+      this.render()
+      return
+    }
+
+    const snapshot = this.createHistorySnapshot()
+    const movedNodes = tidySubtree(this.state.document, nodeId, this.state.preferences.appearance.childGapX)
+    if (movedNodes === 0) {
+      this.setStatus('status.subtreeNoChildren')
+      this.render()
+      return
+    }
+
+    this.pushHistorySnapshot(snapshot)
+    touchDocument(this.state.document)
+    this.setStatus('status.subtreeTidied', { count: movedNodes })
+    this.render()
+    this.scheduleAutosave('status.layoutSaveScheduled')
+  }
+
   private relayoutHierarchyAfterInsert(insertedNode: MindNode): void {
     if (!insertedNode.parentId) {
       return
@@ -5275,6 +5507,11 @@ class MindMapApp {
           return
         case 'auto-layout':
           this.autoLayout()
+          return
+        case 'tidy-subtree':
+          if (argument) {
+            this.tidySubtreeCommand(argument)
+          }
           return
         case 'zoom-in':
           this.zoomBy(1.25)
@@ -7151,6 +7388,22 @@ class MindMapApp {
       this.lastKnownEditTime = doc.meta.lastEditedAt || new Date().toISOString()
       this.lastFrontendSaveTime = this.lastKnownEditTime
 
+      // Auto-tidy subtrees that received new children
+      if (newNodeIds.size > 0) {
+        const parentIdsToTidy = new Set<string>()
+        for (const node of doc.nodes) {
+          if (newNodeIds.has(node.id) && node.parentId) {
+            parentIdsToTidy.add(node.parentId)
+          }
+        }
+        for (const parentId of parentIdsToTidy) {
+          tidySubtree(doc, parentId, this.state.preferences.appearance.childGapX)
+        }
+        if (parentIdsToTidy.size > 0) {
+          touchDocument(this.state.document)
+        }
+      }
+
       // Show toast notification
       this.showAPIToast('🤖 AI 已更新脑图')
 
@@ -7164,9 +7417,13 @@ class MindMapApp {
             const el = this.rootEl.querySelector<HTMLElement>(`[data-node-id="${nodeId}"]`)
             if (el) {
               el.classList.add('node-api-new')
-              el.addEventListener('animationend', () => {
-                el.classList.remove('node-api-new')
-              }, { once: true })
+              el.addEventListener(
+                'animationend',
+                () => {
+                  el.classList.remove('node-api-new')
+                },
+                { once: true },
+              )
             }
           }
         })
@@ -7578,6 +7835,8 @@ class MindMapApp {
     this.applyCanvasMetrics()
     this.updateCanvasViewportView()
     this.renderInspector()
+    this.syncInspectorNoteInputs()
+    this.syncInspectorDrag()
   }
 
   private zoomReset(): void {
@@ -7596,6 +7855,8 @@ class MindMapApp {
     this.applyCanvasMetrics()
     this.updateCanvasViewportView()
     this.renderInspector()
+    this.syncInspectorNoteInputs()
+    this.syncInspectorDrag()
   }
 
   private zoomFit(): void {
@@ -7614,6 +7875,8 @@ class MindMapApp {
       this.applyCanvasMetrics()
       this.updateCanvasViewportView()
       this.renderInspector()
+      this.syncInspectorNoteInputs()
+      this.syncInspectorDrag()
       return
     }
 
@@ -7652,6 +7915,8 @@ class MindMapApp {
     this.applyCanvasMetrics()
     this.updateCanvasViewportView()
     this.renderInspector()
+    this.syncInspectorNoteInputs()
+    this.syncInspectorDrag()
   }
 
   private clientToCanvasPosition(clientX: number, clientY: number): Position {

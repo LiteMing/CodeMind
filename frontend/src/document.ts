@@ -155,12 +155,16 @@ export function nextChildPosition(
   }
 
   const children = childrenOf(document, parentId)
-  const direction = parent.kind === 'root' ? preferredRootChildDirection(document, children, layoutMode) : branchDirection(document, parent)
-  const laneChildren = parent.kind === 'root' && layoutMode === 'right'
-    ? children
-    : parent.kind === 'root'
-      ? children.filter((child) => branchDirection(document, child) === direction)
-      : children
+  const direction =
+    parent.kind === 'root'
+      ? preferredRootChildDirection(document, children, layoutMode)
+      : branchDirection(document, parent)
+  const laneChildren =
+    parent.kind === 'root' && layoutMode === 'right'
+      ? children
+      : parent.kind === 'root'
+        ? children.filter((child) => branchDirection(document, child) === direction)
+        : children
   const targetX = resolveChildColumn(document, parent, laneChildren, direction, childGapX)
   const targetY = nextStackedY(document, laneChildren, 'topic', parent.position.y)
   return findAvailablePosition(document, { x: targetX, y: targetY }, 'topic')
@@ -184,7 +188,15 @@ export function nextSiblingPosition(
   const siblings = childrenOf(document, node.parentId)
   return findAvailablePosition(
     document,
-    { x: node.position.x, y: nextStackedY(document, siblings, node.kind === 'floating' ? 'floating' : 'topic', node.position.y + NODE_GAP_Y) },
+    {
+      x: node.position.x,
+      y: nextStackedY(
+        document,
+        siblings,
+        node.kind === 'floating' ? 'floating' : 'topic',
+        node.position.y + NODE_GAP_Y,
+      ),
+    },
     node.kind === 'floating' ? 'floating' : 'topic',
   )
 }
@@ -245,7 +257,13 @@ function preferredRootChildDirection(document: MindMapDocument, children: MindNo
   return lastChild.position.x < root.position.x ? 1 : -1
 }
 
-function resolveChildColumn(document: MindMapDocument, parent: MindNode, children: MindNode[], direction: -1 | 1, childGapX: number): number {
+function resolveChildColumn(
+  document: MindMapDocument,
+  parent: MindNode,
+  children: MindNode[],
+  direction: -1 | 1,
+  childGapX: number,
+): number {
   const parentColumnEdge = resolveRelativeChildColumnEdge(document, parent, direction, childGapX)
   if (children.length === 0) {
     return resolveAlignedChildCenter(parentColumnEdge, direction, defaultNodeWidth('topic'))
@@ -254,7 +272,9 @@ function resolveChildColumn(document: MindMapDocument, parent: MindNode, childre
   if (direction === 1) {
     const leftColumn = Math.max(
       parentColumnEdge,
-      ...children.map((child) => child.position.x - estimateNodeWidth(child, childrenOf(document, child.id).length) / 2),
+      ...children.map(
+        (child) => child.position.x - estimateNodeWidth(child, childrenOf(document, child.id).length) / 2,
+      ),
     )
     return resolveAlignedChildCenter(leftColumn, direction, defaultNodeWidth('topic'))
   }
@@ -347,12 +367,15 @@ function defaultNodeHeight(kind: MindNode['kind']): number {
 }
 
 function resolveAlignedChildCenter(columnEdge: number, direction: -1 | 1, nodeWidth: number): number {
-  return direction === 1
-    ? Math.round(columnEdge + nodeWidth / 2)
-    : Math.round(columnEdge - nodeWidth / 2)
+  return direction === 1 ? Math.round(columnEdge + nodeWidth / 2) : Math.round(columnEdge - nodeWidth / 2)
 }
 
-function resolveRelativeChildColumnEdge(document: MindMapDocument, parent: MindNode, direction: -1 | 1, childGapX: number): number {
+function resolveRelativeChildColumnEdge(
+  document: MindMapDocument,
+  parent: MindNode,
+  direction: -1 | 1,
+  childGapX: number,
+): number {
   const parentWidth = estimateNodeWidth(parent, childrenOf(document, parent.id).length)
   return direction === 1
     ? parent.position.x + parentWidth / 2 + childGapX
@@ -365,7 +388,10 @@ export function touchDocument(document: MindMapDocument): void {
   document.meta.lastEditedAt = new Date().toISOString()
 }
 
-export function deleteNodeTree(document: MindMapDocument, nodeId: string): { removedNodes: number; removedRelations: number } {
+export function deleteNodeTree(
+  document: MindMapDocument,
+  nodeId: string,
+): { removedNodes: number; removedRelations: number } {
   if (nodeId === 'root') {
     return { removedNodes: 0, removedRelations: 0 }
   }
@@ -417,6 +443,23 @@ export function toggleCollapse(document: MindMapDocument, nodeId: string): boole
   node.collapsed = !node.collapsed
   node.updatedAt = new Date().toISOString()
   return true
+}
+
+export function tidySubtree(document: MindMapDocument, parentNodeId: string, childGapX = DEFAULT_CHILD_GAP_X): number {
+  const parent = findNode(document, parentNodeId)
+  if (!parent) {
+    return 0
+  }
+
+  const children = branchChildren(document, parent)
+  if (children.length === 0) {
+    return 0
+  }
+
+  const side = parent.kind === 'root' ? 1 : (branchDirection(document, parent) as -1 | 1)
+  const moved = new Set<string>()
+  layoutGroup(document, parent, children, side, childGapX, moved)
+  return moved.size
 }
 
 export function autoLayoutHierarchy(

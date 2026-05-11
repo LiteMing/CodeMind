@@ -693,6 +693,35 @@ kbd {
   padding-right: 0;
 }
 
+.inspector.is-dragged {
+  right: auto;
+  bottom: auto;
+  transition: none;
+}
+
+.inspector.is-collapsed.is-dragged {
+  max-width: none;
+}
+
+.inspector-resize-handle {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 4px;
+  cursor: ew-resize;
+  z-index: 1;
+}
+
+.inspector-handle-card {
+  cursor: grab;
+  user-select: none;
+}
+
+.inspector-handle-card:active {
+  cursor: grabbing;
+}
+
 .overlay-layer {
   position: absolute;
   inset: 0;
@@ -1074,6 +1103,12 @@ kbd {
   align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
+  cursor: grab;
+  user-select: none;
+}
+
+.inspector-header:active {
+  cursor: grabbing;
 }
 
 .inspector-copy {
