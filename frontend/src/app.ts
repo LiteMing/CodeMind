@@ -1,4 +1,6 @@
 import { api } from './api'
+import { UxEngine, MinimapRenderer } from './ux-engine'
+import type { NodeBounds, MinimapNodeData } from './ux-engine'
 import type {
   ActiveEditorPreviewState,
   AIDebugAction,
@@ -15,6 +17,7 @@ import type {
   PanState,
   PendingImportMode,
   ShellRefs,
+  ToastItem,
 } from './app-types'
 import {
   NODE_COLOR_PALETTES,
@@ -233,7 +236,15 @@ class MindMapApp {
     startWidth: number
     rightEdge: number
   } | null = null
+  private toastContainer: HTMLElement | null = null
+  private toastTimers: Map<string, number> = new Map()
+  private toastIdCounter = 0
+  /** Tracks which Inspector sections are collapsed (default: all collapsed) */
+  private inspectorSectionsCollapsed: Set<string> = new Set(['relations', 'snapshots', 'advanced'])
   private state: AppState
+  private uxEngine: UxEngine
+  private minimapRenderer: MinimapRenderer | null = null
+  private minimapDragging = false
 
   constructor(rootEl: HTMLElement) {
     this.rootEl = rootEl
@@ -305,11 +316,34 @@ class MindMapApp {
       connectorDrag: null,
       midpointDrag: null,
       dirty: false,
+
+      // UX Polish additions
+      contextToolbar: {
+        visible: false,
+        nodeId: null,
+        position: { x: 0, y: 0 },
+        element: null,
+      },
+      toastQueue: [],
+      guideOverlay: {
+        canvasGuideVisible: false,
+        canvasGuideDismissed: false,
+        shortcutOverlayVisible: false,
+      },
+      panelAnimating: new Set<string>(),
     }
 
     this.applyLocale()
     this.applyTheme()
     this.bindEvents()
+
+    this.uxEngine = new UxEngine((viewport) => {
+      this.viewport.x = viewport.x
+      this.viewport.y = viewport.y
+      this.viewport.scale = viewport.scale
+      this.applyCanvasMetrics()
+      this.updateCanvasViewportView()
+    })
   }
 
   async mount(): Promise<void> {
@@ -1152,6 +1186,12 @@ class MindMapApp {
       })
       this.scheduleLiveNodeUpdate(candidateId)
     }
+
+    // Update drop target highlights during drag
+    this.updateDropTargetHighlights()
+
+    // Update alignment guides during drag
+    this.updateAlignmentGuides()
   }
 
   private resolveSnappedDragDelta(
@@ -1348,6 +1388,15 @@ class MindMapApp {
     }
 
     if (this.pan) {
+      // Start inertia if velocity is significant (> ~50px/s → ~0.83px/frame at 60fps)
+      const speed = Math.hypot(this.pan.velocityX, this.pan.velocityY)
+      if (speed > 0.83) {
+        this.uxEngine.startInertia(this.pan.velocityX, this.pan.velocityY, {
+          x: this.viewport.x,
+          y: this.viewport.y,
+          scale: this.viewport.scale,
+        })
+      }
       this.setCanvasPanning(false)
       this.pan = null
     }
@@ -1370,6 +1419,28 @@ class MindMapApp {
 
     this.flushLiveNodeUpdate()
     const moved = this.state.drag.historyCaptured
+
+    // Remove dragging visual feedback classes and apply ease-out settle animation
+    for (const dragId of this.state.drag.nodeIds) {
+      const el = this.rootEl.querySelector<HTMLElement>(`[data-node-id="${dragId}"]`)
+      if (el) {
+        el.classList.remove('node-dragging')
+        // Apply ease-out transition for smooth settle to final position
+        el.style.transition = `transform 150ms var(--ease-out, cubic-bezier(0.33, 1, 0.68, 1))`
+        // Remove the transition after it completes to avoid interfering with future interactions
+        const cleanup = (): void => {
+          el.style.transition = ''
+        }
+        el.addEventListener('transitionend', cleanup, { once: true })
+        // Safety cleanup in case transitionend doesn't fire
+        setTimeout(cleanup, 200)
+      }
+    }
+    // Remove any drop target highlights
+    this.clearDropTargetHighlights()
+    // Remove alignment guides
+    this.clearAlignmentGuides()
+
     this.state.drag = null
     if (moved) {
       touchDocument(this.state.document)
@@ -1401,25 +1472,57 @@ class MindMapApp {
     }
 
     event.preventDefault()
+
     const rect = scroll.getBoundingClientRect()
     const pointerX = event.clientX - rect.left
     const pointerY = event.clientY - rect.top
-    const worldX = (pointerX - this.viewport.x) / this.viewport.scale
-    const worldY = (pointerY - this.viewport.y) / this.viewport.scale
     const zoomFactor = Math.exp(-event.deltaY * ZOOM_SENSITIVITY)
-    const nextScale = clamp(this.viewport.scale * zoomFactor, MIN_ZOOM, MAX_ZOOM)
+    const targetScale = clamp(this.viewport.scale * zoomFactor, MIN_ZOOM, MAX_ZOOM)
 
-    this.viewport.x = pointerX - worldX * nextScale
-    this.viewport.y = pointerY - worldY * nextScale
-    this.viewport.scale = nextScale
-    this.applyCanvasMetrics()
-    this.updateCanvasViewportView()
-    this.renderInspector()
-    this.syncInspectorNoteInputs()
-    this.syncInspectorDrag()
+    this.uxEngine.animateZoom(this.viewport.scale, targetScale, pointerX, pointerY, this.viewport.x, this.viewport.y)
+  }
+
+  /** Shortcut → toolbar button ref mapping (bijective: each shortcut maps to exactly one button) */
+  private readonly shortcutButtonMap: Record<string, keyof ShellRefs> = {
+    'ctrl+s': 'saveButton',
+    'ctrl+z': 'undoButton',
+    'ctrl+y': 'redoButton',
+    'ctrl+shift+z': 'redoButton',
+    'ctrl+l': 'layoutButton',
+    'ctrl+c': 'exportButton',
+    'ctrl+v': 'importButton',
+  }
+
+  /** Flash the corresponding toolbar button for a keyboard shortcut (200ms highlight) */
+  private flashToolbarButton(event: KeyboardEvent): void {
+    if (!this.refs) return
+    const ctrl = event.ctrlKey || event.metaKey
+    const shift = event.shiftKey
+    const key = event.key.toLowerCase()
+    const combo = ctrl && shift ? `ctrl+shift+${key}` : ctrl ? `ctrl+${key}` : key
+
+    const refName = this.shortcutButtonMap[combo]
+    if (!refName) return
+
+    const button = this.refs[refName] as HTMLElement | undefined
+    if (!button) return
+
+    button.classList.remove('shortcut-flash')
+    // Force reflow to restart animation if triggered rapidly
+    void button.offsetWidth
+    button.classList.add('shortcut-flash')
+    setTimeout(() => {
+      button.classList.remove('shortcut-flash')
+    }, 200)
   }
 
   private readonly handleGlobalKeyDown = (event: KeyboardEvent): void => {
+    if (event.key === 'Escape' && this.state.guideOverlay.shortcutOverlayVisible) {
+      event.preventDefault()
+      this.hideShortcutOverlay()
+      return
+    }
+
     if (event.key === 'Escape' && this.state.settingsOpen) {
       event.preventDefault()
       this.closeSettings()
@@ -1443,14 +1546,26 @@ class MindMapApp {
       return
     }
 
+    if ((event.ctrlKey || event.metaKey) && event.key === '/') {
+      event.preventDefault()
+      if (this.state.guideOverlay.shortcutOverlayVisible) {
+        this.hideShortcutOverlay()
+      } else {
+        this.showShortcutOverlay()
+      }
+      return
+    }
+
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
       event.preventDefault()
+      this.flashToolbarButton(event)
       void this.saveDocument('status.saved')
       return
     }
 
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z' && !event.shiftKey) {
       event.preventDefault()
+      this.flashToolbarButton(event)
       this.undo()
       return
     }
@@ -1460,12 +1575,14 @@ class MindMapApp {
       ((event.key.toLowerCase() === 'y' && !event.shiftKey) || (event.key.toLowerCase() === 'z' && event.shiftKey))
     ) {
       event.preventDefault()
+      this.flashToolbarButton(event)
       this.redo()
       return
     }
 
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'l') {
       event.preventDefault()
+      this.flashToolbarButton(event)
       this.autoLayout()
       return
     }
@@ -1709,6 +1826,140 @@ class MindMapApp {
       ),
       historyCaptured: false,
     }
+
+    // Add dragging visual feedback class to all dragged nodes
+    for (const dragId of dragNodeIds) {
+      const el = this.rootEl.querySelector<HTMLElement>(`[data-node-id="${dragId}"]`)
+      if (el) {
+        el.classList.add('node-dragging')
+      }
+    }
+  }
+
+  private updateDropTargetHighlights(): void {
+    if (!this.state.drag) {
+      return
+    }
+
+    const draggedNode = this.findNode(this.state.drag.nodeId)
+    if (!draggedNode) {
+      return
+    }
+
+    const draggedNodeIds = new Set(this.state.drag.nodeIds)
+    const DROP_TARGET_DISTANCE = 40
+
+    // Clear previous highlights
+    this.clearDropTargetHighlights()
+
+    // Check distance to all non-dragged nodes
+    for (const node of this.state.document.nodes) {
+      if (draggedNodeIds.has(node.id) || node.kind === 'root') {
+        continue
+      }
+
+      const dx = draggedNode.position.x - node.position.x
+      const dy = draggedNode.position.y - node.position.y
+      const distance = Math.sqrt(dx * dx + dy * dy)
+
+      if (distance <= DROP_TARGET_DISTANCE) {
+        const el = this.rootEl.querySelector<HTMLElement>(`[data-node-id="${node.id}"]`)
+        if (el) {
+          el.classList.add('drop-target-highlight')
+        }
+      }
+    }
+  }
+
+  private clearDropTargetHighlights(): void {
+    const highlighted = this.rootEl.querySelectorAll<HTMLElement>('.drop-target-highlight')
+    for (const el of highlighted) {
+      el.classList.remove('drop-target-highlight')
+    }
+  }
+
+  private updateAlignmentGuides(): void {
+    // Remove existing guides first
+    this.clearAlignmentGuides()
+
+    if (!this.state.drag) {
+      return
+    }
+
+    const draggedNode = this.findNode(this.state.drag.nodeId)
+    if (!draggedNode) {
+      return
+    }
+
+    const scroll = this.refs?.scroll
+    if (!scroll) {
+      return
+    }
+
+    // Compute dragged node bounds (position is center-based in this app)
+    const draggedNodeIds = new Set(this.state.drag.nodeIds)
+    const childCount = childrenOf(this.state.document, draggedNode.id).length
+    const nodeWidth = draggedNode.width ?? estimateNodeWidth(draggedNode, childCount)
+    const nodeHeight = draggedNode.height ?? estimateNodeHeight(draggedNode, childCount, nodeWidth)
+
+    // Position in the app is center-based, so top-left = position - size/2
+    const draggedPos = {
+      x: draggedNode.position.x - nodeWidth / 2,
+      y: draggedNode.position.y - nodeHeight / 2,
+    }
+    const draggedSize = { width: nodeWidth, height: nodeHeight }
+
+    // Build other nodes bounds (excluding dragged nodes)
+    const otherNodes: NodeBounds[] = []
+    const visibleIds = visibleNodeIds(this.state.document)
+    for (const nodeId of visibleIds) {
+      if (draggedNodeIds.has(nodeId)) {
+        continue
+      }
+      const node = this.findNode(nodeId)
+      if (!node) {
+        continue
+      }
+      const nChildCount = childrenOf(this.state.document, node.id).length
+      const nWidth = node.width ?? estimateNodeWidth(node, nChildCount)
+      const nHeight = node.height ?? estimateNodeHeight(node, nChildCount, nWidth)
+      otherNodes.push({
+        id: node.id,
+        x: node.position.x - nWidth / 2,
+        y: node.position.y - nHeight / 2,
+        width: nWidth,
+        height: nHeight,
+      })
+    }
+
+    // Detect alignment
+    const guides = this.uxEngine.detectAlignment(draggedPos, draggedSize, otherNodes)
+
+    // Render guide DOM elements into the scroll container
+    for (const guide of guides) {
+      const el = document.createElement('div')
+      el.classList.add('alignment-guide')
+      if (guide.axis === 'x') {
+        el.classList.add('alignment-guide--x')
+        // Convert world X to screen position within the scroll container
+        const screenX = (guide.position + this.workspaceBounds.originX) * this.viewport.scale + this.viewport.x
+        el.style.left = `${screenX}px`
+      } else {
+        el.classList.add('alignment-guide--y')
+        // Convert world Y to screen position within the scroll container
+        const screenY = (guide.position + this.workspaceBounds.originY) * this.viewport.scale + this.viewport.y
+        el.style.top = `${screenY}px`
+      }
+      el.setAttribute('data-alignment-guide', '')
+      scroll.appendChild(el)
+    }
+  }
+
+  private clearAlignmentGuides(): void {
+    const guides = this.rootEl.querySelectorAll<HTMLElement>('[data-alignment-guide]')
+    for (const el of guides) {
+      el.remove()
+    }
   }
 
   private longPressActionForButton(button: number): GestureAction {
@@ -1800,6 +2051,7 @@ class MindMapApp {
         return
       }
       this.longPressState.activated = true
+      this.clearDropTargetHighlights()
       this.state.drag = null
       this.suppressClickOnce = true
       if (this.longPressState.button === 2) {
@@ -2085,13 +2337,17 @@ class MindMapApp {
     this.renderAIWorkspace()
     this.renderGraphOverlay()
     this.renderOnboarding()
+    this.updateCanvasGuide()
+    this.renderCanvasGuide()
     this.initializeViewportIfNeeded()
     this.syncFloatingLayout()
     this.syncInspectorDrag()
     this.focusEditorIfNeeded()
+    this.updateContextToolbar()
   }
 
   private renderHome(): void {
+    this.destroyContextToolbar()
     this.refs = null
     this.rootEl.innerHTML = `
       <div class="home-shell">
@@ -2283,6 +2539,9 @@ class MindMapApp {
     this.refs.inspector.addEventListener('pointermove', this.handleInspectorPointerMove)
     this.refs.inspector.addEventListener('pointerup', this.handleInspectorPointerUp)
     this.refs.inspector.addEventListener('pointercancel', this.handleInspectorPointerUp)
+
+    // Initialize minimap
+    this.initMinimap()
   }
 
   private renderHeader(): void {
@@ -2643,13 +2902,20 @@ class MindMapApp {
           </section>
 
           <section class="inspector-card">
-            <p class="section-label">${this.t('panel.workspace')}</p>
-            <div class="metric-row">
-              ${workspaceMetrics}
+            <p class="section-label inspector-section-header" data-command="toggle-inspector-section:advanced">${this.t('panel.workspace')} ${this.inspectorSectionsCollapsed.has('advanced') ? '▸' : '▾'}</p>
+            <div class="${this.inspectorSectionsCollapsed.has('advanced') ? 'section-collapsed' : 'section-expanded'}">
+              <div class="metric-row">
+                ${workspaceMetrics}
+              </div>
             </div>
           </section>
 
-          ${this.renderSnapshotSection()}
+          <section class="inspector-card">
+            <p class="section-label inspector-section-header" data-command="toggle-inspector-section:snapshots">${this.t('snapshot.title')} ${this.inspectorSectionsCollapsed.has('snapshots') ? '▸' : '▾'}</p>
+            <div class="${this.inspectorSectionsCollapsed.has('snapshots') ? 'section-collapsed' : 'section-expanded'}">
+              ${this.renderSnapshotSectionContent()}
+            </div>
+          </section>
         `
       return
     }
@@ -2731,18 +2997,27 @@ class MindMapApp {
         </section>
 
         <section class="inspector-card">
-          <p class="section-label">${this.t('panel.workspace')}</p>
-          <div class="metric-row">
-            ${workspaceMetrics}
+          <p class="section-label inspector-section-header" data-command="toggle-inspector-section:advanced">${this.t('panel.workspace')} ${this.inspectorSectionsCollapsed.has('advanced') ? '▸' : '▾'}</p>
+          <div class="${this.inspectorSectionsCollapsed.has('advanced') ? 'section-collapsed' : 'section-expanded'}">
+            <div class="metric-row">
+              ${workspaceMetrics}
+            </div>
           </div>
         </section>
 
-        ${this.renderSnapshotSection()}
+        <section class="inspector-card">
+          <p class="section-label inspector-section-header" data-command="toggle-inspector-section:snapshots">${this.t('snapshot.title')} ${this.inspectorSectionsCollapsed.has('snapshots') ? '▸' : '▾'}</p>
+          <div class="${this.inspectorSectionsCollapsed.has('snapshots') ? 'section-collapsed' : 'section-expanded'}">
+            ${this.renderSnapshotSectionContent()}
+          </div>
+        </section>
 
         <section class="inspector-card">
-          <p class="section-label">${this.t('inspector.relations')}</p>
-          <p class="inspector-copy">${escapeHtml(relationModeText)}</p>
-          ${this.renderRelationList(selectedNode.id)}
+          <p class="section-label inspector-section-header" data-command="toggle-inspector-section:relations">${this.t('inspector.relations')} ${this.inspectorSectionsCollapsed.has('relations') ? '▸' : '▾'}</p>
+          <div class="${this.inspectorSectionsCollapsed.has('relations') ? 'section-collapsed' : 'section-expanded'}">
+            <p class="inspector-copy">${escapeHtml(relationModeText)}</p>
+            ${this.renderRelationList(selectedNode.id)}
+          </div>
         </section>
       `
   }
@@ -3937,7 +4212,7 @@ class MindMapApp {
                 this.resolveNodeRenderMetrics(parent, childCountById.get(parent.id) ?? 0),
                 this.resolveNodeRenderMetrics(node, childCountById.get(node.id) ?? 0),
               )
-              return `<path class="edge edge-hierarchy" d="${buildHierarchyPath(projectPosition(edgePoints.source), projectPosition(edgePoints.target), drawEdgeStyle)}" />`
+              return `<path class="edge edge-hierarchy" data-source-id="${parent.id}" data-target-id="${node.id}" d="${buildHierarchyPath(projectPosition(edgePoints.source), projectPosition(edgePoints.target), drawEdgeStyle)}" />`
             })
             .join('')
 
@@ -4249,61 +4524,54 @@ class MindMapApp {
     return listLocalSnapshots(this.state.currentMapId)
   }
 
-  private renderSnapshotSection(): string {
+  /** Renders snapshot section content without the wrapping <section> card (for collapsible Inspector sections) */
+  private renderSnapshotSectionContent(): string {
     const snapshots = this.currentSnapshotList()
     const canSaveSnapshot = Boolean(this.state.currentMapId)
     return `
-      <section class="inspector-card">
-        <div class="inspector-header">
-          <div>
-            <p class="section-label">${this.t('snapshot.title')}</p>
-            <h2>${this.t('snapshot.heading')}</h2>
-          </div>
-        </div>
-        <p class="inspector-copy">${this.t('snapshot.copy')}</p>
-        <div class="snapshot-save-row">
-          <label class="snapshot-name-field">
-            <span class="snapshot-name-label">${this.t('snapshot.nameLabel')}</span>
-            <input
-              class="settings-input snapshot-name-input"
-              data-snapshot-name
-              value="${escapeAttribute(this.state.snapshotDraftName)}"
-              placeholder="${escapeAttribute(this.t('snapshot.namePlaceholder'))}"
-              ${canSaveSnapshot ? '' : 'disabled'}
-            />
-          </label>
-          <button type="button" class="chip-button" data-command="save-snapshot" ${canSaveSnapshot ? '' : 'disabled'}>${this.t('snapshot.save')}</button>
-        </div>
-        ${
-          snapshots.length === 0
-            ? `<p class="empty-state">${this.t('snapshot.empty')}</p>`
-            : `
-              <ul class="snapshot-list">
-                ${snapshots
-                  .map((snapshot) => {
-                    const modeLabel =
-                      snapshot.mode === 'manual' ? this.t('snapshot.modeManual') : this.t('snapshot.modeAuto')
-                    const metaSuffix =
-                      snapshot.mapTitle && snapshot.mapTitle !== snapshot.title
-                        ? ` · ${escapeHtml(snapshot.mapTitle)}`
-                        : ''
-                    return `
-                      <li class="snapshot-item">
-                        <div class="snapshot-item-copy">
-                          <p class="snapshot-item-title">${escapeHtml(snapshot.title)}</p>
-                          <p class="snapshot-item-meta">${escapeHtml(modeLabel)} · ${escapeHtml(
-                            formatRelativeTime(snapshot.createdAt, this.state.preferences.locale),
-                          )} · ${escapeHtml(this.t('dock.nodes', { value: snapshot.nodeCount }))}${metaSuffix}</p>
-                        </div>
-                        <button type="button" class="ghost-button snapshot-restore-button" data-command="restore-snapshot:${snapshot.id}">${this.t('snapshot.restore')}</button>
-                      </li>
-                    `
-                  })
-                  .join('')}
-              </ul>
-            `
-        }
-      </section>
+      <p class="inspector-copy">${this.t('snapshot.copy')}</p>
+      <div class="snapshot-save-row">
+        <label class="snapshot-name-field">
+          <span class="snapshot-name-label">${this.t('snapshot.nameLabel')}</span>
+          <input
+            class="settings-input snapshot-name-input"
+            data-snapshot-name
+            value="${escapeAttribute(this.state.snapshotDraftName)}"
+            placeholder="${escapeAttribute(this.t('snapshot.namePlaceholder'))}"
+            ${canSaveSnapshot ? '' : 'disabled'}
+          />
+        </label>
+        <button type="button" class="chip-button" data-command="save-snapshot" ${canSaveSnapshot ? '' : 'disabled'}>${this.t('snapshot.save')}</button>
+      </div>
+      ${
+        snapshots.length === 0
+          ? `<p class="empty-state">${this.t('snapshot.empty')}</p>`
+          : `
+            <ul class="snapshot-list">
+              ${snapshots
+                .map((snapshot) => {
+                  const modeLabel =
+                    snapshot.mode === 'manual' ? this.t('snapshot.modeManual') : this.t('snapshot.modeAuto')
+                  const metaSuffix =
+                    snapshot.mapTitle && snapshot.mapTitle !== snapshot.title
+                      ? ` · ${escapeHtml(snapshot.mapTitle)}`
+                      : ''
+                  return `
+                    <li class="snapshot-item">
+                      <div class="snapshot-item-copy">
+                        <p class="snapshot-item-title">${escapeHtml(snapshot.title)}</p>
+                        <p class="snapshot-item-meta">${escapeHtml(modeLabel)} · ${escapeHtml(
+                          formatRelativeTime(snapshot.createdAt, this.state.preferences.locale),
+                        )} · ${escapeHtml(this.t('dock.nodes', { value: snapshot.nodeCount }))}${metaSuffix}</p>
+                      </div>
+                      <button type="button" class="ghost-button snapshot-restore-button" data-command="restore-snapshot:${snapshot.id}">${this.t('snapshot.restore')}</button>
+                    </li>
+                  `
+                })
+                .join('')}
+            </ul>
+          `
+      }
     `
   }
 
@@ -4825,6 +5093,7 @@ class MindMapApp {
     this.setStatus('status.subtreePasted', { count: insertedNodes.length })
     this.render()
     this.scheduleAutosave('status.layoutSaveScheduled')
+    this.showToast(`已粘贴 ${insertedNodes.length} 个节点`)
   }
 
   private toggleNodeSelection(nodeId: string): void {
@@ -4903,6 +5172,8 @@ class MindMapApp {
     this.state.editingNodeId = newNode.id
     touchDocument(this.state.document)
     this.render()
+    this.applyNodeCreateAnimation(newNode.id)
+    this.dismissCanvasGuide()
     this.scheduleAutosave('status.childSaveScheduled')
   }
 
@@ -4949,6 +5220,7 @@ class MindMapApp {
     this.state.editingNodeId = newNode.id
     touchDocument(this.state.document)
     this.render()
+    this.applyNodeCreateAnimation(newNode.id)
     this.scheduleAutosave('status.siblingSaveScheduled')
   }
 
@@ -5033,43 +5305,98 @@ class MindMapApp {
       }
     }
 
+    // Apply deletion animation to visible node elements before removing from data model
+    // Use stagger delays for subtree deletion (depth-first order, 40ms per node)
+    const orderedRemoveIds = Array.from(removeIds)
+    const staggerDelays = this.uxEngine.computeStaggerDelays(orderedRemoveIds, 40)
+    const animatingElements: HTMLElement[] = []
+    for (const nodeId of orderedRemoveIds) {
+      const el = this.rootEl.querySelector<HTMLElement>(`[data-node-id="${nodeId}"]`)
+      if (el) {
+        const delay = staggerDelays.get(nodeId) ?? 0
+        el.style.animationDelay = `${delay}ms`
+        el.classList.add('node-deleting')
+        animatingElements.push(el)
+      }
+    }
+
     const fallbackNodeId =
       primaryNode?.parentId && !removeIds.has(primaryNode.parentId)
         ? primaryNode.parentId
         : findRoot(this.state.document).id
-    const relationCountBefore = this.state.document.relations.length
-    const nodeCountBefore = this.state.document.nodes.length
 
-    this.captureHistory()
-    this.state.document.nodes = this.state.document.nodes.filter((node) => !removeIds.has(node.id))
-    this.state.document.relations = this.state.document.relations
-      .filter((relation) => !removeIds.has(relation.sourceId) && !removeIds.has(relation.targetId))
-      .map((relation) => ({
-        ...relation,
-        branches: (relation.branches ?? []).filter((branch) => !removeIds.has(branch.targetId)),
-      }))
+    // Perform actual deletion after animation completes (or immediately if no elements to animate)
+    const performDeletion = (): void => {
+      const relationCountBefore = this.state.document.relations.length
+      const nodeCountBefore = this.state.document.nodes.length
 
-    const removedNodes = nodeCountBefore - this.state.document.nodes.length
-    const removedRelations = relationCountBefore - this.state.document.relations.length
-    if (removedNodes === 0) {
-      return
+      this.captureHistory()
+      this.state.document.nodes = this.state.document.nodes.filter((node) => !removeIds.has(node.id))
+      this.state.document.relations = this.state.document.relations
+        .filter((relation) => !removeIds.has(relation.sourceId) && !removeIds.has(relation.targetId))
+        .map((relation) => ({
+          ...relation,
+          branches: (relation.branches ?? []).filter((branch) => !removeIds.has(branch.targetId)),
+        }))
+
+      const removedNodes = nodeCountBefore - this.state.document.nodes.length
+      const removedRelations = relationCountBefore - this.state.document.relations.length
+      if (removedNodes === 0) {
+        return
+      }
+
+      autoLayoutHierarchy(
+        this.state.document,
+        this.state.preferences.appearance.layoutMode,
+        this.state.preferences.appearance.childGapX,
+      )
+      this.setSelection([fallbackNodeId], fallbackNodeId)
+      this.state.editingNodeId = null
+      this.state.connectSourceNodeId = null
+      touchDocument(this.state.document)
+      this.setStatus('status.deletedSummary', {
+        nodes: removedNodes,
+        relations: removedRelations,
+      })
+      this.render()
+      this.scheduleAutosave('status.deletionSaveScheduled')
+      this.showToast(`已删除 ${removedNodes} 个节点`)
     }
 
-    autoLayoutHierarchy(
-      this.state.document,
-      this.state.preferences.appearance.layoutMode,
-      this.state.preferences.appearance.childGapX,
-    )
-    this.setSelection([fallbackNodeId], fallbackNodeId)
-    this.state.editingNodeId = null
-    this.state.connectSourceNodeId = null
-    touchDocument(this.state.document)
-    this.setStatus('status.deletedSummary', {
-      nodes: removedNodes,
-      relations: removedRelations,
+    if (animatingElements.length > 0) {
+      // Wait for the last element's animation to end (accounting for stagger), then remove all
+      const maxStaggerDelay = (orderedRemoveIds.length - 1) * 40
+      let completed = false
+      const onComplete = (): void => {
+        if (completed) return
+        completed = true
+        performDeletion()
+      }
+      // Listen on the last animated element (longest delay)
+      const lastEl = animatingElements[animatingElements.length - 1]
+      lastEl.addEventListener('animationend', onComplete, { once: true })
+      // Safety timeout: max stagger delay + animation duration (200ms) + buffer
+      setTimeout(onComplete, maxStaggerDelay + 250)
+    } else {
+      performDeletion()
+    }
+  }
+
+  /** Apply node-creating animation class to a newly created node element after render */
+  private applyNodeCreateAnimation(nodeId: string): void {
+    requestAnimationFrame(() => {
+      const el = this.rootEl.querySelector<HTMLElement>(`[data-node-id="${nodeId}"]`)
+      if (el) {
+        el.classList.add('node-creating')
+        el.addEventListener(
+          'animationend',
+          () => {
+            el.classList.remove('node-creating')
+          },
+          { once: true },
+        )
+      }
     })
-    this.render()
-    this.scheduleAutosave('status.deletionSaveScheduled')
   }
 
   private setPriority(priority: Priority): void {
@@ -5097,6 +5424,17 @@ class MindMapApp {
     this.setStatus(priority ? 'status.priorityApplied' : 'status.priorityCleared', priority ? { priority } : undefined)
     this.render()
     this.scheduleAutosave('status.prioritySaveScheduled')
+  }
+
+  private cycleSelectedNodePriority(): void {
+    const node = this.selectedNode()
+    if (!node) {
+      return
+    }
+
+    const currentIndex = PRIORITY_VALUES.indexOf(node.priority || '')
+    const nextIndex = (currentIndex + 1) % PRIORITY_VALUES.length
+    this.setPriority(PRIORITY_VALUES[nextIndex])
   }
 
   private setNodeColor(color: NodeColor): void {
@@ -5391,29 +5729,136 @@ class MindMapApp {
       return
     }
 
-    const snapshot = this.createHistorySnapshot()
-    this.setSelection([nodeId], nodeId)
-    const changed = toggleCollapse(this.state.document, nodeId)
-    if (!changed) {
-      this.setStatus('status.noBranchToCollapse')
+    const isCollapsing = !node.collapsed
+    // Collect descendant IDs before toggling (depth-first order via BFS from descendantIds)
+    const childNodeIds = descendantIds(this.state.document, nodeId)
+
+    if (isCollapsing) {
+      // --- Collapse: animate children out with stagger, then toggle state ---
+      const staggerDelays = this.uxEngine.computeStaggerDelays(childNodeIds, 40)
+
+      // Apply stagger animation to each visible child node element
+      requestAnimationFrame(() => {
+        for (const childId of childNodeIds) {
+          const el = this.rootEl.querySelector<HTMLElement>(`[data-node-id="${childId}"]`)
+          if (el) {
+            const delay = staggerDelays.get(childId) ?? 0
+            el.style.animationDelay = `${delay}ms`
+            el.classList.add('node-collapsing')
+          }
+        }
+
+        // Also mark hierarchy edges as collapsing for smooth fade (only subtree edges)
+        const childNodeIdSet = new Set(childNodeIds)
+        const edgeLayer = this.rootEl.querySelector<SVGElement>('[data-edge-layer]')
+        if (edgeLayer) {
+          const edges = edgeLayer.querySelectorAll<SVGElement>('.edge-hierarchy')
+          edges.forEach((edge) => {
+            const sourceId = edge.getAttribute('data-source-id')
+            const targetId = edge.getAttribute('data-target-id')
+            if ((sourceId && childNodeIdSet.has(sourceId)) || (targetId && childNodeIdSet.has(targetId))) {
+              edge.classList.add('edge-collapsing')
+            }
+          })
+        }
+      })
+
+      // After the longest animation completes, toggle state and re-render
+      const maxDelay = (childNodeIds.length - 1) * 40
+      const animDuration = 350 // --duration-slow
+      setTimeout(() => {
+        const snapshot = this.createHistorySnapshot()
+        this.setSelection([nodeId], nodeId)
+        const changed = toggleCollapse(this.state.document, nodeId)
+        if (!changed) {
+          this.setStatus('status.noBranchToCollapse')
+          this.render()
+          return
+        }
+
+        if (this.state.preferences.interaction.autoLayoutOnCollapse) {
+          autoLayoutHierarchy(
+            this.state.document,
+            this.state.preferences.appearance.layoutMode,
+            this.state.preferences.appearance.childGapX,
+          )
+        }
+
+        this.pushHistorySnapshot(snapshot)
+        touchDocument(this.state.document)
+        this.setStatus('status.branchCollapsed')
+        this.render()
+        this.scheduleAutosave('status.layoutSaveScheduled')
+      }, maxDelay + animDuration)
+    } else {
+      // --- Expand: toggle state first, then animate children in with reverse stagger ---
+      const snapshot = this.createHistorySnapshot()
+      this.setSelection([nodeId], nodeId)
+      const changed = toggleCollapse(this.state.document, nodeId)
+      if (!changed) {
+        this.setStatus('status.noBranchToCollapse')
+        this.render()
+        return
+      }
+
+      if (this.state.preferences.interaction.autoLayoutOnCollapse) {
+        autoLayoutHierarchy(
+          this.state.document,
+          this.state.preferences.appearance.layoutMode,
+          this.state.preferences.appearance.childGapX,
+        )
+      }
+
+      this.pushHistorySnapshot(snapshot)
+      touchDocument(this.state.document)
+      this.setStatus('status.branchExpanded')
       this.render()
-      return
-    }
+      this.scheduleAutosave('status.layoutSaveScheduled')
 
-    if (this.state.preferences.interaction.autoLayoutOnCollapse) {
-      autoLayoutHierarchy(
-        this.state.document,
-        this.state.preferences.appearance.layoutMode,
-        this.state.preferences.appearance.childGapX,
-      )
-    }
+      // After render, apply expand stagger animation (parent-to-leaf order)
+      const expandNodeIds = descendantIds(this.state.document, nodeId)
+      const staggerDelays = this.uxEngine.computeStaggerDelays(expandNodeIds, 40)
 
-    this.pushHistorySnapshot(snapshot)
-    touchDocument(this.state.document)
-    const toggledNode = this.findNode(nodeId)
-    this.setStatus(toggledNode?.collapsed ? 'status.branchCollapsed' : 'status.branchExpanded')
-    this.render()
-    this.scheduleAutosave('status.layoutSaveScheduled')
+      requestAnimationFrame(() => {
+        for (const childId of expandNodeIds) {
+          const el = this.rootEl.querySelector<HTMLElement>(`[data-node-id="${childId}"]`)
+          if (el) {
+            const delay = staggerDelays.get(childId) ?? 0
+            el.style.animationDelay = `${delay}ms`
+            el.classList.add('node-expanding')
+            el.addEventListener(
+              'animationend',
+              () => {
+                el.classList.remove('node-expanding')
+                el.style.animationDelay = ''
+              },
+              { once: true },
+            )
+          }
+        }
+
+        // Mark hierarchy edges as expanding for smooth fade-in (only subtree edges)
+        const expandNodeIdSet = new Set(expandNodeIds)
+        const edgeLayer = this.rootEl.querySelector<SVGElement>('[data-edge-layer]')
+        if (edgeLayer) {
+          const edges = edgeLayer.querySelectorAll<SVGElement>('.edge-hierarchy')
+          edges.forEach((edge) => {
+            const sourceId = edge.getAttribute('data-source-id')
+            const targetId = edge.getAttribute('data-target-id')
+            if ((sourceId && expandNodeIdSet.has(sourceId)) || (targetId && expandNodeIdSet.has(targetId))) {
+              edge.classList.add('edge-expanding')
+              edge.addEventListener(
+                'animationend',
+                () => {
+                  edge.classList.remove('edge-expanding')
+                },
+                { once: true },
+              )
+            }
+          })
+        }
+      })
+    }
   }
 
   private async runCommand(rawCommand: string): Promise<void> {
@@ -5445,6 +5890,9 @@ class MindMapApp {
           return
         case 'toggle-inspector':
           this.toggleInspector()
+          return
+        case 'toggle-inspector-section':
+          this.toggleInspectorSection(argument)
           return
         case 'toggle-settings':
           this.toggleSettings()
@@ -5640,6 +6088,18 @@ class MindMapApp {
         case 'delete-selected':
           this.deleteSelectedNode()
           return
+        case 'cycle-priority':
+          this.cycleSelectedNodePriority()
+          return
+        case 'open-ai-wheel': {
+          const targetId = this.state.selectedNodeId
+          if (targetId) {
+            const center = this.nodeClientCenter(targetId)
+            this.openAIWheel(targetId, center.x, center.y)
+            this.renderOverlay()
+          }
+          return
+        }
         case 'focus-node':
           if (argument) {
             this.selectNode(argument)
@@ -6221,6 +6681,8 @@ class MindMapApp {
     this.state.ai.open = false
     this.state.graph.open = false
     this.stopGraphAnimation()
+    this.destroyMinimap()
+    this.uxEngine.destroy()
     this.refs = null
     this.resetHistory()
     this.render()
@@ -6264,21 +6726,31 @@ class MindMapApp {
   }
 
   private openAIWorkspace(): void {
+    if (this.state.panelAnimating.has('ai')) {
+      return
+    }
     this.state.ai.open = true
     this.state.graph.open = false
     this.stopGraphAnimation()
     this.setStatus('status.aiPanelOpened')
     this.render()
+    this.animatePanelIn('ai', this.refs?.aiLayer?.querySelector('.ai-drawer') as HTMLElement | null)
   }
 
   private closeAIWorkspace(): void {
     if (!this.state.ai.open) {
       return
     }
+    if (this.state.panelAnimating.has('ai')) {
+      return
+    }
 
-    this.state.ai.open = false
-    this.setStatus('status.aiPanelClosed')
-    this.render()
+    const drawer = this.refs?.aiLayer?.querySelector('.ai-drawer') as HTMLElement | null
+    this.animatePanelOut('ai', drawer, () => {
+      this.state.ai.open = false
+      this.setStatus('status.aiPanelClosed')
+      this.render()
+    })
   }
 
   private toggleAIDebug(): void {
@@ -6978,16 +7450,41 @@ class MindMapApp {
     event.preventDefault()
     this.viewport.x = this.pan.startViewportX + deltaX
     this.viewport.y = this.pan.startViewportY + deltaY
+    this.uxEngine.syncViewport(this.viewport)
     this.updateCanvasViewportView()
+
+    // Track velocity for inertia: compute instantaneous velocity in px/frame (~16.67ms)
+    const now = performance.now()
+    const dt = now - this.pan.lastMoveTime
+    if (dt > 0) {
+      const frameTime = 16.67 // ~60fps frame duration
+      const moveDx = event.clientX - this.pan.lastClientX
+      const moveDy = event.clientY - this.pan.lastClientY
+      // Smooth velocity with exponential moving average
+      const alpha = Math.min(1, dt / 100)
+      this.pan.velocityX = this.pan.velocityX * (1 - alpha) + (moveDx / dt) * frameTime * alpha
+      this.pan.velocityY = this.pan.velocityY * (1 - alpha) + (moveDy / dt) * frameTime * alpha
+    }
+    this.pan.lastClientX = event.clientX
+    this.pan.lastClientY = event.clientY
+    this.pan.lastMoveTime = now
   }
 
   private startCanvasPan(pointerId: number, clientX: number, clientY: number): void {
+    // Cancel any ongoing inertia when a new pan gesture starts
+    this.uxEngine.cancelInertia()
+
     this.pan = {
       pointerId,
       startX: clientX,
       startY: clientY,
       startViewportX: this.viewport.x,
       startViewportY: this.viewport.y,
+      lastClientX: clientX,
+      lastClientY: clientY,
+      lastMoveTime: performance.now(),
+      velocityX: 0,
+      velocityY: 0,
     }
     this.setCanvasPanning(true)
   }
@@ -7450,6 +7947,102 @@ class MindMapApp {
     }, 3000)
   }
 
+  // === Toast Queue Manager ===
+
+  private ensureToastContainer(): HTMLElement {
+    if (this.toastContainer && document.body.contains(this.toastContainer)) {
+      return this.toastContainer
+    }
+    const container = document.createElement('div')
+    container.className = 'toast-container'
+    document.body.appendChild(container)
+    this.toastContainer = container
+    return container
+  }
+
+  private showToast(message: string): void {
+    const id = `toast-${++this.toastIdCounter}-${Date.now()}`
+    const item: ToastItem = {
+      id,
+      message,
+      createdAt: Date.now(),
+      element: null,
+    }
+
+    this.state.toastQueue.push(item)
+    this.renderToasts()
+  }
+
+  private dismissToast(id: string): void {
+    const item = this.state.toastQueue.find((t) => t.id === id)
+    if (!item || !item.element) return
+
+    // Clear auto-dismiss timer
+    const timer = this.toastTimers.get(id)
+    if (timer != null) {
+      window.clearTimeout(timer)
+      this.toastTimers.delete(id)
+    }
+
+    // Add leaving animation class
+    item.element.classList.remove('toast-entering')
+    item.element.classList.add('toast-leaving')
+
+    // Remove after fade-out animation (200ms)
+    const el = item.element
+    const onAnimEnd = (): void => {
+      el.remove()
+      this.state.toastQueue = this.state.toastQueue.filter((t) => t.id !== id)
+      this.renderToasts()
+    }
+    el.addEventListener('animationend', onAnimEnd, { once: true })
+    // Safety timeout in case animationend doesn't fire
+    window.setTimeout(onAnimEnd, 250)
+  }
+
+  private renderToasts(): void {
+    const container = this.ensureToastContainer()
+    const maxVisible = 3
+    const autoDismissMs = 2500
+
+    // If more than maxVisible, dismiss oldest immediately
+    while (this.state.toastQueue.length > maxVisible) {
+      const oldest = this.state.toastQueue[0]
+      if (oldest) {
+        // Remove timer
+        const timer = this.toastTimers.get(oldest.id)
+        if (timer != null) {
+          window.clearTimeout(timer)
+          this.toastTimers.delete(oldest.id)
+        }
+        // Remove element immediately
+        if (oldest.element) {
+          oldest.element.remove()
+        }
+        this.state.toastQueue.shift()
+      }
+    }
+
+    // Render each toast that doesn't have an element yet
+    for (const item of this.state.toastQueue) {
+      if (item.element && container.contains(item.element)) continue
+
+      const el = document.createElement('div')
+      el.className = 'toast-item toast-entering'
+      el.textContent = item.message
+      el.dataset.toastId = item.id
+      container.appendChild(el)
+      item.element = el
+
+      // Schedule auto-dismiss after 2500ms
+      const timer = window.setTimeout(() => {
+        this.toastTimers.delete(item.id)
+        this.dismissToast(item.id)
+      }, autoDismissMs)
+      this.toastTimers.set(item.id, timer)
+    }
+  }
+
   private setLocale(locale: Locale, announce: boolean): void {
     this.updatePreferences((preferences) => {
       preferences.locale = locale
@@ -7462,9 +8055,21 @@ class MindMapApp {
   }
 
   private toggleSettings(): void {
-    this.state.settingsOpen = !this.state.settingsOpen
-    this.setStatus(this.state.settingsOpen ? 'status.settingsOpened' : 'status.settingsClosed')
+    if (this.state.settingsOpen) {
+      this.closeSettings()
+    } else {
+      this.openSettings()
+    }
+  }
+
+  private openSettings(): void {
+    if (this.state.panelAnimating.has('settings')) {
+      return
+    }
+    this.state.settingsOpen = true
+    this.setStatus('status.settingsOpened')
     this.render()
+    this.animatePanelIn('settings', this.refs?.settingsLayer?.querySelector('.settings-drawer') as HTMLElement | null)
   }
 
   private toggleTopPanel(): void {
@@ -7481,19 +8086,96 @@ class MindMapApp {
   }
 
   private toggleInspector(): void {
-    this.state.inspectorCollapsed = !this.state.inspectorCollapsed
-    this.setStatus(this.state.inspectorCollapsed ? 'status.panelClosed' : 'status.panelOpened')
-    this.render()
+    if (this.state.panelAnimating.has('inspector')) {
+      return
+    }
+    if (this.state.inspectorCollapsed) {
+      this.state.inspectorCollapsed = false
+      this.setStatus('status.panelOpened')
+      this.render()
+      this.animatePanelIn('inspector', this.refs?.inspector ?? null)
+    } else {
+      this.animatePanelOut('inspector', this.refs?.inspector ?? null, () => {
+        this.state.inspectorCollapsed = true
+        this.setStatus('status.panelClosed')
+        this.render()
+      })
+    }
+  }
+
+  /** Toggle an Inspector section between collapsed and expanded */
+  private toggleInspectorSection(sectionId: string): void {
+    if (!sectionId) return
+    if (this.inspectorSectionsCollapsed.has(sectionId)) {
+      this.inspectorSectionsCollapsed.delete(sectionId)
+    } else {
+      this.inspectorSectionsCollapsed.add(sectionId)
+    }
+    this.renderInspector()
   }
 
   private closeSettings(): void {
     if (!this.state.settingsOpen) {
       return
     }
+    if (this.state.panelAnimating.has('settings')) {
+      return
+    }
 
-    this.state.settingsOpen = false
-    this.setStatus('status.settingsClosed')
-    this.render()
+    const drawer = this.refs?.settingsLayer?.querySelector('.settings-drawer') as HTMLElement | null
+    this.animatePanelOut('settings', drawer, () => {
+      this.state.settingsOpen = false
+      this.setStatus('status.settingsClosed')
+      this.render()
+    })
+  }
+
+  private animatePanelIn(panelId: string, element: HTMLElement | null): void {
+    if (!element) {
+      return
+    }
+    this.state.panelAnimating.add(panelId)
+    element.classList.add('panel-entering')
+
+    const onEnd = (): void => {
+      element.removeEventListener('animationend', onEnd)
+      element.classList.remove('panel-entering')
+      this.state.panelAnimating.delete(panelId)
+    }
+    element.addEventListener('animationend', onEnd, { once: true })
+
+    // Safety timeout in case animationend doesn't fire (e.g., reduced motion, tab hidden)
+    const safetyTimeout = 300
+    window.setTimeout(() => {
+      if (this.state.panelAnimating.has(panelId)) {
+        onEnd()
+      }
+    }, safetyTimeout)
+  }
+
+  private animatePanelOut(panelId: string, element: HTMLElement | null, onComplete: () => void): void {
+    if (!element) {
+      onComplete()
+      return
+    }
+    this.state.panelAnimating.add(panelId)
+    element.classList.add('panel-leaving')
+
+    const onEnd = (): void => {
+      element.removeEventListener('animationend', onEnd)
+      element.classList.remove('panel-leaving')
+      this.state.panelAnimating.delete(panelId)
+      onComplete()
+    }
+    element.addEventListener('animationend', onEnd, { once: true })
+
+    // Safety timeout in case animationend doesn't fire
+    const safetyTimeout = 250
+    window.setTimeout(() => {
+      if (this.state.panelAnimating.has(panelId)) {
+        onEnd()
+      }
+    }, safetyTimeout)
   }
 
   private completeOnboarding(): void {
@@ -7501,6 +8183,164 @@ class MindMapApp {
       preferences.onboardingCompleted = true
     })
     this.render()
+  }
+
+  // === Guide Overlay ===
+
+  private updateCanvasGuide(): void {
+    if (this.state.guideOverlay.canvasGuideDismissed) {
+      this.state.guideOverlay.canvasGuideVisible = false
+      return
+    }
+    const root = this.state.document.nodes.find((n) => n.kind === 'root')
+    if (!root) {
+      this.state.guideOverlay.canvasGuideVisible = false
+      return
+    }
+    const hasChildren = this.state.document.nodes.some((n) => n.parentId === root.id)
+    this.state.guideOverlay.canvasGuideVisible = !hasChildren
+  }
+
+  private dismissCanvasGuide(): void {
+    if (!this.state.guideOverlay.canvasGuideVisible) {
+      return
+    }
+    // Fade out over 300ms, then set session flag
+    const guideEl = this.refs?.scroll?.querySelector('.canvas-guide') as HTMLElement | null
+    if (guideEl) {
+      guideEl.classList.add('is-fading')
+      window.setTimeout(() => {
+        this.state.guideOverlay.canvasGuideVisible = false
+        this.state.guideOverlay.canvasGuideDismissed = true
+        this.renderCanvasGuide()
+      }, 300)
+    } else {
+      this.state.guideOverlay.canvasGuideVisible = false
+      this.state.guideOverlay.canvasGuideDismissed = true
+    }
+  }
+
+  private renderCanvasGuide(): void {
+    if (!this.refs) {
+      return
+    }
+    const existing = this.refs.scroll.querySelector('.canvas-guide')
+    if (this.state.guideOverlay.canvasGuideVisible) {
+      if (!existing) {
+        const guide = document.createElement('div')
+        guide.className = 'canvas-guide'
+        guide.textContent = this.t('guide.canvasHint')
+        this.refs.scroll.appendChild(guide)
+      }
+    } else {
+      existing?.remove()
+    }
+  }
+
+  private showShortcutOverlay(): void {
+    if (this.state.guideOverlay.shortcutOverlayVisible) {
+      return
+    }
+    this.state.guideOverlay.shortcutOverlayVisible = true
+    this.renderShortcutOverlay()
+  }
+
+  private hideShortcutOverlay(): void {
+    if (!this.state.guideOverlay.shortcutOverlayVisible) {
+      return
+    }
+    const overlay = document.querySelector('.shortcut-overlay') as HTMLElement | null
+    if (overlay) {
+      overlay.classList.add('is-fading')
+      window.setTimeout(() => {
+        this.state.guideOverlay.shortcutOverlayVisible = false
+        overlay.remove()
+      }, 200)
+    } else {
+      this.state.guideOverlay.shortcutOverlayVisible = false
+    }
+  }
+
+  private renderShortcutOverlay(): void {
+    // Remove existing if any
+    document.querySelector('.shortcut-overlay')?.remove()
+
+    if (!this.state.guideOverlay.shortcutOverlayVisible) {
+      return
+    }
+
+    const isMac = navigator.platform.toUpperCase().includes('MAC')
+    const mod = isMac ? '⌘' : 'Ctrl'
+
+    const categories = [
+      {
+        title: this.t('guide.categoryEditing'),
+        shortcuts: [
+          { key: 'Tab', desc: this.t('guide.shortcut.tab') },
+          { key: 'Enter', desc: this.t('guide.shortcut.enter') },
+          { key: 'Delete', desc: this.t('guide.shortcut.delete') },
+          { key: 'F2', desc: this.t('guide.shortcut.f2') },
+          { key: 'Space', desc: this.t('guide.shortcut.space') },
+          { key: `${mod}+C`, desc: this.t('guide.shortcut.ctrlC') },
+          { key: `${mod}+V`, desc: this.t('guide.shortcut.ctrlV') },
+        ],
+      },
+      {
+        title: this.t('guide.categoryNavigation'),
+        shortcuts: [{ key: '↑ ↓ ← →', desc: this.t('guide.shortcut.arrows') }],
+      },
+      {
+        title: this.t('guide.categoryView'),
+        shortcuts: [
+          { key: `${mod}++`, desc: this.t('guide.shortcut.ctrlPlus') },
+          { key: `${mod}+-`, desc: this.t('guide.shortcut.ctrlMinus') },
+          { key: `${mod}+0`, desc: this.t('guide.shortcut.ctrl0') },
+          { key: `${mod}+L`, desc: this.t('guide.shortcut.ctrlL') },
+        ],
+      },
+      {
+        title: this.t('guide.categoryGeneral'),
+        shortcuts: [
+          { key: `${mod}+S`, desc: this.t('guide.shortcut.ctrlS') },
+          { key: `${mod}+Z`, desc: this.t('guide.shortcut.ctrlZ') },
+          { key: `${mod}+Shift+Z`, desc: this.t('guide.shortcut.ctrlShiftZ') },
+          { key: `${mod}+/`, desc: this.t('guide.shortcut.ctrlSlash') },
+          { key: 'Escape', desc: this.t('guide.shortcut.escape') },
+        ],
+      },
+    ]
+
+    const categoriesHtml = categories
+      .map(
+        (cat) => `
+      <div class="shortcut-category">
+        <h3 class="shortcut-category-title">${cat.title}</h3>
+        <div class="shortcut-grid">
+          ${cat.shortcuts.map((s) => `<span class="shortcut-key">${s.key}</span><span class="shortcut-desc">${s.desc}</span>`).join('')}
+        </div>
+      </div>
+    `,
+      )
+      .join('')
+
+    const overlay = document.createElement('div')
+    overlay.className = 'shortcut-overlay'
+    overlay.setAttribute('data-shortcut-overlay', '')
+    overlay.innerHTML = `
+      <div class="shortcut-overlay-content">
+        <h2 class="shortcut-overlay-title">${this.t('guide.shortcutTitle')}</h2>
+        ${categoriesHtml}
+      </div>
+    `
+
+    // Click outside (on backdrop) to close
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) {
+        this.hideShortcutOverlay()
+      }
+    })
+
+    document.body.appendChild(overlay)
   }
 
   private updatePreferences(updater: (preferences: AppPreferences) => void): void {
@@ -7625,6 +8465,7 @@ class MindMapApp {
         : null
     this.clearNodeLongPress()
     this.clearNodeEditorState()
+    this.clearDropTargetHighlights()
     this.state.drag = null
     this.pan = null
     this.state.resize = null
@@ -7826,17 +8667,9 @@ class MindMapApp {
     const rect = scroll.getBoundingClientRect()
     const centerX = rect.width / 2
     const centerY = rect.height / 2
-    const worldX = (centerX - this.viewport.x) / this.viewport.scale
-    const worldY = (centerY - this.viewport.y) / this.viewport.scale
-    const nextScale = clamp(this.viewport.scale * factor, MIN_ZOOM, MAX_ZOOM)
-    this.viewport.x = centerX - worldX * nextScale
-    this.viewport.y = centerY - worldY * nextScale
-    this.viewport.scale = nextScale
-    this.applyCanvasMetrics()
-    this.updateCanvasViewportView()
-    this.renderInspector()
-    this.syncInspectorNoteInputs()
-    this.syncInspectorDrag()
+    const targetScale = clamp(this.viewport.scale * factor, MIN_ZOOM, MAX_ZOOM)
+
+    this.uxEngine.animateZoom(this.viewport.scale, targetScale, centerX, centerY, this.viewport.x, this.viewport.y)
   }
 
   private zoomReset(): void {
@@ -7847,16 +8680,8 @@ class MindMapApp {
     const rect = scroll.getBoundingClientRect()
     const centerX = rect.width / 2
     const centerY = rect.height / 2
-    const worldX = (centerX - this.viewport.x) / this.viewport.scale
-    const worldY = (centerY - this.viewport.y) / this.viewport.scale
-    this.viewport.x = centerX - worldX
-    this.viewport.y = centerY - worldY
-    this.viewport.scale = 1
-    this.applyCanvasMetrics()
-    this.updateCanvasViewportView()
-    this.renderInspector()
-    this.syncInspectorNoteInputs()
-    this.syncInspectorDrag()
+
+    this.uxEngine.animateZoom(this.viewport.scale, 1, centerX, centerY, this.viewport.x, this.viewport.y)
   }
 
   private zoomFit(): void {
@@ -7868,15 +8693,20 @@ class MindMapApp {
     const nodes = this.state.document.nodes
     const regions = this.state.document.regions ?? []
 
+    // Compute current viewport state
+    const current: import('./ux-engine').ViewportState = {
+      x: this.viewport.x,
+      y: this.viewport.y,
+      scale: this.viewport.scale,
+    }
+
     if (nodes.length === 0 && regions.length === 0) {
-      this.viewport.scale = 1
-      this.viewport.x = (rect.width - this.workspaceBounds.width) / 2
-      this.viewport.y = (rect.height - this.workspaceBounds.height) / 2
-      this.applyCanvasMetrics()
-      this.updateCanvasViewportView()
-      this.renderInspector()
-      this.syncInspectorNoteInputs()
-      this.syncInspectorDrag()
+      const target: import('./ux-engine').ViewportState = {
+        x: (rect.width - this.workspaceBounds.width) / 2,
+        y: (rect.height - this.workspaceBounds.height) / 2,
+        scale: 1,
+      }
+      this.uxEngine.animateFitToView(current, target)
       return
     }
 
@@ -7909,14 +8739,13 @@ class MindMapApp {
 
     const layerCenterX = (minX + maxX) / 2 + this.workspaceBounds.originX
     const layerCenterY = (minY + maxY) / 2 + this.workspaceBounds.originY
-    this.viewport.scale = fitScale
-    this.viewport.x = rect.width / 2 - layerCenterX * fitScale
-    this.viewport.y = rect.height / 2 - layerCenterY * fitScale
-    this.applyCanvasMetrics()
-    this.updateCanvasViewportView()
-    this.renderInspector()
-    this.syncInspectorNoteInputs()
-    this.syncInspectorDrag()
+
+    const target: import('./ux-engine').ViewportState = {
+      x: rect.width / 2 - layerCenterX * fitScale,
+      y: rect.height / 2 - layerCenterY * fitScale,
+      scale: fitScale,
+    }
+    this.uxEngine.animateFitToView(current, target)
   }
 
   private clientToCanvasPosition(clientX: number, clientY: number): Position {
@@ -7946,6 +8775,8 @@ class MindMapApp {
 
     this.refs.canvas.style.transform = `translate(${Math.round(this.viewport.x)}px, ${Math.round(this.viewport.y)}px)`
     this.refs.zoomLevel.textContent = `${Math.round(this.viewport.scale * 100)}%`
+    this.updateMinimap()
+    this.updateContextToolbar()
   }
 
   private renderGraphResultsList(): string {
@@ -8270,6 +9101,265 @@ class MindMapApp {
     const indicator = this.rootEl.querySelector<HTMLElement>('[data-graph-zoom-value]')
     if (indicator) {
       indicator.textContent = this.t('graph.zoomValue', { value: Math.round(this.state.graph.zoom * 100) })
+    }
+  }
+
+  // --- Minimap ---
+
+  private initMinimap(): void {
+    if (this.minimapRenderer) return
+    if (!this.refs) return
+
+    try {
+      const container = this.refs.scroll.parentElement ?? document.body
+      this.minimapRenderer = new MinimapRenderer(container, 180, 120)
+      this.bindMinimapNavigation()
+    } catch {
+      // Minimap canvas creation failed — degrade gracefully
+      this.minimapRenderer = null
+    }
+  }
+
+  private updateMinimap(): void {
+    if (!this.minimapRenderer || !this.refs) return
+
+    const nodes = this.state.document.nodes
+    const minimapNodes: MinimapNodeData[] = []
+
+    for (const node of nodes) {
+      const childCount = childrenOf(this.state.document, node.id).length
+      const w = node.width ?? estimateNodeWidth(node, childCount)
+      const h = node.height ?? estimateNodeHeight(node, childCount, w)
+      // Node position is center-based, convert to top-left for minimap
+      const x = node.position.x - w / 2
+      const y = node.position.y - h / 2
+
+      // Resolve node color for minimap rendering
+      let color = 'rgba(100, 160, 255, 0.8)'
+      if (node.color) {
+        const palette = resolveNodeColorPalette(node.color)
+        if (palette) {
+          color = `rgb(${palette.surfaceRgb})`
+        }
+      } else if (node.kind === 'root') {
+        color = 'rgba(129, 140, 248, 0.9)'
+      }
+
+      minimapNodes.push({ x, y, width: w, height: h, color })
+    }
+
+    this.minimapRenderer.setNodes(minimapNodes)
+
+    // Update viewport data
+    const scroll = this.refs.scroll
+    const rect = scroll.getBoundingClientRect()
+    this.minimapRenderer.setViewport({
+      x: this.viewport.x,
+      y: this.viewport.y,
+      scale: this.viewport.scale,
+      screenWidth: rect.width,
+      screenHeight: rect.height,
+    })
+  }
+
+  private destroyMinimap(): void {
+    if (this.minimapRenderer) {
+      this.minimapRenderer.destroy()
+      this.minimapRenderer = null
+    }
+  }
+
+  private bindMinimapNavigation(): void {
+    if (!this.minimapRenderer) return
+    const canvas = this.minimapRenderer.getCanvas()
+
+    const panToMinimapPosition = (event: MouseEvent): void => {
+      if (!this.minimapRenderer || !this.refs) return
+      const rect = canvas.getBoundingClientRect()
+      const mx = event.clientX - rect.left
+      const my = event.clientY - rect.top
+
+      const worldPos = this.minimapRenderer.minimapToWorld(mx, my)
+      if (!worldPos) return
+
+      // Convert world position to workspace position (add originX/originY offset)
+      const workspaceX = worldPos.worldX + this.workspaceBounds.originX
+      const workspaceY = worldPos.worldY + this.workspaceBounds.originY
+
+      // Center viewport on the computed workspace position
+      const scroll = this.refs.scroll
+      this.viewport.x = scroll.clientWidth / 2 - workspaceX * this.viewport.scale
+      this.viewport.y = scroll.clientHeight / 2 - workspaceY * this.viewport.scale
+      this.uxEngine.syncViewport(this.viewport)
+      this.updateCanvasViewportView()
+    }
+
+    const handleMouseDown = (event: MouseEvent): void => {
+      if (event.button !== 0) return
+      event.preventDefault()
+      event.stopPropagation()
+      this.minimapDragging = true
+      panToMinimapPosition(event)
+    }
+
+    const handleMouseMove = (event: MouseEvent): void => {
+      if (!this.minimapDragging) return
+      event.preventDefault()
+      panToMinimapPosition(event)
+    }
+
+    const handleMouseUp = (event: MouseEvent): void => {
+      if (!this.minimapDragging) return
+      event.preventDefault()
+      this.minimapDragging = false
+    }
+
+    canvas.addEventListener('mousedown', handleMouseDown)
+    window.addEventListener('mousemove', handleMouseMove)
+    window.addEventListener('mouseup', handleMouseUp)
+  }
+
+  // === Context Toolbar ===
+
+  private createContextToolbar(): HTMLElement {
+    const toolbar = document.createElement('div')
+    toolbar.className = 'context-toolbar context-toolbar-hidden'
+    toolbar.setAttribute('data-context-toolbar', '')
+    toolbar.style.transition = 'left 100ms ease-out, top 100ms ease-out'
+
+    // Color selection button
+    const colorBtn = document.createElement('button')
+    colorBtn.type = 'button'
+    colorBtn.className = 'context-toolbar-btn'
+    colorBtn.setAttribute('data-command', 'toggle-fixed-menu:color')
+    colorBtn.setAttribute('aria-label', 'Color')
+    colorBtn.title = this.t('inspector.color')
+    colorBtn.innerHTML =
+      '<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.5"/><circle cx="8" cy="8" r="3" fill="currentColor"/></svg>'
+    toolbar.appendChild(colorBtn)
+
+    // Priority toggle button
+    const priorityBtn = document.createElement('button')
+    priorityBtn.type = 'button'
+    priorityBtn.className = 'context-toolbar-btn'
+    priorityBtn.setAttribute('data-command', 'cycle-priority')
+    priorityBtn.setAttribute('aria-label', 'Priority')
+    priorityBtn.title = this.t('context.priorityP0')
+    priorityBtn.innerHTML =
+      '<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M3 2v12M3 2l9 4-9 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>'
+    toolbar.appendChild(priorityBtn)
+
+    // Delete button
+    const deleteBtn = document.createElement('button')
+    deleteBtn.type = 'button'
+    deleteBtn.className = 'context-toolbar-btn context-toolbar-btn--danger'
+    deleteBtn.setAttribute('data-command', 'delete-selected')
+    deleteBtn.setAttribute('aria-label', 'Delete')
+    deleteBtn.title = this.t('action.delete')
+    deleteBtn.innerHTML =
+      '<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 4h12M5.333 4V2.667a1.333 1.333 0 011.334-1.334h2.666a1.333 1.333 0 011.334 1.334V4M12.667 4v9.333a1.333 1.333 0 01-1.334 1.334H4.667a1.333 1.333 0 01-1.334-1.334V4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>'
+    toolbar.appendChild(deleteBtn)
+
+    // AI action button
+    const aiBtn = document.createElement('button')
+    aiBtn.type = 'button'
+    aiBtn.className = 'context-toolbar-btn'
+    aiBtn.setAttribute('data-command', 'open-ai-wheel')
+    aiBtn.setAttribute('aria-label', 'AI')
+    aiBtn.title = 'AI'
+    aiBtn.innerHTML =
+      '<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 1v2M8 13v2M1 8h2M13 8h2M3.05 3.05l1.414 1.414M11.536 11.536l1.414 1.414M3.05 12.95l1.414-1.414M11.536 4.464l1.414-1.414" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><circle cx="8" cy="8" r="2.5" stroke="currentColor" stroke-width="1.5"/></svg>'
+    toolbar.appendChild(aiBtn)
+
+    return toolbar
+  }
+
+  private updateContextToolbar(): void {
+    const scroll = this.refs?.scroll
+    if (!scroll) {
+      return
+    }
+
+    const selectedNode = this.selectedNode()
+    const singleSelected = this.state.selectedNodeIds.length === 1
+
+    // Hide toolbar when no single node is selected, or when editing, or when overlays are open
+    if (!selectedNode || !singleSelected || this.state.editingNodeId || this.overlayBlocksCanvas()) {
+      this.hideContextToolbar()
+      return
+    }
+
+    // Create toolbar element if it doesn't exist
+    if (!this.state.contextToolbar.element) {
+      const toolbar = this.createContextToolbar()
+      scroll.appendChild(toolbar)
+      this.state.contextToolbar.element = toolbar
+    }
+
+    const toolbar = this.state.contextToolbar.element
+    const nodeId = selectedNode.id
+
+    // Calculate node screen position
+    const childCount = childrenOf(this.state.document, nodeId).length
+    const nodeWidth = selectedNode.width ?? estimateNodeWidth(selectedNode, childCount)
+    const nodeHeight = selectedNode.height ?? estimateNodeHeight(selectedNode, childCount, nodeWidth)
+
+    // Node top-left in workspace coordinates (node position is center)
+    const nodeTopWorldX = selectedNode.position.x - nodeWidth / 2
+    const nodeTopWorldY = selectedNode.position.y - nodeHeight / 2
+
+    // Convert to screen coordinates within the scroll container
+    const screenNodeTopX = (nodeTopWorldX + this.workspaceBounds.originX) * this.viewport.scale + this.viewport.x
+    const screenNodeTopY = (nodeTopWorldY + this.workspaceBounds.originY) * this.viewport.scale + this.viewport.y
+    const screenNodeWidth = nodeWidth * this.viewport.scale
+
+    // Toolbar dimensions (approximate, will be refined after first render)
+    const toolbarHeight = 32
+    const toolbarGap = 8
+
+    // Position toolbar above the node: toolbar.bottom <= node.top
+    const toolbarTop = screenNodeTopY - toolbarHeight - toolbarGap
+    const toolbarLeft = screenNodeTopX + screenNodeWidth / 2
+
+    // Update position
+    this.state.contextToolbar.position = { x: toolbarLeft, y: toolbarTop }
+    this.state.contextToolbar.nodeId = nodeId
+
+    // Apply position (centered horizontally above node)
+    toolbar.style.left = `${Math.round(toolbarLeft)}px`
+    toolbar.style.top = `${Math.round(toolbarTop)}px`
+    toolbar.style.transform = 'translateX(-50%)'
+
+    // Show toolbar
+    if (!this.state.contextToolbar.visible) {
+      this.state.contextToolbar.visible = true
+      toolbar.classList.remove('context-toolbar-hidden')
+      // Re-trigger enter animation
+      toolbar.style.animation = 'none'
+      // Force reflow
+      void toolbar.offsetHeight
+      toolbar.style.animation = ''
+    }
+  }
+
+  private hideContextToolbar(): void {
+    const toolbar = this.state.contextToolbar.element
+    if (!toolbar || !this.state.contextToolbar.visible) {
+      return
+    }
+
+    this.state.contextToolbar.visible = false
+    this.state.contextToolbar.nodeId = null
+    toolbar.classList.add('context-toolbar-hidden')
+  }
+
+  private destroyContextToolbar(): void {
+    const toolbar = this.state.contextToolbar.element
+    if (toolbar) {
+      toolbar.remove()
+      this.state.contextToolbar.element = null
+      this.state.contextToolbar.visible = false
+      this.state.contextToolbar.nodeId = null
     }
   }
 

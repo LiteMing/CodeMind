@@ -1,0 +1,597 @@
+/* ============================================================
+   animations.css — UX 动效基础设施
+   所有新增 @keyframes、transitions 和动画相关 CSS 自定义属性
+   ============================================================ */
+
+/* === Animation Custom Properties === */
+:root {
+  --ease-out: cubic-bezier(0.33, 1, 0.68, 1);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --duration-fast: 150ms;
+  --duration-normal: 250ms;
+  --duration-slow: 350ms;
+  --stagger-base: 40ms;
+}
+
+/* === Feedback: Toast Animations === */
+
+/* Toast enter: slide-up + fade-in, 200ms */
+@keyframes toast-enter {
+  from {
+    transform: translateY(20px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+/* Toast exit: fade-out, 200ms */
+@keyframes toast-exit {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+/* Save success: pulse animation 400ms */
+@keyframes save-pulse {
+  0% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.15);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+/* Save failure: shake animation 300ms */
+@keyframes save-shake {
+  0% {
+    transform: translateX(0);
+  }
+  20% {
+    transform: translateX(-4px);
+  }
+  40% {
+    transform: translateX(4px);
+  }
+  60% {
+    transform: translateX(-3px);
+  }
+  80% {
+    transform: translateX(3px);
+  }
+  100% {
+    transform: translateX(0);
+  }
+}
+
+/* Toast container: fixed bottom-center, vertical stack, 8px spacing, max 3 visible */
+.toast-container {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column-reverse;
+  align-items: center;
+  gap: 8px;
+  z-index: 9999;
+  pointer-events: none;
+}
+
+/* Individual toast item */
+.toast-item {
+  will-change: transform, opacity;
+  pointer-events: auto;
+  padding: 10px 20px;
+  border-radius: 6px;
+  background: var(--color-surface, #333);
+  color: var(--color-text, #fff);
+  font-size: 14px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+/* Toast entering state */
+.toast-entering {
+  animation: toast-enter var(--duration-normal, 250ms) var(--ease-out) forwards;
+}
+
+/* Toast leaving state */
+.toast-leaving {
+  animation: toast-exit var(--duration-normal, 250ms) var(--ease-out) forwards;
+}
+
+/* Save success indicator */
+.save-success {
+  animation: save-pulse 400ms var(--ease-out) forwards;
+}
+
+/* Save error indicator */
+.save-error {
+  color: #e53935;
+  animation: save-shake 300ms var(--ease-out) forwards;
+}
+
+/* === Node Lifecycle Animations === */
+
+/* Node creation: scale 0.85→1.0 + opacity 0→1, ease-out, 250ms */
+@keyframes node-create {
+  from {
+    transform: scale(0.85);
+    opacity: 0;
+  }
+  to {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+/* Node deletion: scale 1.0→0.8 + opacity 1→0, ease-out, 200ms */
+@keyframes node-delete {
+  from {
+    transform: scale(1);
+    opacity: 1;
+  }
+  to {
+    transform: scale(0.8);
+    opacity: 0;
+  }
+}
+
+/* Node creating class — applied to nodes created via keyboard shortcut (Tab/Enter) */
+.node-creating {
+  animation: node-create var(--duration-normal, 250ms) var(--ease-out) forwards;
+  will-change: transform, opacity;
+}
+
+/* Node deleting class — applied before DOM removal */
+.node-deleting {
+  animation: node-delete 200ms var(--ease-out) forwards;
+  will-change: transform, opacity;
+  pointer-events: none;
+}
+
+/* === Inspector Section Collapse/Expand === */
+.inspector-section-header {
+  cursor: pointer;
+  user-select: none;
+  transition: color 150ms var(--ease-out);
+}
+
+.inspector-section-header:hover {
+  color: var(--accent, #60a5fa);
+}
+
+.section-collapsed,
+.section-expanded {
+  transition:
+    max-height 200ms var(--ease-out),
+    overflow 0s;
+}
+
+.section-collapsed {
+  max-height: 0;
+  overflow: hidden;
+}
+
+.section-expanded {
+  max-height: 500px;
+  overflow: visible;
+}
+
+/* === Context Toolbar === */
+@keyframes context-toolbar-enter {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes context-toolbar-exit {
+  from {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+
+.context-toolbar {
+  position: absolute;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  background: var(--bg-secondary, #2a2a2a);
+  border-radius: 6px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+  animation: context-toolbar-enter var(--duration-fast) var(--ease-out) forwards;
+  pointer-events: auto;
+}
+
+.context-toolbar-hidden {
+  animation: context-toolbar-exit 100ms var(--ease-out) forwards;
+  pointer-events: none;
+}
+
+.context-toolbar-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-secondary, #a1a1aa);
+  cursor: pointer;
+  transition:
+    background 100ms ease-out,
+    color 100ms ease-out;
+}
+
+.context-toolbar-btn:hover {
+  background: var(--bg-hover, rgba(255, 255, 255, 0.1));
+  color: var(--text-primary, #fafafa);
+}
+
+.context-toolbar-btn:active {
+  background: var(--bg-active, rgba(255, 255, 255, 0.15));
+}
+
+.context-toolbar-btn--danger:hover {
+  background: rgba(239, 68, 68, 0.15);
+  color: #ef4444;
+}
+
+/* === Edge Interactions === */
+
+/* Edge hover transition: stroke-width 1.5x (3 → 4.5), opacity to 1.0, 150ms */
+.edge-layer .edge {
+  transition:
+    stroke-width var(--duration-fast) var(--ease-out),
+    opacity var(--duration-fast) var(--ease-out);
+}
+
+.edge-layer .edge-hit-area:hover + .edge,
+.edge-layer .edge-hit-area:hover ~ .edge,
+.edge-layer .edge:hover {
+  stroke-width: 4.5;
+  opacity: 1;
+}
+
+/* Edge creation "grow" animation: stroke-dashoffset from full to 0, 300ms */
+@keyframes edge-grow {
+  from {
+    stroke-dashoffset: var(--edge-length, 200);
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+.edge-growing {
+  stroke-dasharray: var(--edge-length, 200);
+  animation: edge-grow 300ms var(--ease-out) forwards;
+}
+
+/* === Edit Mode Transitions === */
+
+/* Reverse transition on exit (applied to all node-shell/node-editor by default) */
+.node-card .node-shell,
+.node-card .node-editor {
+  transition:
+    border-color var(--duration-fast) var(--ease-out),
+    box-shadow var(--duration-fast) var(--ease-out),
+    transform var(--duration-fast) var(--ease-out);
+}
+
+/* Node editing class: border highlight + scale 1.01, 150ms transition
+   Also includes width/height transition for content size changes during edit */
+.node-editing .node-shell,
+.node-editing .node-editor {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+  transform: scale(1.01);
+  transition:
+    border-color var(--duration-fast) var(--ease-out),
+    box-shadow var(--duration-fast) var(--ease-out),
+    transform var(--duration-fast) var(--ease-out),
+    width var(--duration-fast) var(--ease-out),
+    height var(--duration-fast) var(--ease-out);
+}
+
+/* === Panel Animations === */
+@keyframes panel-slide-in {
+  from {
+    transform: translateX(100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+@keyframes panel-slide-out {
+  from {
+    transform: translateX(0);
+    opacity: 1;
+  }
+  to {
+    transform: translateX(100%);
+    opacity: 0;
+  }
+}
+
+.panel-entering {
+  animation: panel-slide-in var(--duration-normal) var(--ease-out) both;
+}
+
+.panel-leaving {
+  animation: panel-slide-out var(--duration-fast) var(--ease-out) both;
+}
+
+/* === Drag Feedback === */
+
+/* 5.1 — Dragged node: enhanced shadow + subtle scale-up */
+.node-dragging .node-shell {
+  transform: scale(1.02);
+  box-shadow:
+    0 8px 24px rgba(0, 0, 0, 0.28),
+    0 2px 8px rgba(0, 0, 0, 0.18);
+  transition:
+    transform var(--duration-fast) var(--ease-out),
+    box-shadow var(--duration-fast) var(--ease-out);
+}
+
+/* 5.3 — Drop target highlight: accent border when within 40px */
+.drop-target-highlight .node-shell {
+  border-color: var(--accent);
+  box-shadow:
+    0 0 0 3px color-mix(in srgb, var(--accent) 40%, transparent),
+    var(--shadow-card);
+  transition:
+    border-color var(--duration-fast) var(--ease-out),
+    box-shadow var(--duration-fast) var(--ease-out);
+}
+
+/* 5.5 — Alignment guide lines: 1px dashed, accent at 50% opacity */
+.alignment-guide {
+  position: absolute;
+  pointer-events: none;
+  border: none;
+  background: none;
+  z-index: 9999;
+}
+
+.alignment-guide--x {
+  width: 1px;
+  top: 0;
+  bottom: 0;
+  border-left: 1px dashed color-mix(in srgb, var(--accent) 50%, transparent);
+}
+
+.alignment-guide--y {
+  height: 1px;
+  left: 0;
+  right: 0;
+  border-top: 1px dashed color-mix(in srgb, var(--accent) 50%, transparent);
+}
+
+/* === Feedback: Shortcut Flash === */
+
+/* 16.1, 16.2 — Toolbar button highlight flash when shortcut is activated */
+@keyframes shortcut-flash-anim {
+  0% {
+    background-color: color-mix(in srgb, var(--accent) 30%, transparent);
+  }
+  100% {
+    background-color: transparent;
+  }
+}
+
+.shortcut-flash {
+  animation: shortcut-flash-anim 200ms var(--ease-out) forwards;
+}
+
+/* === Collapse/Expand Stagger Animations === */
+
+/* Collapse: scale down + fade out for natural tree collapse feel */
+@keyframes node-collapse {
+  from {
+    transform: scale(1);
+    opacity: 1;
+  }
+  to {
+    transform: scale(0.85);
+    opacity: 0;
+  }
+}
+
+/* Expand: scale pop-in feels more natural for tree expansion */
+@keyframes node-expand {
+  from {
+    transform: scale(0.85);
+    opacity: 0;
+  }
+  to {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+/* Node collapsing class — applied to child nodes during collapse */
+.node-collapsing {
+  animation: node-collapse var(--duration-slow, 350ms) var(--ease-out) forwards;
+  will-change: transform, opacity;
+  pointer-events: none;
+}
+
+/* Node expanding class — applied to child nodes during expand */
+.node-expanding {
+  animation: node-expand var(--duration-slow, 350ms) var(--ease-out) forwards;
+  will-change: transform, opacity;
+}
+
+/* Edge follow interpolation: smooth transition on edge paths during collapse/expand */
+.edge-layer .edge-hierarchy {
+  transition:
+    d var(--duration-slow, 350ms) var(--ease-out),
+    opacity var(--duration-slow, 350ms) var(--ease-out);
+}
+
+/* Edge fading out during collapse */
+.edge-collapsing {
+  opacity: 0;
+  transition: opacity var(--duration-slow, 350ms) var(--ease-out);
+}
+
+/* Edge fading in during expand */
+.edge-expanding {
+  opacity: 0;
+  animation: edge-expand-fade var(--duration-slow, 350ms) var(--ease-out) forwards;
+}
+
+@keyframes edge-expand-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* === Guide & Overlay === */
+
+/* Canvas guide: semi-transparent centered hint */
+.canvas-guide {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px 28px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--bg-secondary, #2a2a2a) 85%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+  color: var(--color-text-secondary, #aaa);
+  font-size: 15px;
+  pointer-events: none;
+  opacity: 1;
+  transition: opacity 300ms var(--ease-out);
+  z-index: 50;
+}
+
+.canvas-guide.is-fading {
+  opacity: 0;
+}
+
+/* Shortcut overlay: full-screen semi-transparent backdrop */
+.shortcut-overlay {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.6);
+  z-index: 10000;
+  opacity: 1;
+  transition: opacity 200ms var(--ease-out);
+}
+
+.shortcut-overlay.is-fading {
+  opacity: 0;
+}
+
+/* Shortcut overlay content panel */
+.shortcut-overlay-content {
+  background: var(--bg-secondary, #1e1e1e);
+  border-radius: 12px;
+  padding: 32px 40px;
+  max-width: 640px;
+  width: 90%;
+  max-height: 80vh;
+  overflow-y: auto;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.4);
+}
+
+.shortcut-overlay-title {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--color-text, #fff);
+  margin: 0 0 20px 0;
+}
+
+/* Shortcut category */
+.shortcut-category {
+  margin-bottom: 20px;
+}
+
+.shortcut-category-title {
+  font-size: 13px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--accent, #60a5fa);
+  margin: 0 0 8px 0;
+}
+
+/* Shortcut grid: key combo left, description right */
+.shortcut-grid {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 6px 16px;
+  align-items: center;
+}
+
+.shortcut-key {
+  font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+  font-size: 12px;
+  padding: 3px 8px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--color-text, #fff) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--color-text, #fff) 20%, transparent);
+  color: var(--color-text, #fff);
+  white-space: nowrap;
+}
+
+.shortcut-desc {
+  font-size: 13px;
+  color: var(--color-text-secondary, #aaa);
+}
+
+/* === Reduced Motion === */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* === Minimap === */
+.minimap-canvas {
+  background: rgba(30, 30, 30, 0.85);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  transition: opacity 200ms var(--ease-out);
+}

@@ -31,6 +31,14 @@ export interface PanState {
   startY: number
   startViewportX: number
   startViewportY: number
+  /** Last pointer position for velocity tracking */
+  lastClientX: number
+  lastClientY: number
+  /** Timestamp of last pointer move for velocity calculation */
+  lastMoveTime: number
+  /** Computed velocity at end of pan (px/frame at ~60fps) */
+  velocityX: number
+  velocityY: number
 }
 
 export interface ResizeState {
@@ -229,6 +237,12 @@ export interface AppState {
   connectorDrag: ConnectorDragState | null
   midpointDrag: MidpointDragState | null
   dirty: boolean
+
+  // UX Polish additions
+  contextToolbar: ContextToolbarState
+  toastQueue: ToastItem[]
+  guideOverlay: GuideOverlayState
+  panelAnimating: Set<string> // panel IDs currently animating
 }
 
 export interface ShellRefs {
@@ -269,6 +283,57 @@ export interface ShellRefs {
   zoomLevel: HTMLElement
   aiLayer: HTMLElement
   graphLayer: HTMLElement
+}
+
+// === UX Polish: Context Toolbar ===
+
+export interface ContextToolbarState {
+  visible: boolean
+  nodeId: string | null
+  position: Position // 计算后的屏幕坐标
+  element: HTMLElement | null
+}
+
+// === UX Polish: Toast Queue ===
+
+export interface ToastItem {
+  id: string
+  message: string
+  createdAt: number
+  element: HTMLElement | null
+}
+
+export interface ToastManagerState {
+  queue: ToastItem[]
+  maxVisible: number // 3
+  autoDismissMs: number // 2500
+  spacing: number // 8px
+}
+
+// === UX Polish: Guide Overlay ===
+
+export interface GuideOverlayState {
+  canvasGuideVisible: boolean
+  canvasGuideDismissed: boolean // session-level flag
+  shortcutOverlayVisible: boolean
+}
+
+// === UX Polish: Minimap ===
+
+export interface MinimapConfig {
+  width: number // 180
+  height: number // 120
+  opacity: number // 0.85
+  hoverOpacity: number // 0.85
+  idleOpacity: number // 0.4
+}
+
+export interface MinimapState {
+  canvas: HTMLCanvasElement
+  ctx: CanvasRenderingContext2D
+  visible: boolean
+  hovered: boolean
+  dragging: boolean
 }
 
 export interface CopiedSubtreeNode {

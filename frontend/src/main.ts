@@ -1,4 +1,5 @@
 import './style.css'
+import './animations.css'
 import { createApp } from './app'
 
 const root = document.querySelector<HTMLElement>('#app')
