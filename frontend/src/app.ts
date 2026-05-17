@@ -1375,6 +1375,13 @@ class MindMapApp {
       if (targetNodeId && targetNodeId !== childNodeId) {
         const childNode = this.findNode(childNodeId)
         if (childNode && childNode.kind === 'floating') {
+          // Prevent circular reference: target must not be a descendant of the child node
+          const childDescendants = descendantIds(this.state.document, childNodeId)
+          if (childDescendants.includes(targetNodeId)) {
+            this.setStatus('status.circularParentError')
+            this.renderWorkspace()
+            return
+          }
           this.captureHistory()
           childNode.kind = 'topic'
           childNode.parentId = targetNodeId

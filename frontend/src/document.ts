@@ -90,6 +90,7 @@ export function connectedRelations(document: MindMapDocument, nodeId: string): R
 
 export function descendantIds(document: MindMapDocument, nodeId: string): string[] {
   const descendants: string[] = []
+  const visited = new Set<string>([nodeId])
   const queue = [nodeId]
 
   while (queue.length > 0) {
@@ -99,6 +100,10 @@ export function descendantIds(document: MindMapDocument, nodeId: string): string
     }
 
     for (const child of childrenOf(document, currentId)) {
+      if (visited.has(child.id)) {
+        continue // Prevent infinite loop on circular references
+      }
+      visited.add(child.id)
       descendants.push(child.id)
       queue.push(child.id)
     }
@@ -122,8 +127,13 @@ export function visibleNodeIds(document: MindMapDocument): Set<string> {
   for (const node of document.nodes) {
     let current: MindNode | undefined = node
     let hidden = false
+    const visited = new Set<string>()
 
     while (current?.parentId) {
+      if (visited.has(current.id)) {
+        break // Prevent infinite loop on circular references
+      }
+      visited.add(current.id)
       const parent = nodeMap.get(current.parentId)
       if (!parent) {
         break
