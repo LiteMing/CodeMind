@@ -108,6 +108,13 @@ export interface ConnectorDragState {
   currentClientY: number
 }
 
+export interface ParentConnectorDragState {
+  childNodeId: string
+  pointerId: number
+  currentClientX: number
+  currentClientY: number
+}
+
 export interface MidpointDragState {
   relationId: string
   pointerId: number
@@ -235,6 +242,7 @@ export interface AppState {
   regionDrag: RegionDragState | null
   regionResize: RegionResizeState | null
   connectorDrag: ConnectorDragState | null
+  parentConnectorDrag: ParentConnectorDragState | null
   midpointDrag: MidpointDragState | null
   cutting: CuttingState | null
   dirty: boolean

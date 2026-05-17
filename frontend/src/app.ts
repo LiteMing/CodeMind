@@ -321,6 +321,7 @@ class MindMapApp {
       regionDrag: null,
       regionResize: null,
       connectorDrag: null,
+      parentConnectorDrag: null,
       midpointDrag: null,
       cutting: null,
       dirty: false,
@@ -699,6 +700,22 @@ class MindMapApp {
       }
     }
 
+    // Handle parent connector dot drag (floating node → set parent)
+    const parentConnectorDot = element.closest<HTMLElement>('[data-node-parent-connector]')
+    if (parentConnectorDot && event.button === 0) {
+      const childNodeId = parentConnectorDot.dataset.nodeParentConnector
+      if (childNodeId) {
+        this.state.parentConnectorDrag = {
+          childNodeId,
+          pointerId: event.pointerId,
+          currentClientX: event.clientX,
+          currentClientY: event.clientY,
+        }
+        event.preventDefault()
+        return
+      }
+    }
+
     // Handle midpoint dot drag
     const midpointDot = (target instanceof SVGElement ? target : null)?.closest<SVGElement>('[data-midpoint-dot]')
     if (midpointDot && event.button === 0) {
@@ -970,6 +987,15 @@ class MindMapApp {
     if (this.state.connectorDrag && event.pointerId === this.state.connectorDrag.pointerId) {
       this.state.connectorDrag.currentClientX = event.clientX
       this.state.connectorDrag.currentClientY = event.clientY
+      this.renderWorkspace()
+      event.preventDefault()
+      return
+    }
+
+    // Parent connector dot drag
+    if (this.state.parentConnectorDrag && event.pointerId === this.state.parentConnectorDrag.pointerId) {
+      this.state.parentConnectorDrag.currentClientX = event.clientX
+      this.state.parentConnectorDrag.currentClientY = event.clientY
       this.renderWorkspace()
       event.preventDefault()
       return
@@ -1333,6 +1359,35 @@ class MindMapApp {
       return
     }
 
+    // Parent connector drag finish (set parent for floating node)
+    if (this.state.parentConnectorDrag && event.pointerId === this.state.parentConnectorDrag.pointerId) {
+      const childNodeId = this.state.parentConnectorDrag.childNodeId
+      const target = document.elementFromPoint(event.clientX, event.clientY)
+      const targetEl = target instanceof HTMLElement ? target : null
+      const targetConnector = targetEl?.closest<HTMLElement>('[data-node-connector]')
+      const targetParentConnector = targetEl?.closest<HTMLElement>('[data-node-parent-connector]')
+      const targetButton = targetEl?.closest<HTMLElement>('[data-node-button]')
+      const targetNodeId =
+        targetConnector?.dataset.nodeConnector ??
+        targetButton?.dataset.nodeButton ??
+        targetParentConnector?.dataset.nodeParentConnector
+      this.state.parentConnectorDrag = null
+      if (targetNodeId && targetNodeId !== childNodeId) {
+        const childNode = this.findNode(childNodeId)
+        if (childNode && childNode.kind === 'floating') {
+          this.captureHistory()
+          childNode.kind = 'topic'
+          childNode.parentId = targetNodeId
+          touchDocument(this.state.document)
+          this.setStatus('status.parentSet')
+          this.scheduleAutosave('status.saved')
+        }
+      } else {
+        this.renderWorkspace()
+      }
+      return
+    }
+
     // Midpoint drag finish
     if (this.state.midpointDrag && event.pointerId === this.state.midpointDrag.pointerId) {
       const dragState = this.state.midpointDrag
@@ -1642,6 +1697,12 @@ class MindMapApp {
     if ((event.ctrlKey || event.metaKey) && !event.shiftKey && event.key.toLowerCase() === 'c') {
       event.preventDefault()
       this.copySelectedSubtree()
+      return
+    }
+
+    if ((event.ctrlKey || event.metaKey) && !event.shiftKey && event.key.toLowerCase() === 'x') {
+      event.preventDefault()
+      this.cutSelectedSubtree()
       return
     }
 
@@ -4658,6 +4719,26 @@ class MindMapApp {
       }
     }
 
+    // Parent connector drag line (from floating node left side to mouse)
+    let parentConnectorLine = ''
+    if (this.state.parentConnectorDrag) {
+      const childNode = this.findNode(this.state.parentConnectorDrag.childNodeId)
+      if (childNode) {
+        const childMetrics = this.resolveNodeRenderMetrics(childNode, childCountById.get(childNode.id) ?? 0)
+        const projSource = projectPosition({
+          x: childMetrics.position.x - childMetrics.width / 2,
+          y: childMetrics.position.y,
+        })
+        const canvasPos = this.clientToCanvas(
+          this.state.parentConnectorDrag.currentClientX,
+          this.state.parentConnectorDrag.currentClientY,
+        )
+        if (canvasPos) {
+          parentConnectorLine = `<line class="edge edge-connector-drag" x1="${projSource.x}" y1="${projSource.y}" x2="${canvasPos.x}" y2="${canvasPos.y}" />`
+        }
+      }
+    }
+
     // Cutting line (red dashed line from start to current mouse position)
     let cuttingLine = ''
     if (this.state.cutting) {
@@ -4666,7 +4747,7 @@ class MindMapApp {
       cuttingLine = `<line class="cutting-line" x1="${start.x}" y1="${start.y}" x2="${end.x}" y2="${end.y}" />`
     }
 
-    return arrowDefs + hierarchyEdges + relationEdges + connectorLine + cuttingLine
+    return arrowDefs + hierarchyEdges + relationEdges + connectorLine + parentConnectorLine + cuttingLine
   }
 
   private resolveNodeRenderMetrics(node: MindNode, childCount: number): NodeRenderMetrics {
@@ -4765,6 +4846,11 @@ class MindMapApp {
 
         const connectorDot = `<button type="button" class="node-connector-dot" data-node-connector="${node.id}" aria-label="Drag to connect"></button>`
 
+        const parentConnectorDot =
+          node.kind === 'floating'
+            ? `<button type="button" class="node-parent-connector-dot" data-node-parent-connector="${node.id}" aria-label="Drag to set parent"></button>`
+            : ''
+
         return `
           <article
             class="${classes}"
@@ -4775,6 +4861,7 @@ class MindMapApp {
             ${collapseButton}
             ${resizeHandle}
             ${connectorDot}
+            ${parentConnectorDot}
           </article>
         `
       })
@@ -5338,6 +5425,36 @@ class MindMapApp {
     }
     this.setStatus('status.subtreeCopied', { count: nodes.length })
     this.renderHeader()
+  }
+
+  private cutSelectedSubtree(): void {
+    const selectedNode = this.selectedNode()
+    if (!selectedNode || selectedNode.kind === 'root') {
+      return
+    }
+
+    // Copy first
+    this.copySelectedSubtree()
+
+    // Then delete the subtree
+    this.captureHistory()
+    const subtreeIds = new Set([selectedNode.id, ...descendantIds(this.state.document, selectedNode.id)])
+
+    // Remove relations referencing deleted nodes
+    this.state.document.relations = this.state.document.relations
+      .filter((r) => !subtreeIds.has(r.sourceId) && !subtreeIds.has(r.targetId))
+      .map((r) => ({
+        ...r,
+        branches: (r.branches ?? []).filter((b) => !subtreeIds.has(b.targetId)),
+      }))
+
+    // Remove nodes
+    this.state.document.nodes = this.state.document.nodes.filter((n) => !subtreeIds.has(n.id))
+
+    touchDocument(this.state.document)
+    this.selectNode(findRoot(this.state.document)?.id ?? 'root')
+    this.setStatus('status.subtreeCut', { count: subtreeIds.size })
+    this.scheduleAutosave('status.saved')
   }
 
   private pasteCopiedSubtree(): void {
