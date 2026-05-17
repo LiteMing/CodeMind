@@ -22,7 +22,7 @@ export type GestureAction =
   | 'new-floating'
   | 'toggle-collapse'
 
-export type CanvasDragAction = 'none' | 'pan-canvas' | 'marquee-select'
+export type CanvasDragAction = 'none' | 'pan-canvas' | 'marquee-select' | 'cutting'
 
 export type NodeKind = 'root' | 'topic' | 'floating'
 

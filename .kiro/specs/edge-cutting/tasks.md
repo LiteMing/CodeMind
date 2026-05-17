@@ -6,8 +6,8 @@
 
 ## Tasks
 
-- [ ] 1. 创建几何计算模块 cutting-geometry.ts
-  - [ ] 1.1 实现线段相交与 AABB 检测函数
+- [x] 1. 创建几何计算模块 cutting-geometry.ts
+  - [x] 1.1 实现线段相交与 AABB 检测函数
     - 创建 `frontend/src/cutting-geometry.ts`
     - 实现 `segmentsIntersect(p1, p2, p3, p4)` — 两线段相交检测
     - 实现 `segmentIntersectsAABB(a, b, rectCenter, rectWidth, rectHeight)` — 线段与矩形相交
@@ -19,7 +19,7 @@
     - 使用 fast-check 生成随机线段和随机矩形，验证 segmentIntersectsAABB 返回值与暴力采样一致
     - **Validates: Requirements 3.1**
 
-  - [ ] 1.3 实现线段与折线相交检测
+  - [x] 1.3 实现线段与折线相交检测
     - 实现 `segmentIntersectsPolyline(a, b, polyline)` — 线段与折线任意段相交
     - _Requirements: 4.1, 4.2_
 
@@ -28,7 +28,7 @@
     - 使用 fast-check 生成随机线段和随机折线，验证 segmentIntersectsPolyline 等价于逐段调用 segmentsIntersect
     - **Validates: Requirements 4.1, 4.2**
 
-  - [ ] 1.5 实现 Bézier 采样与 path 解析
+  - [x] 1.5 实现 Bézier 采样与 path 解析
     - 实现 `sampleCubicBezier(p0, cp1, cp2, p3, segments)` — 将三次 Bézier 曲线采样为折线
     - 实现 `parseCubicBezierFromPath(d)` — 解析 SVG path d 属性中的 M...C... 为控制点
     - _Requirements: 4.5_
@@ -38,30 +38,30 @@
     - 使用 fast-check 生成随机控制点，验证采样点均在 Bézier 曲线上（浮点容差内），首尾点精确匹配
     - **Validates: Requirements 4.5**
 
-- [ ] 2. 扩展类型系统与状态定义
-  - [ ] 2.1 扩展 CanvasDragAction 类型并添加 CuttingState 接口
+- [x] 2. 扩展类型系统与状态定义
+  - [x] 2.1 扩展 CanvasDragAction 类型并添加 CuttingState 接口
     - 在 `frontend/src/types.ts` 中将 `CanvasDragAction` 扩展为 `'none' | 'pan-canvas' | 'marquee-select' | 'cutting'`
     - 在 `frontend/src/app-types.ts`（或相应类型文件）中添加 `CuttingState` 接口定义
     - 在 AppState 中添加 `cutting: CuttingState | null` 字段
     - _Requirements: 1.1, 1.2_
 
-  - [ ] 2.2 更新设置默认值
+  - [x] 2.2 更新设置默认值
     - 将 `canvasRightDragAction` 默认值改为 `'cutting'`
     - 确保设置面板中用户仍可切换回 `'pan-canvas'` 或 `'marquee-select'`
     - _Requirements: 1.1_
 
-- [ ] 3. Checkpoint - 确保类型编译通过
+- [x] 3. Checkpoint - 确保类型编译通过
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 4. 实现切除模式交互逻辑
-  - [ ] 4.1 实现进入切除模式 (startCuttingMode)
+- [x] 4. 实现切除模式交互逻辑
+  - [x] 4.1 实现进入切除模式 (startCuttingMode)
     - 在 `handlePointerDown` 中，当 `canvasRightDragAction === 'cutting'` 且点击在空白区域时，初始化 CuttingState
     - 记录 pointerId、起点坐标（转换为 canvas 坐标）
     - 设置 crosshair 光标
     - 抑制 contextmenu 事件
     - _Requirements: 1.1, 1.2, 1.3, 1.4_
 
-  - [ ] 4.2 实现切除线更新与相交检测 (updateCuttingLine)
+  - [x] 4.2 实现切除线更新与相交检测 (updateCuttingLine)
     - 在 `handlePointerMove` 中，当 cutting state active 时更新 currentPoint
     - 遍历所有可见节点，调用 `segmentIntersectsAABB` 检测节点相交
     - 遍历所有可见 hierarchy edges 和 relation edges，解析 path → 采样 → 调用 `segmentIntersectsPolyline`
@@ -69,13 +69,13 @@
     - 排除 root 节点和折叠隐藏的后代节点
     - _Requirements: 2.1, 2.2, 3.1, 3.2, 3.3, 3.4, 3.5, 4.1, 4.2, 4.3, 4.4, 4.5_
 
-  - [ ] 4.3 实现取消切除 (cancelCutting)
+  - [x] 4.3 实现取消切除 (cancelCutting)
     - 监听 pointerleave / pointercancel 事件
     - 清空 CuttingState，恢复光标，不执行任何修改
     - _Requirements: 9.5_
 
-- [ ] 5. 实现切除执行逻辑
-  - [ ] 5.1 实现 executeCutting 方法
+- [x] 5. 实现切除执行逻辑
+  - [x] 5.1 实现 executeCutting 方法
     - 在 `handlePointerUp` 中，当 cutting state active 时触发
     - 如果 Warning List 为空，直接退出切除模式，不推送历史
     - 如果切除线长度为 0（起点 === 终点），直接退出
@@ -102,24 +102,24 @@
     - 使用 fast-check 生成随机文档树，删除节点后验证子节点提升逻辑正确、位置不变、使用 originalParentIds
     - **Validates: Requirements 8.1, 8.2, 8.3, 11.3**
 
-- [ ] 6. Checkpoint - 确保核心逻辑测试通过
+- [~] 6. Checkpoint - 确保核心逻辑测试通过
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 7. 实现切除线渲染与高亮
-  - [ ] 7.1 实现切除线 SVG 渲染 (renderCuttingLine)
+- [x] 7. 实现切除线渲染与高亮
+  - [x] 7.1 实现切除线 SVG 渲染 (renderCuttingLine)
     - 在 `renderEdges()` 末尾追加切除线 SVG `<line>` 元素
     - 使用红色虚线样式（stroke-dasharray），与普通边区分
     - 坐标从 CuttingState 的 startPoint/currentPoint 获取
     - _Requirements: 2.1, 2.2, 2.3_
 
-  - [ ] 7.2 实现 Warning 高亮样式
+  - [x] 7.2 实现 Warning 高亮样式
     - 为 Warning List 中的节点添加红色边框 CSS 类（如 `cutting-warning`）
     - 为 Warning List 中的 hierarchy/relation edges 添加红色 stroke 样式
     - 对象移出 Warning List 时立即恢复正常样式
     - _Requirements: 5.1, 5.2, 5.3, 5.4_
 
-- [ ] 8. 撤销/重做集成与历史验证
-  - [ ] 8.1 验证历史快照集成
+- [x] 8. 撤销/重做集成与历史验证
+  - [x] 8.1 验证历史快照集成
     - 确认 executeCutting 在执行前调用现有的 snapshot 机制（historyPast.push）
     - 确认 undo 操作能完整恢复切除前状态
     - 确认单次切除操作只产生一个历史条目
@@ -135,7 +135,7 @@
     - 使用 fast-check 生成随机多目标切除，验证 history stack 只增长 1
     - **Validates: Requirements 10.1, 10.3**
 
-- [ ] 9. Final checkpoint - 全部测试通过
+- [x] 9. Final checkpoint - 全部测试通过
   - Ensure all tests pass, ask the user if questions arise.
 
 ## Notes

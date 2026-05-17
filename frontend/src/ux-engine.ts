@@ -621,6 +621,10 @@ export interface MinimapViewportData {
   screenWidth: number
   /** Viewport height in screen pixels */
   screenHeight: number
+  /** Workspace origin X offset (canvas coords = workspace coords - originX) */
+  originX?: number
+  /** Workspace origin Y offset (canvas coords = workspace coords - originY) */
+  originY?: number
 }
 
 export class MinimapRenderer {
@@ -864,13 +868,13 @@ export class MinimapRenderer {
 
       // The viewport shows what's visible on screen.
       // viewport.x and viewport.y are the translation applied to the canvas.
-      // The visible world area is:
-      //   worldLeft = -vp.x / vp.scale
-      //   worldTop = -vp.y / vp.scale
-      //   worldVisibleWidth = vp.screenWidth / vp.scale
-      //   worldVisibleHeight = vp.screenHeight / vp.scale
-      const worldLeft = -vp.x / vp.scale
-      const worldTop = -vp.y / vp.scale
+      // The visible world area in canvas coordinates (same space as node positions) is:
+      //   canvasLeft = -vp.x / vp.scale - originX
+      //   canvasTop = -vp.y / vp.scale - originY
+      const originX = vp.originX ?? 0
+      const originY = vp.originY ?? 0
+      const worldLeft = -vp.x / vp.scale - originX
+      const worldTop = -vp.y / vp.scale - originY
       const worldVisibleWidth = vp.screenWidth / vp.scale
       const worldVisibleHeight = vp.screenHeight / vp.scale
 
@@ -937,8 +941,10 @@ export class MinimapRenderer {
     // Also include viewport bounds to ensure the viewport rect is always visible
     if (this.viewportData) {
       const vp = this.viewportData
-      const worldLeft = -vp.x / vp.scale
-      const worldTop = -vp.y / vp.scale
+      const originX = vp.originX ?? 0
+      const originY = vp.originY ?? 0
+      const worldLeft = -vp.x / vp.scale - originX
+      const worldTop = -vp.y / vp.scale - originY
       const worldRight = worldLeft + vp.screenWidth / vp.scale
       const worldBottom = worldTop + vp.screenHeight / vp.scale
 

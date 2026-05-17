@@ -58,6 +58,13 @@ import {
   buildRelationSegmentPath,
   getRelationDefaultMidpoint,
 } from './edge-geometry'
+import {
+  segmentIntersectsAABB,
+  segmentIntersectsPolyline,
+  sampleCubicBezier,
+  parseCubicBezierFromPath,
+  parsePolylineFromPath,
+} from './cutting-geometry'
 import { type GraphHitNode, buildGraphFrame, traceRoundedRectPath } from './graph-frame'
 import { type TranslationKey, kindLabel, nodeColorLabel, themeLabel, translate } from './i18n'
 import {
@@ -315,6 +322,7 @@ class MindMapApp {
       regionResize: null,
       connectorDrag: null,
       midpointDrag: null,
+      cutting: null,
       dirty: false,
 
       // UX Polish additions
@@ -370,12 +378,19 @@ class MindMapApp {
     window.addEventListener('pointermove', this.handlePointerMove)
     window.addEventListener('pointerup', this.handlePointerUp)
     window.addEventListener('pointercancel', this.handlePointerUp)
+    window.addEventListener('pointerleave', this.handlePointerLeave)
     window.addEventListener('keydown', this.handleGlobalKeyDown)
     window.addEventListener('resize', this.handleWindowResize)
   }
 
   private readonly handleWindowResize = (): void => {
     this.syncFloatingLayout()
+  }
+
+  private readonly handlePointerLeave = (_event: PointerEvent): void => {
+    if (this.state.cutting) {
+      this.cancelCutting()
+    }
   }
 
   private readonly handleClick = (event: MouseEvent): void => {
@@ -1110,6 +1125,13 @@ class MindMapApp {
       return
     }
 
+    // Cutting mode drag
+    if (this.state.cutting && event.pointerId === this.state.cutting.pointerId) {
+      this.updateCuttingLine(event.clientX, event.clientY)
+      event.preventDefault()
+      return
+    }
+
     if (this.state.resize) {
       const resizeState = this.state.resize
       const deltaX = event.clientX - resizeState.startX
@@ -1278,6 +1300,18 @@ class MindMapApp {
     }
 
     if (this.state.view !== 'map') {
+      return
+    }
+
+    // Cancel cutting on pointercancel (not pointerup — executeCutting handles that)
+    if (this.state.cutting && this.state.cutting.pointerId === event.pointerId && event.type === 'pointercancel') {
+      this.cancelCutting()
+      return
+    }
+
+    // Execute cutting on pointerup
+    if (this.state.cutting && this.state.cutting.pointerId === event.pointerId && event.type === 'pointerup') {
+      this.executeCutting()
       return
     }
 
@@ -2001,10 +2035,263 @@ class MindMapApp {
       case 'marquee-select':
         this.startMarqueeSelection(event.pointerId, event.button, event.clientX, event.clientY)
         return
+      case 'cutting':
+        this.startCuttingMode(event.pointerId, event.clientX, event.clientY)
+        return
       case 'none':
       default:
         return
     }
+  }
+
+  private startCuttingMode(pointerId: number, clientX: number, clientY: number): void {
+    const canvasPoint = this.clientToCanvasPosition(clientX, clientY)
+    this.state.cutting = {
+      pointerId,
+      startPoint: canvasPoint,
+      currentPoint: canvasPoint,
+      warningNodeIds: new Set(),
+      warningHierarchyEdgeKeys: new Set(),
+      warningRelationIds: new Set(),
+    }
+    this.refs?.scroll?.classList.add('is-cutting')
+  }
+
+  private updateCuttingLine(clientX: number, clientY: number): void {
+    const cutting = this.state.cutting
+    if (!cutting) {
+      return
+    }
+
+    // Convert client coordinates to canvas coordinates and update current point
+    const canvasPoint = this.clientToCanvasPosition(clientX, clientY)
+    cutting.currentPoint = canvasPoint
+
+    const startPoint = cutting.startPoint
+    const endPoint = cutting.currentPoint
+
+    // Convert cutting line to workspace coordinates for comparison with SVG paths
+    // SVG paths are rendered in workspace coords (canvas coords + originX/originY offset)
+    const wsStart = this.toWorkspacePosition(startPoint)
+    const wsEnd = this.toWorkspacePosition(endPoint)
+
+    // Clear warning sets for rebuild
+    cutting.warningNodeIds.clear()
+    cutting.warningHierarchyEdgeKeys.clear()
+    cutting.warningRelationIds.clear()
+
+    // Get visible node IDs (excludes collapsed hidden descendants)
+    const visibleIds = visibleNodeIds(this.state.document)
+    const root = findRoot(this.state.document)
+
+    // --- Node intersection detection ---
+    for (const node of this.state.document.nodes) {
+      // Skip non-visible nodes
+      if (!visibleIds.has(node.id)) {
+        continue
+      }
+      // Skip root node (not cuttable)
+      if (root && node.id === root.id) {
+        continue
+      }
+
+      const childCount = childrenOf(this.state.document, node.id).length
+      const metrics = this.resolveNodeRenderMetrics(node, childCount)
+      const rectCenter = metrics.position
+      const rectWidth = metrics.width
+      const rectHeight = metrics.height
+
+      if (segmentIntersectsAABB(startPoint, endPoint, rectCenter, rectWidth, rectHeight)) {
+        cutting.warningNodeIds.add(node.id)
+      }
+    }
+
+    // --- Hierarchy edge intersection detection ---
+    if (this.refs?.edgeLayer) {
+      const hierarchyPaths = this.refs.edgeLayer.querySelectorAll<SVGPathElement>('.edge-hierarchy')
+      for (const pathEl of hierarchyPaths) {
+        const sourceId = pathEl.getAttribute('data-source-id')
+        const targetId = pathEl.getAttribute('data-target-id')
+        if (!sourceId || !targetId) {
+          continue
+        }
+
+        const d = pathEl.getAttribute('d')
+        if (!d) {
+          continue
+        }
+
+        // Try parsing as cubic Bézier (M...C... format)
+        const bezier = parseCubicBezierFromPath(d)
+        if (bezier) {
+          const polyline = sampleCubicBezier(bezier.start, bezier.cp1, bezier.cp2, bezier.end, 16)
+          if (segmentIntersectsPolyline(wsStart, wsEnd, polyline)) {
+            cutting.warningHierarchyEdgeKeys.add(`${sourceId}-${targetId}`)
+          }
+        } else {
+          // Fallback: parse as polyline (M...L...L... orthogonal format)
+          const polyline = parsePolylineFromPath(d)
+          if (polyline.length >= 2 && segmentIntersectsPolyline(wsStart, wsEnd, polyline)) {
+            cutting.warningHierarchyEdgeKeys.add(`${sourceId}-${targetId}`)
+          }
+        }
+      }
+    }
+
+    // --- Relation edge intersection detection ---
+    if (this.refs?.edgeLayer) {
+      const relationGroups = this.refs.edgeLayer.querySelectorAll<SVGElement>('[data-relation-click]')
+      for (const hitArea of relationGroups) {
+        const relationId = hitArea.getAttribute('data-relation-click')
+        if (!relationId) {
+          continue
+        }
+
+        // Get all path elements in the same group as the hit area
+        const group = hitArea.closest('g')
+        if (!group) {
+          continue
+        }
+
+        const paths = group.querySelectorAll<SVGPathElement>('.edge-relation')
+        let intersects = false
+        for (const pathEl of paths) {
+          const d = pathEl.getAttribute('d')
+          if (!d) {
+            continue
+          }
+
+          // Try parsing as cubic Bézier (M...C... format)
+          const bezier = parseCubicBezierFromPath(d)
+          if (bezier) {
+            const polyline = sampleCubicBezier(bezier.start, bezier.cp1, bezier.cp2, bezier.end, 16)
+            if (segmentIntersectsPolyline(wsStart, wsEnd, polyline)) {
+              intersects = true
+              break
+            }
+          } else {
+            // Fallback: parse as polyline (M...L...L... orthogonal format)
+            const polyline = parsePolylineFromPath(d)
+            if (polyline.length >= 2 && segmentIntersectsPolyline(wsStart, wsEnd, polyline)) {
+              intersects = true
+              break
+            }
+          }
+        }
+
+        if (intersects) {
+          cutting.warningRelationIds.add(relationId)
+        }
+      }
+    }
+
+    // Trigger re-render to show cutting line and warning highlights
+    this.renderWorkspace()
+  }
+
+  private cancelCutting(): void {
+    if (!this.state.cutting) {
+      return
+    }
+    this.state.cutting = null
+    this.refs?.scroll?.classList.remove('is-cutting')
+    this.renderWorkspace()
+  }
+
+  private executeCutting(): void {
+    const cutting = this.state.cutting
+    if (!cutting) {
+      return
+    }
+
+    // If warning lists are all empty, just cancel without pushing history
+    if (
+      cutting.warningNodeIds.size === 0 &&
+      cutting.warningHierarchyEdgeKeys.size === 0 &&
+      cutting.warningRelationIds.size === 0
+    ) {
+      this.cancelCutting()
+      return
+    }
+
+    // If cutting line has zero length (start === end), just cancel
+    if (cutting.startPoint.x === cutting.currentPoint.x && cutting.startPoint.y === cutting.currentPoint.y) {
+      this.cancelCutting()
+      return
+    }
+
+    // Capture history snapshot BEFORE making any changes
+    this.captureHistory()
+
+    // Capture originalParentIds snapshot before any mutations
+    const originalParentIds = new Map<string, string | undefined>()
+    for (const node of this.state.document.nodes) {
+      originalParentIds.set(node.id, node.parentId)
+    }
+
+    const root = findRoot(this.state.document)
+
+    // Phase 1: Delete all Relation Edges in the warning list
+    if (cutting.warningRelationIds.size > 0) {
+      this.state.document.relations = this.state.document.relations.filter(
+        (relation) => !cutting.warningRelationIds.has(relation.id),
+      )
+    }
+
+    // Phase 2: Sever all Hierarchy Edges in the warning list
+    // Format of warningHierarchyEdgeKeys: "parentId-childId"
+    for (const edgeKey of cutting.warningHierarchyEdgeKeys) {
+      const separatorIndex = edgeKey.indexOf('-')
+      if (separatorIndex === -1) continue
+      const childId = edgeKey.substring(separatorIndex + 1)
+      const childNode = this.state.document.nodes.find((n) => n.id === childId)
+      if (childNode) {
+        childNode.kind = 'floating'
+        childNode.parentId = undefined
+      }
+    }
+
+    // Phase 3: Delete all Nodes in the warning list (skip root)
+    // First, promote children of nodes being deleted using originalParentIds
+    const nodeIdsToDelete = new Set<string>()
+    for (const nodeId of cutting.warningNodeIds) {
+      // Skip root node
+      if (root && nodeId === root.id) continue
+      nodeIdsToDelete.add(nodeId)
+    }
+
+    // Promote children: reassign each child's parentId to the deleted node's original parentId
+    for (const nodeId of nodeIdsToDelete) {
+      const originalParentId = originalParentIds.get(nodeId)
+      for (const node of this.state.document.nodes) {
+        if (node.parentId === nodeId && !nodeIdsToDelete.has(node.id)) {
+          node.parentId = originalParentId
+          // If promoted to undefined (was a root-level child), make it floating
+          if (!originalParentId) {
+            node.kind = 'floating'
+          }
+        }
+      }
+    }
+
+    // Remove the nodes
+    if (nodeIdsToDelete.size > 0) {
+      this.state.document.nodes = this.state.document.nodes.filter((node) => !nodeIdsToDelete.has(node.id))
+      // Also clean up any relations that reference deleted nodes
+      this.state.document.relations = this.state.document.relations
+        .filter((relation) => !nodeIdsToDelete.has(relation.sourceId) && !nodeIdsToDelete.has(relation.targetId))
+        .map((relation) => ({
+          ...relation,
+          branches: (relation.branches ?? []).filter((branch) => !nodeIdsToDelete.has(branch.targetId)),
+        }))
+    }
+
+    // Mark document as modified
+    touchDocument(this.state.document)
+
+    // Clean up cutting state, restore cursor, and re-render
+    this.cancelCutting()
+    this.scheduleAutosave('status.saved')
   }
 
   private startMarqueeSelection(
@@ -2784,11 +3071,13 @@ class MindMapApp {
             { value: 'none' as const, label: '无操作' },
             { value: 'marquee-select' as const, label: '框选节点' },
             { value: 'pan-canvas' as const, label: '拖动画布' },
+            { value: 'cutting' as const, label: '切除模式' },
           ]
         : [
             { value: 'none' as const, label: 'No action' },
             { value: 'marquee-select' as const, label: 'Marquee select' },
             { value: 'pan-canvas' as const, label: 'Pan canvas' },
+            { value: 'cutting' as const, label: 'Cutting mode' },
           ]
 
     return options
@@ -4212,7 +4501,10 @@ class MindMapApp {
                 this.resolveNodeRenderMetrics(parent, childCountById.get(parent.id) ?? 0),
                 this.resolveNodeRenderMetrics(node, childCountById.get(node.id) ?? 0),
               )
-              return `<path class="edge edge-hierarchy" data-source-id="${parent.id}" data-target-id="${node.id}" d="${buildHierarchyPath(projectPosition(edgePoints.source), projectPosition(edgePoints.target), drawEdgeStyle)}" />`
+              const warningClass = this.state.cutting?.warningHierarchyEdgeKeys.has(`${parent.id}-${node.id}`)
+                ? ' cutting-warning'
+                : ''
+              return `<path class="edge edge-hierarchy${warningClass}" data-source-id="${parent.id}" data-target-id="${node.id}" d="${buildHierarchyPath(projectPosition(edgePoints.source), projectPosition(edgePoints.target), drawEdgeStyle)}" />`
             })
             .join('')
 
@@ -4239,6 +4531,7 @@ class MindMapApp {
         const midpointDrag = this.state.midpointDrag?.relationId === edge.id ? this.state.midpointDrag : null
         const isSelected = this.state.selectedRelationId === edge.id
         const selectedClass = isSelected ? ' is-selected' : ''
+        const warningRelClass = this.state.cutting?.warningRelationIds.has(edge.id) ? ' cutting-warning' : ''
         const arrowDir = edge.arrowDirection ?? 'none'
         const markerStart = arrowDir === 'backward' || arrowDir === 'both' ? ' marker-start="url(#arrow-backward)"' : ''
         const markerEnd = arrowDir === 'forward' || arrowDir === 'both' ? ' marker-end="url(#arrow-forward)"' : ''
@@ -4250,11 +4543,11 @@ class MindMapApp {
           midpointDrag?.mode === 'branch'
         const mainPaths = usesMidpointHub
           ? [
-              `<path class="edge edge-relation${selectedClass}" d="${buildRelationSegmentPath(projectedSource, mid, drawEdgeStyle)}"${markerStart} />`,
-              `<path class="edge edge-relation${selectedClass}" d="${buildRelationSegmentPath(mid, projectedTarget, drawEdgeStyle)}"${markerEnd} />`,
+              `<path class="edge edge-relation${selectedClass}${warningRelClass}" d="${buildRelationSegmentPath(projectedSource, mid, drawEdgeStyle)}"${markerStart} />`,
+              `<path class="edge edge-relation${selectedClass}${warningRelClass}" d="${buildRelationSegmentPath(mid, projectedTarget, drawEdgeStyle)}"${markerEnd} />`,
             ]
           : [
-              `<path class="edge edge-relation${selectedClass}" d="${buildRelationSegmentPath(projectedSource, projectedTarget, drawEdgeStyle)}"${markerStart}${markerEnd} />`,
+              `<path class="edge edge-relation${selectedClass}${warningRelClass}" d="${buildRelationSegmentPath(projectedSource, projectedTarget, drawEdgeStyle)}"${markerStart}${markerEnd} />`,
             ]
         const hitSegments = usesMidpointHub
           ? [
@@ -4274,7 +4567,7 @@ class MindMapApp {
           const branchPath = buildRelationSegmentPath(mid, branchTarget, drawEdgeStyle)
           hitSegments.push(branchPath)
           branchPaths.push(
-            `<path class="edge edge-relation edge-branch${selectedClass}" d="${branchPath}"${markerEnd} />`,
+            `<path class="edge edge-relation edge-branch${selectedClass}${warningRelClass}" d="${branchPath}"${markerEnd} />`,
           )
         }
 
@@ -4285,7 +4578,7 @@ class MindMapApp {
               const projectedWaypoint = projectPosition(wp)
               const path = buildRelationSegmentPath(mid, projectedWaypoint, drawEdgeStyle)
               hitSegments.push(path)
-              return `<path class="edge edge-relation edge-branch${selectedClass}" d="${path}" />`
+              return `<path class="edge edge-relation edge-branch${selectedClass}${warningRelClass}" d="${path}" />`
             })
             .join('')
         }
@@ -4340,7 +4633,15 @@ class MindMapApp {
       }
     }
 
-    return arrowDefs + hierarchyEdges + relationEdges + connectorLine
+    // Cutting line (red dashed line from start to current mouse position)
+    let cuttingLine = ''
+    if (this.state.cutting) {
+      const start = projectPosition(this.state.cutting.startPoint)
+      const end = projectPosition(this.state.cutting.currentPoint)
+      cuttingLine = `<line class="cutting-line" x1="${start.x}" y1="${start.y}" x2="${end.x}" y2="${end.y}" />`
+    }
+
+    return arrowDefs + hierarchyEdges + relationEdges + connectorLine + cuttingLine
   }
 
   private resolveNodeRenderMetrics(node: MindNode, childCount: number): NodeRenderMetrics {
@@ -4387,6 +4688,7 @@ class MindMapApp {
           selectedIds.has(node.id) && node.id !== this.state.selectedNodeId ? 'is-selected-secondary' : '',
           node.id === this.state.connectSourceNodeId ? 'is-connect-source' : '',
           node.collapsed ? 'is-collapsed' : '',
+          this.state.cutting?.warningNodeIds.has(node.id) ? 'cutting-warning' : '',
         ]
           .filter(Boolean)
           .join(' ')
@@ -9124,9 +9426,15 @@ class MindMapApp {
     if (!this.minimapRenderer || !this.refs) return
 
     const nodes = this.state.document.nodes
+    const visibleIds = visibleNodeIds(this.state.document)
     const minimapNodes: MinimapNodeData[] = []
 
     for (const node of nodes) {
+      // Only show visible nodes in minimap (exclude collapsed/hidden descendants)
+      if (!visibleIds.has(node.id)) {
+        continue
+      }
+
       const childCount = childrenOf(this.state.document, node.id).length
       const w = node.width ?? estimateNodeWidth(node, childCount)
       const h = node.height ?? estimateNodeHeight(node, childCount, w)
@@ -9159,6 +9467,8 @@ class MindMapApp {
       scale: this.viewport.scale,
       screenWidth: rect.width,
       screenHeight: rect.height,
+      originX: this.workspaceBounds.originX,
+      originY: this.workspaceBounds.originY,
     })
   }
 

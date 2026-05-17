@@ -49,7 +49,7 @@ export function createDefaultPreferences(): AppPreferences {
       rightLongPressAction: 'ai-wheel',
       canvasLeftDragAction: 'marquee-select',
       canvasMiddleDragAction: 'pan-canvas',
-      canvasRightDragAction: 'none',
+      canvasRightDragAction: 'cutting',
       spaceAction: 'edit-tail',
     },
     ai: {
@@ -240,6 +240,7 @@ export function normalizeCanvasDragAction(value: unknown, fallback: CanvasDragAc
   switch (value) {
     case 'pan-canvas':
     case 'marquee-select':
+    case 'cutting':
     case 'none':
       return value
     default:

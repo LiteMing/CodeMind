@@ -236,6 +236,7 @@ export interface AppState {
   regionResize: RegionResizeState | null
   connectorDrag: ConnectorDragState | null
   midpointDrag: MidpointDragState | null
+  cutting: CuttingState | null
   dirty: boolean
 
   // UX Polish additions
@@ -334,6 +335,23 @@ export interface MinimapState {
   visible: boolean
   hovered: boolean
   dragging: boolean
+}
+
+// === Edge Cutting ===
+
+export interface CuttingState {
+  /** Pointer ID for tracking */
+  pointerId: number
+  /** Cutting line start point in canvas coordinates */
+  startPoint: Position
+  /** Cutting line current endpoint in canvas coordinates */
+  currentPoint: Position
+  /** Node IDs currently intersected by cutting line */
+  warningNodeIds: Set<string>
+  /** Hierarchy edge keys (parentId-childId) currently intersected */
+  warningHierarchyEdgeKeys: Set<string>
+  /** Relation edge IDs currently intersected */
+  warningRelationIds: Set<string>
 }
 
 export interface CopiedSubtreeNode {

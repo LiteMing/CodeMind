@@ -2282,6 +2282,33 @@ code {
   cursor: crosshair !important;
 }
 
+/* Cutting mode cursor */
+.is-cutting,
+.is-cutting * {
+  cursor: crosshair !important;
+  user-select: none;
+}
+
+/* Cutting line (red dashed) */
+.cutting-line {
+  stroke: #ff0000;
+  stroke-width: 2;
+  stroke-dasharray: 6 4;
+  stroke-linecap: round;
+  pointer-events: none;
+}
+
+/* Cutting warning highlight — nodes */
+.node-card.cutting-warning {
+  outline: 2px solid #ff0000;
+  outline-offset: 1px;
+}
+
+/* Cutting warning highlight — edges (hierarchy & relation) */
+.edge.cutting-warning {
+  stroke: #ff0000;
+}
+
 /* Region resize handles */
 .region-resizer {
   position: absolute;
