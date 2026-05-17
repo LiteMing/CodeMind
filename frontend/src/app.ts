@@ -2126,61 +2126,86 @@ class MindMapApp {
         if (bezier) {
           const polyline = sampleCubicBezier(bezier.start, bezier.cp1, bezier.cp2, bezier.end, 16)
           if (segmentIntersectsPolyline(wsStart, wsEnd, polyline)) {
-            cutting.warningHierarchyEdgeKeys.add(`${sourceId}-${targetId}`)
+            cutting.warningHierarchyEdgeKeys.add(`${sourceId}::${targetId}`)
           }
         } else {
           // Fallback: parse as polyline (M...L...L... orthogonal format)
           const polyline = parsePolylineFromPath(d)
           if (polyline.length >= 2 && segmentIntersectsPolyline(wsStart, wsEnd, polyline)) {
-            cutting.warningHierarchyEdgeKeys.add(`${sourceId}-${targetId}`)
+            cutting.warningHierarchyEdgeKeys.add(`${sourceId}::${targetId}`)
           }
         }
       }
     }
 
     // --- Relation edge intersection detection ---
-    if (this.refs?.edgeLayer) {
-      const relationGroups = this.refs.edgeLayer.querySelectorAll<SVGElement>('[data-relation-click]')
-      for (const hitArea of relationGroups) {
-        const relationId = hitArea.getAttribute('data-relation-click')
-        if (!relationId) {
+    // Compute intersection directly from document data (not DOM) to avoid parsing issues
+    const edgeStyle = this.state.preferences.appearance.edgeStyle
+    const drawEdgeStyle: EdgeStyle = edgeStyle === 'hidden' ? 'curve' : edgeStyle
+    const childCountById = new Map(
+      this.state.document.nodes.map((n) => [n.id, childrenOf(this.state.document, n.id).length]),
+    )
+
+    for (const relation of this.state.document.relations) {
+      const source = this.findNode(relation.sourceId)
+      const target = this.findNode(relation.targetId)
+      if (!source || !target || !visibleIds.has(source.id) || !visibleIds.has(target.id)) {
+        continue
+      }
+
+      const sourceMetrics = this.resolveNodeRenderMetrics(source, childCountById.get(source.id) ?? 0)
+      const targetMetrics = this.resolveNodeRenderMetrics(target, childCountById.get(target.id) ?? 0)
+      const edgePoints = resolveRelationEdgeEndpoints(sourceMetrics, targetMetrics)
+
+      // Build the path string and parse it for intersection testing
+      const pathD = buildRelationSegmentPath(
+        this.toWorkspacePosition(edgePoints.source),
+        this.toWorkspacePosition(edgePoints.target),
+        drawEdgeStyle,
+      )
+
+      const bezier = parseCubicBezierFromPath(pathD)
+      if (bezier) {
+        const polyline = sampleCubicBezier(bezier.start, bezier.cp1, bezier.cp2, bezier.end, 16)
+        if (segmentIntersectsPolyline(wsStart, wsEnd, polyline)) {
+          cutting.warningRelationIds.add(relation.id)
           continue
         }
-
-        // Get all path elements in the same group as the hit area
-        const group = hitArea.closest('g')
-        if (!group) {
+      } else {
+        const polyline = parsePolylineFromPath(pathD)
+        if (polyline.length >= 2 && segmentIntersectsPolyline(wsStart, wsEnd, polyline)) {
+          cutting.warningRelationIds.add(relation.id)
           continue
         }
+      }
 
-        const paths = group.querySelectorAll<SVGPathElement>('.edge-relation')
-        let intersects = false
-        for (const pathEl of paths) {
-          const d = pathEl.getAttribute('d')
-          if (!d) {
+      // Also check branch paths if the relation has midpoint/branches
+      if (relation.midpointOffset || (relation.branches?.length ?? 0) > 0) {
+        const midpointDoc = this.resolveRelationMidpointForEdge(relation, sourceMetrics, targetMetrics, drawEdgeStyle)
+        const wsMid = this.toWorkspacePosition(midpointDoc)
+        const wsSource = this.toWorkspacePosition(edgePoints.source)
+        const wsTarget = this.toWorkspacePosition(edgePoints.target)
+
+        // Check source-to-mid segment
+        const pathSrcMid = buildRelationSegmentPath(wsSource, wsMid, drawEdgeStyle)
+        const bezSrcMid = parseCubicBezierFromPath(pathSrcMid)
+        if (bezSrcMid) {
+          const poly = sampleCubicBezier(bezSrcMid.start, bezSrcMid.cp1, bezSrcMid.cp2, bezSrcMid.end, 16)
+          if (segmentIntersectsPolyline(wsStart, wsEnd, poly)) {
+            cutting.warningRelationIds.add(relation.id)
             continue
           }
-
-          // Try parsing as cubic Bézier (M...C... format)
-          const bezier = parseCubicBezierFromPath(d)
-          if (bezier) {
-            const polyline = sampleCubicBezier(bezier.start, bezier.cp1, bezier.cp2, bezier.end, 16)
-            if (segmentIntersectsPolyline(wsStart, wsEnd, polyline)) {
-              intersects = true
-              break
-            }
-          } else {
-            // Fallback: parse as polyline (M...L...L... orthogonal format)
-            const polyline = parsePolylineFromPath(d)
-            if (polyline.length >= 2 && segmentIntersectsPolyline(wsStart, wsEnd, polyline)) {
-              intersects = true
-              break
-            }
-          }
         }
 
-        if (intersects) {
-          cutting.warningRelationIds.add(relationId)
+        // Check mid-to-target segment
+        const pathMidTgt = buildRelationSegmentPath(wsMid, wsTarget, drawEdgeStyle)
+        const bezMidTgt = parseCubicBezierFromPath(pathMidTgt)
+        if (bezMidTgt) {
+          const poly = sampleCubicBezier(bezMidTgt.start, bezMidTgt.cp1, bezMidTgt.cp2, bezMidTgt.end, 16)
+          if (segmentIntersectsPolyline(wsStart, wsEnd, poly)) {
+            cutting.warningRelationIds.add(relation.id)
+            continue
+          }
         }
       }
     }
@@ -2239,11 +2264,11 @@ class MindMapApp {
     }
 
     // Phase 2: Sever all Hierarchy Edges in the warning list
-    // Format of warningHierarchyEdgeKeys: "parentId-childId"
+    // Format of warningHierarchyEdgeKeys: "parentId::childId"
     for (const edgeKey of cutting.warningHierarchyEdgeKeys) {
-      const separatorIndex = edgeKey.indexOf('-')
+      const separatorIndex = edgeKey.indexOf('::')
       if (separatorIndex === -1) continue
-      const childId = edgeKey.substring(separatorIndex + 1)
+      const childId = edgeKey.substring(separatorIndex + 2)
       const childNode = this.state.document.nodes.find((n) => n.id === childId)
       if (childNode) {
         childNode.kind = 'floating'
@@ -4501,7 +4526,7 @@ class MindMapApp {
                 this.resolveNodeRenderMetrics(parent, childCountById.get(parent.id) ?? 0),
                 this.resolveNodeRenderMetrics(node, childCountById.get(node.id) ?? 0),
               )
-              const warningClass = this.state.cutting?.warningHierarchyEdgeKeys.has(`${parent.id}-${node.id}`)
+              const warningClass = this.state.cutting?.warningHierarchyEdgeKeys.has(`${parent.id}::${node.id}`)
                 ? ' cutting-warning'
                 : ''
               return `<path class="edge edge-hierarchy${warningClass}" data-source-id="${parent.id}" data-target-id="${node.id}" d="${buildHierarchyPath(projectPosition(edgePoints.source), projectPosition(edgePoints.target), drawEdgeStyle)}" />`
