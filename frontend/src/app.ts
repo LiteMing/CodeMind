@@ -209,6 +209,7 @@ class MindMapApp {
   private pendingEditorOptions: EditorLaunchOptions | null = null
   private activeEditorAnchorLeft: number | null = null
   private activeEditorPreview: ActiveEditorPreviewState | null = null
+  private activeEditorLockedWidth: number | null = null
   private editingOriginalTitle: string | null = null
   private nodeEditorMeasureCanvas: HTMLCanvasElement | null = null
   private pendingImportMode: PendingImportMode = 'auto'
@@ -4826,7 +4827,7 @@ class MindMapApp {
         const articleStyle = `left: ${anchorX + originX}px; top: ${node.position.y + originY}px; ${nodePresentationStyle}`
 
         const content = isEditingNode
-          ? `<textarea class="node-editor" style="${nodeDimensions}" data-node-editor="${node.id}" rows="1" maxlength="120" spellcheck="false">${escapeHtml(
+          ? `<textarea class="node-editor" style="${nodeDimensions}" data-node-editor="${node.id}" rows="1" spellcheck="false">${escapeHtml(
               node.title,
             )}</textarea>`
           : `<button type="button" class="node-shell" style="${nodeDimensions}" data-node-button="${node.id}">
@@ -5066,10 +5067,13 @@ class MindMapApp {
     const previewAnchorLeft: number | null = this.activeEditorAnchorLeft
 
     if (node.width) {
+      // Fixed-width node: use the user-set width
       previewWidth = Math.max(node.width, MIN_NODE_WIDTH)
       editor.style.width = `${previewWidth}px`
       editor.style.maxWidth = 'none'
     } else {
+      // Auto-width node: width can only grow (never shrink) during editing.
+      // This prevents left-right jumping while still allowing expansion for long text.
       const horizontalPadding = parsePixelValue(computed.paddingLeft) + parsePixelValue(computed.paddingRight) + 2
       const longestLineWidth = editor.value
         .split(/\r?\n/)
@@ -5077,7 +5081,16 @@ class MindMapApp {
           (maxWidthSoFar, line) => Math.max(maxWidthSoFar, this.measureNodeEditorLineWidth(line || ' ', computed.font)),
           0,
         )
-      previewWidth = clamp(Math.ceil(longestLineWidth + horizontalPadding), minWidth, maxWidth)
+      const contentWidth = clamp(Math.ceil(longestLineWidth + horizontalPadding), minWidth, maxWidth)
+
+      if (this.activeEditorLockedWidth !== null) {
+        // Only allow width to grow, never shrink
+        previewWidth = Math.max(this.activeEditorLockedWidth, contentWidth)
+      } else {
+        previewWidth = contentWidth
+      }
+      this.activeEditorLockedWidth = previewWidth
+
       editor.style.width = `${previewWidth}px`
       editor.style.maxWidth = `${maxWidth}px`
     }
@@ -5394,13 +5407,34 @@ class MindMapApp {
   }
 
   private copySelectedSubtree(): void {
-    const selectedNode = this.selectedNode()
-    if (!selectedNode) {
+    // Support multi-selection: collect all selected nodes' subtrees
+    const selectedIds = this.selectedNodeIds()
+    if (selectedIds.length === 0) {
+      const selectedNode = this.selectedNode()
+      if (selectedNode) {
+        selectedIds.push(selectedNode.id)
+      }
+    }
+    if (selectedIds.length === 0) {
       return
     }
 
-    const subtreeIds = [selectedNode.id, ...descendantIds(this.state.document, selectedNode.id)]
-    const nodes = subtreeIds
+    // Use the primary selected node as the anchor for offset calculation
+    const primaryNode = this.findNode(selectedIds[0])
+    if (!primaryNode) {
+      return
+    }
+
+    // Collect all nodes from all selected subtrees, deduplicating
+    const allSubtreeIds = new Set<string>()
+    for (const nodeId of selectedIds) {
+      allSubtreeIds.add(nodeId)
+      for (const descId of descendantIds(this.state.document, nodeId)) {
+        allSubtreeIds.add(descId)
+      }
+    }
+
+    const nodes = [...allSubtreeIds]
       .map((nodeId) => this.findNode(nodeId))
       .filter((node): node is MindNode => Boolean(node))
       .map((node) => {
@@ -5416,8 +5450,8 @@ class MindMapApp {
           width: node.width,
           height: node.height,
           offset: {
-            x: node.position.x - selectedNode.position.x,
-            y: node.position.y - selectedNode.position.y,
+            x: node.position.x - primaryNode.position.x,
+            y: node.position.y - primaryNode.position.y,
           },
         }
       })
@@ -5427,7 +5461,7 @@ class MindMapApp {
     }
 
     this.copiedSubtree = {
-      rootId: selectedNode.id,
+      rootId: primaryNode.id,
       nodes,
     }
     this.setStatus('status.subtreeCopied', { count: nodes.length })
@@ -5435,32 +5469,52 @@ class MindMapApp {
   }
 
   private cutSelectedSubtree(): void {
-    const selectedNode = this.selectedNode()
-    if (!selectedNode || selectedNode.kind === 'root') {
+    // Support multi-selection: cut all selected nodes
+    const selectedIds = this.selectedNodeIds()
+    if (selectedIds.length === 0) {
+      const selectedNode = this.selectedNode()
+      if (selectedNode && selectedNode.kind !== 'root') {
+        selectedIds.push(selectedNode.id)
+      }
+    }
+
+    // Filter out root node — cannot cut root
+    const cuttableIds = selectedIds.filter((id) => {
+      const node = this.findNode(id)
+      return node && node.kind !== 'root'
+    })
+
+    if (cuttableIds.length === 0) {
       return
     }
 
-    // Copy first
+    // Copy first (uses selectedNodeIds internally)
     this.copySelectedSubtree()
 
-    // Then delete the subtree
+    // Then delete all selected subtrees
     this.captureHistory()
-    const subtreeIds = new Set([selectedNode.id, ...descendantIds(this.state.document, selectedNode.id)])
+    const allSubtreeIds = new Set<string>()
+    for (const nodeId of cuttableIds) {
+      allSubtreeIds.add(nodeId)
+      for (const descId of descendantIds(this.state.document, nodeId)) {
+        allSubtreeIds.add(descId)
+      }
+    }
 
     // Remove relations referencing deleted nodes
     this.state.document.relations = this.state.document.relations
-      .filter((r) => !subtreeIds.has(r.sourceId) && !subtreeIds.has(r.targetId))
+      .filter((r) => !allSubtreeIds.has(r.sourceId) && !allSubtreeIds.has(r.targetId))
       .map((r) => ({
         ...r,
-        branches: (r.branches ?? []).filter((b) => !subtreeIds.has(b.targetId)),
+        branches: (r.branches ?? []).filter((b) => !allSubtreeIds.has(b.targetId)),
       }))
 
     // Remove nodes
-    this.state.document.nodes = this.state.document.nodes.filter((n) => !subtreeIds.has(n.id))
+    this.state.document.nodes = this.state.document.nodes.filter((n) => !allSubtreeIds.has(n.id))
 
     touchDocument(this.state.document)
     this.selectNode(findRoot(this.state.document)?.id ?? 'root')
-    this.setStatus('status.subtreeCut', { count: subtreeIds.size })
+    this.setStatus('status.subtreeCut', { count: allSubtreeIds.size })
     this.scheduleAutosave('status.saved')
   }
 
@@ -5506,12 +5560,15 @@ class MindMapApp {
       const nextId = createId('node')
       idMap.set(snapshot.id, nextId)
       const isClipboardRoot = snapshot.id === this.copiedSubtree.rootId
+      // For multi-select paste: if a node's parent wasn't copied (not in idMap),
+      // treat it as a top-level node and attach to the paste target.
       const parentId = isClipboardRoot
         ? targetNode.id
         : snapshot.parentId
-          ? idMap.get(snapshot.parentId)
+          ? (idMap.get(snapshot.parentId) ?? targetNode.id)
           : targetNode.id
-      const nodeKind: MindNode['kind'] = isClipboardRoot ? 'topic' : snapshot.kind === 'root' ? 'topic' : snapshot.kind
+      const isTopLevel = isClipboardRoot || parentId === targetNode.id
+      const nodeKind: MindNode['kind'] = isTopLevel ? 'topic' : snapshot.kind === 'root' ? 'topic' : snapshot.kind
       const position = {
         x: anchor.x + snapshot.offset.x,
         y: anchor.y + snapshot.offset.y,
@@ -5621,6 +5678,17 @@ class MindMapApp {
     this.relayoutHierarchyAfterInsert(newNode)
     this.setSelection([newNode.id], newNode.id)
     this.state.editingNodeId = newNode.id
+    this.editingOriginalTitle = newNode.title
+    // Set anchor left so the editor uses left-anchored positioning (no left-right expansion)
+    const initWidth = estimateNodeWidth(newNode, 0)
+    this.activeEditorAnchorLeft = newNode.position.x - initWidth / 2
+    this.activeEditorLockedWidth = initWidth
+    this.activeEditorPreview = {
+      nodeId: newNode.id,
+      anchorLeft: this.activeEditorAnchorLeft,
+      width: initWidth,
+      height: estimateNodeHeight(newNode, 0, initWidth),
+    }
     touchDocument(this.state.document)
     this.render()
     this.applyNodeCreateAnimation(newNode.id)
@@ -5669,6 +5737,16 @@ class MindMapApp {
     this.relayoutHierarchyAfterInsert(newNode)
     this.setSelection([newNode.id], newNode.id)
     this.state.editingNodeId = newNode.id
+    this.editingOriginalTitle = newNode.title
+    const sibInitWidth = estimateNodeWidth(newNode, 0)
+    this.activeEditorAnchorLeft = newNode.position.x - sibInitWidth / 2
+    this.activeEditorLockedWidth = sibInitWidth
+    this.activeEditorPreview = {
+      nodeId: newNode.id,
+      anchorLeft: this.activeEditorAnchorLeft,
+      width: sibInitWidth,
+      height: estimateNodeHeight(newNode, 0, sibInitWidth),
+    }
     touchDocument(this.state.document)
     this.render()
     this.applyNodeCreateAnimation(newNode.id)
@@ -5692,6 +5770,16 @@ class MindMapApp {
     this.state.document.nodes.push(newNode)
     this.setSelection([newNode.id], newNode.id)
     this.state.editingNodeId = newNode.id
+    this.editingOriginalTitle = newNode.title
+    const floatInitWidth = estimateNodeWidth(newNode, 0)
+    this.activeEditorAnchorLeft = newNode.position.x - floatInitWidth / 2
+    this.activeEditorLockedWidth = floatInitWidth
+    this.activeEditorPreview = {
+      nodeId: newNode.id,
+      anchorLeft: this.activeEditorAnchorLeft,
+      width: floatInitWidth,
+      height: estimateNodeHeight(newNode, 0, floatInitWidth),
+    }
     touchDocument(this.state.document)
     this.render()
     this.scheduleAutosave('status.siblingSaveScheduled')
@@ -5992,6 +6080,7 @@ class MindMapApp {
     this.pendingEditorOptions = null
     this.activeEditorAnchorLeft = null
     this.activeEditorPreview = null
+    this.activeEditorLockedWidth = null
     this.editingOriginalTitle = null
   }
 
@@ -8818,18 +8907,22 @@ class MindMapApp {
       return
     }
 
+    this.didInitializeViewport = true
+
     const root = findRoot(this.state.document)
     const { scroll } = this.refs
-    queueMicrotask(() => {
-      const bounds = getWorkspaceBounds(this.state.document)
-      const rootPosition = this.toWorkspacePosition(root.position, bounds)
-      this.viewport.scale = 1
-      this.viewport.x = scroll.clientWidth / 2 - rootPosition.x * this.viewport.scale
-      this.viewport.y = scroll.clientHeight / 2 - rootPosition.y * this.viewport.scale
-      this.applyCanvasMetrics(bounds, false)
-      this.updateCanvasViewportView()
-    })
-    this.didInitializeViewport = true
+
+    // Compute viewport synchronously to avoid race condition with user zoom input.
+    // Previously this was deferred to queueMicrotask, causing UxEngine to hold stale
+    // viewport {0,0,1} if the user zoomed before the microtask fired.
+    const bounds = getWorkspaceBounds(this.state.document)
+    const rootPosition = this.toWorkspacePosition(root.position, bounds)
+    this.viewport.scale = 1
+    this.viewport.x = scroll.clientWidth / 2 - rootPosition.x * this.viewport.scale
+    this.viewport.y = scroll.clientHeight / 2 - rootPosition.y * this.viewport.scale
+    this.uxEngine.syncViewport(this.viewport)
+    this.applyCanvasMetrics(bounds, false)
+    this.updateCanvasViewportView()
   }
 
   private findNode(nodeId: string): MindNode | undefined {

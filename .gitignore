@@ -4,6 +4,9 @@ node_modules/
 ## Local app data
 data/maps/
 
+## Kiro specs
+.kiro/
+
 ## Nested local repo
 code-mind/
 
