@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { spawn, ChildProcessWithoutNullStreams } from 'child_process';
+import * as fs from 'fs';
 import * as http from 'http';
 import * as path from 'path';
 import { URL } from 'url';
@@ -41,12 +42,23 @@ export class LocalBackendManager implements vscode.Disposable {
     const dataDir = this.dataDir(cwd);
     const apiUrl = new URL(this.apiUrl());
     const port = apiUrl.port || (apiUrl.protocol === 'https:' ? '443' : '80');
+    const executablePath = this.executablePath(commandLine);
 
     this.output.appendLine(`Starting Code Mind backend: ${commandLine}`);
     this.output.appendLine(`Backend cwd: ${cwd}`);
     this.output.appendLine(`Backend data dir: ${dataDir}`);
 
-    this.process = spawn(commandLine, {
+    this.process = executablePath
+      ? spawn(executablePath, [], {
+          cwd,
+          shell: false,
+          env: {
+            ...process.env,
+            CODE_MIND_PORT: port,
+            CODE_MIND_DATA_DIR: dataDir,
+          },
+        })
+      : spawn(commandLine, {
       cwd,
       shell: true,
       env: {
@@ -58,6 +70,9 @@ export class LocalBackendManager implements vscode.Disposable {
 
     this.process.stdout.on('data', (chunk) => this.output.append(chunk.toString()));
     this.process.stderr.on('data', (chunk) => this.output.append(chunk.toString()));
+    this.process.on('error', (err) => {
+      this.output.appendLine(`Code Mind backend failed to start: ${err.message}`);
+    });
     this.process.on('exit', (code, signal) => {
       this.output.appendLine(`Code Mind backend exited: code=${code ?? ''} signal=${signal ?? ''}`);
       this.process = null;
@@ -108,6 +123,14 @@ export class LocalBackendManager implements vscode.Disposable {
     return path.join(cwd, 'data');
   }
 
+  private executablePath(commandLine: string): string | null {
+    const trimmed = commandLine.trim().replace(/^"|"$/g, '');
+    if (/\.exe$/i.test(trimmed) && fs.existsSync(trimmed)) {
+      return trimmed;
+    }
+    return null;
+  }
+
   private isHealthy(apiUrl: string): Promise<boolean> {
     return new Promise((resolve) => {
       let url: URL;
@@ -146,6 +169,6 @@ export class LocalBackendManager implements vscode.Disposable {
       }
       await new Promise((resolve) => setTimeout(resolve, 400));
     }
-    throw new Error('Code Mind backend did not become ready in time. Check the Code Mind output panel.');
+    throw new Error(`Code Mind backend did not become ready in ${timeoutMs / 1000}s. Check the Code Mind output panel.`);
   }
 }
