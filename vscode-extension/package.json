@@ -77,6 +77,12 @@
         "icon": "$(debug-stop)"
       },
       {
+        "command": "codeMind.showBackendLogs",
+        "title": "Show Backend Logs",
+        "category": "Code Mind",
+        "icon": "$(output)"
+      },
+      {
         "command": "codeMind.createNode",
         "title": "Create Node",
         "category": "Code Mind",
@@ -130,6 +136,11 @@
         },
         {
           "command": "codeMind.startLocalBackend",
+          "when": "view == codeMindExplorer",
+          "group": "navigation"
+        },
+        {
+          "command": "codeMind.showBackendLogs",
           "when": "view == codeMindExplorer",
           "group": "navigation"
         }

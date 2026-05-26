@@ -73,6 +73,10 @@ export function registerCommands(
       backendManager.stop();
     }),
 
+    vscode.commands.registerCommand('codeMind.showBackendLogs', () => {
+      backendManager.showLogs();
+    }),
+
     vscode.commands.registerCommand('codeMind.openWebApp', async () => {
       try {
         await backendManager.ensureStarted();

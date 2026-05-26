@@ -10,6 +10,7 @@ const DEFAULT_API_URL = 'http://127.0.0.1:34117';
 export class LocalBackendManager implements vscode.Disposable {
   private process: ChildProcessWithoutNullStreams | null = null;
   private output: vscode.OutputChannel;
+  private lastLogLines: string[] = [];
 
   constructor(output: vscode.OutputChannel) {
     this.output = output;
@@ -47,6 +48,9 @@ export class LocalBackendManager implements vscode.Disposable {
     this.output.appendLine(`Starting Code Mind backend: ${commandLine}`);
     this.output.appendLine(`Backend cwd: ${cwd}`);
     this.output.appendLine(`Backend data dir: ${dataDir}`);
+    this.recordLog(`Starting Code Mind backend: ${commandLine}`);
+    this.recordLog(`Backend cwd: ${cwd}`);
+    this.recordLog(`Backend data dir: ${dataDir}`);
 
     this.process = executablePath
       ? spawn(executablePath, [], {
@@ -68,13 +72,23 @@ export class LocalBackendManager implements vscode.Disposable {
       },
     });
 
-    this.process.stdout.on('data', (chunk) => this.output.append(chunk.toString()));
-    this.process.stderr.on('data', (chunk) => this.output.append(chunk.toString()));
+    this.process.stdout.on('data', (chunk) => {
+      const text = chunk.toString();
+      this.output.append(text);
+      this.recordLog(text);
+    });
+    this.process.stderr.on('data', (chunk) => {
+      const text = chunk.toString();
+      this.output.append(text);
+      this.recordLog(text);
+    });
     this.process.on('error', (err) => {
       this.output.appendLine(`Code Mind backend failed to start: ${err.message}`);
+      this.recordLog(`Code Mind backend failed to start: ${err.message}`);
     });
     this.process.on('exit', (code, signal) => {
       this.output.appendLine(`Code Mind backend exited: code=${code ?? ''} signal=${signal ?? ''}`);
+      this.recordLog(`Code Mind backend exited: code=${code ?? ''} signal=${signal ?? ''}`);
       this.process = null;
     });
   }
@@ -93,6 +107,14 @@ export class LocalBackendManager implements vscode.Disposable {
     if (this.process && !this.process.killed) {
       this.process.kill();
     }
+  }
+
+  showLogs(): void {
+    this.output.show(true);
+  }
+
+  recentLogs(): string {
+    return this.lastLogLines.slice(-12).join('\n').trim();
   }
 
   private apiUrl(): string {
@@ -150,6 +172,17 @@ export class LocalBackendManager implements vscode.Disposable {
     return null;
   }
 
+  private recordLog(text: string): void {
+    const lines = text
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+    this.lastLogLines.push(...lines);
+    if (this.lastLogLines.length > 80) {
+      this.lastLogLines = this.lastLogLines.slice(-80);
+    }
+  }
+
   private isHealthy(apiUrl: string): Promise<boolean> {
     return new Promise((resolve) => {
       let url: URL;
@@ -188,6 +221,9 @@ export class LocalBackendManager implements vscode.Disposable {
       }
       await new Promise((resolve) => setTimeout(resolve, 400));
     }
-    throw new Error(`Code Mind backend did not become ready in ${timeoutMs / 1000}s. Check the Code Mind output panel.`);
+    const recentLogs = this.recentLogs();
+    throw new Error(
+      `Code Mind backend did not become ready in ${timeoutMs / 1000}s.${recentLogs ? ` Recent logs: ${recentLogs}` : ''}`,
+    );
   }
 }
