@@ -14,7 +14,7 @@ export function activate(context: vscode.ExtensionContext): void {
   const api = new CodeMindAPI();
   const treeProvider = new MindMapTreeProvider(api);
   const noteProvider = new NoteContentProvider(api);
-  const backendManager = new LocalBackendManager(outputChannel);
+  const backendManager = new LocalBackendManager(outputChannel, context);
 
   const treeView = vscode.window.createTreeView('codeMindExplorer', {
     treeDataProvider: treeProvider,

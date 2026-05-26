@@ -11,9 +11,11 @@ export class LocalBackendManager implements vscode.Disposable {
   private process: ChildProcessWithoutNullStreams | null = null;
   private output: vscode.OutputChannel;
   private lastLogLines: string[] = [];
+  private context: vscode.ExtensionContext;
 
-  constructor(output: vscode.OutputChannel) {
+  constructor(output: vscode.OutputChannel, context: vscode.ExtensionContext) {
     this.output = output;
+    this.context = context;
   }
 
   async ensureStarted(): Promise<void> {
@@ -125,8 +127,12 @@ export class LocalBackendManager implements vscode.Disposable {
   private backendCommand(): string {
     const cfg = vscode.workspace.getConfiguration('codeMind');
     const configured = (cfg.get<string>('backendCommand') || '').trim();
-    if (configured) {
+    if (configured && configured !== 'go run ./cmd/server') {
       return configured;
+    }
+    const extensionServer = path.join(this.context.extensionPath, 'resources', 'backend', 'codemind-server.exe');
+    if (fs.existsSync(extensionServer)) {
+      return extensionServer;
     }
     const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
     if (workspaceRoot) {
@@ -143,6 +149,10 @@ export class LocalBackendManager implements vscode.Disposable {
     const configured = (cfg.get<string>('backendCwd') || '').trim();
     if (configured) {
       return configured;
+    }
+    const extensionServerDir = path.join(this.context.extensionPath, 'resources', 'backend');
+    if (fs.existsSync(path.join(extensionServerDir, 'codemind-server.exe'))) {
+      return extensionServerDir;
     }
     const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
     if (workspaceRoot) {

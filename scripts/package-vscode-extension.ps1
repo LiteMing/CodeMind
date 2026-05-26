@@ -9,6 +9,8 @@ $Root = Split-Path -Parent $PSScriptRoot
 $ExtensionDir = Join-Path $Root "vscode-extension"
 $OutDir = Join-Path $Root "dist"
 $VsceBin = Join-Path $ExtensionDir "node_modules\.bin\vsce.cmd"
+$BackendDir = Join-Path $ExtensionDir "resources\backend"
+$FrontendDist = Join-Path $Root "frontend\dist"
 
 if (-not (Test-Path $ExtensionDir)) {
   throw "VS Code extension directory not found: $ExtensionDir"
@@ -29,6 +31,16 @@ try {
   }
 
   npm run compile
+
+  if (-not (Test-Path $FrontendDist)) {
+    npm run build --prefix (Join-Path $Root "frontend")
+  }
+  if (Test-Path $BackendDir) {
+    Remove-Item $BackendDir -Recurse -Force
+  }
+  New-Item -ItemType Directory -Path $BackendDir | Out-Null
+  go build -o (Join-Path $BackendDir "codemind-server.exe") (Join-Path $Root "cmd\server")
+  Copy-Item $FrontendDist (Join-Path $BackendDir "dist") -Recurse -Force
 
   $PackageArgs = @(
     "package",
