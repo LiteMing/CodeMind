@@ -13,6 +13,9 @@ code-mind/
 ## Desktop build outputs
 build/bin/
 build/windows/icon-verify.png
+dist/
+*.exe
+vscode-extension/out/
 
 ## OS noise
 Thumbs.db

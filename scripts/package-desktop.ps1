@@ -113,6 +113,17 @@ if (Test-Path $versionedExe) {
 
 Move-Item $sourceExe $versionedExe -Force
 
+$frontendDist = Join-Path $projectRoot 'frontend\\dist'
+$runtimeDist = Join-Path (Split-Path -Parent $versionedExe) 'dist'
+if (Test-Path $frontendDist) {
+  if (Test-Path $runtimeDist) {
+    Remove-Item $runtimeDist -Recurse -Force
+  }
+  Copy-Item $frontendDist $runtimeDist -Recurse -Force
+} else {
+  Write-Warning "frontend dist not found: $frontendDist"
+}
+
 go run .\\scripts\\check_windows_resources -exe $versionedExe -icon $iconPath
 
 $versionInfo = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($versionedExe)

@@ -11,6 +11,8 @@
     "build:go": "go build ./...",
     "build:desktop": "powershell -ExecutionPolicy Bypass -File scripts/package-desktop.ps1",
     "build:claude-mind": "powershell -ExecutionPolicy Bypass -File scripts/package-claude-mind.ps1",
+    "build:vsix": "powershell -ExecutionPolicy Bypass -File scripts/package-vscode-extension.ps1 -SkipInstall",
+    "build:vsix:full": "powershell -ExecutionPolicy Bypass -File scripts/package-vscode-extension.ps1",
     "test": "go test ./... && npm run build:web",
     "prepare": "husky"
   },

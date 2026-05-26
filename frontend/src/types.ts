@@ -222,6 +222,19 @@ export interface CollabSettings {
   collabApiKey: string
 }
 
+export type ShareAccessLevel = 'viewer' | 'editor'
+
+export interface ShareToken {
+  id: string
+  mapId: string
+  accessLevel: ShareAccessLevel | 'owner'
+  secret: string
+  displayName: string
+  expiresAt?: string
+  createdAt: string
+  revoked: boolean
+}
+
 export interface AppPreferences {
   locale: Locale
   onboardingCompleted: boolean

@@ -357,14 +357,30 @@ class MindMapApp {
   }
 
   async mount(): Promise<void> {
+    const hasURLApiKey = this.loadApiKeyFromURL()
+    if (!hasURLApiKey) {
+      await this.loadCollabApiKey()
+    }
+
     try {
       await this.refreshMaps('status.mapListLoaded')
     } catch (error) {
       this.setStatus('status.mapListFailed', { reason: getErrorMessage(error) })
     }
 
-    await this.loadCollabApiKey()
     this.render()
+  }
+
+  private loadApiKeyFromURL(): boolean {
+    const apiKey = new URLSearchParams(window.location.search).get('vscodeApiKey')?.trim()
+    if (!apiKey) {
+      return false
+    }
+    this.collabApiKey = apiKey
+    api.setOwnerApiKey(apiKey)
+    document.cookie = `codemind_api_key=${encodeURIComponent(apiKey)}; Path=/; SameSite=Lax`
+    window.history.replaceState({}, document.title, window.location.pathname + window.location.hash)
+    return true
   }
 
   private bindEvents(): void {
@@ -2832,6 +2848,7 @@ class MindMapApp {
                   <button type="button" class="action-button" data-role="connect-button" data-command="connect-selected"></button>
                   <button type="button" class="action-button" data-role="ai-button" data-command="open-ai-workspace"></button>
                   <button type="button" class="action-button" data-role="graph-button" data-command="open-graph-overlay"></button>
+                  <button type="button" class="action-button" data-command="platform-help">平台</button>
                   <button type="button" class="action-button" data-role="export-button" data-command="export-markdown"></button>
                 </section>
 
@@ -6437,6 +6454,9 @@ class MindMapApp {
         case 'toggle-settings':
           this.toggleSettings()
           return
+        case 'platform-help':
+          await this.showPlatformHelp()
+          return
         case 'open-ai-workspace':
           this.openAIWorkspace()
           return
@@ -8342,6 +8362,63 @@ class MindMapApp {
     }
   }
 
+  private async showPlatformHelp(): Promise<void> {
+    const mapId = this.state.currentMapId || this.state.document.id
+    if (!this.collabApiKey) {
+      this.generateCollabApiKey()
+      await this.saveCollabApiKey()
+    }
+    const token = await api.createShareToken({
+      mapId,
+      accessLevel: 'viewer',
+      displayName: 'Web Viewer',
+      expiresIn: '168h',
+      ownerApiKey: this.collabApiKey,
+    })
+    const encodedMapId = encodeURIComponent(mapId)
+    const encodedSecret = encodeURIComponent(token.secret)
+    const wsURL = `ws://127.0.0.1:34118/ws?mapId=${encodedMapId}&token=${encodedSecret}`
+    const localDebugURL = `http://127.0.0.1:34117/share/${encodedMapId}?token=${encodedSecret}`
+    const wssURL = `wss://your-domain.example/ws?mapId=${encodedMapId}&token=${encodedSecret}`
+    const shareBlock = [
+      '已一键开启 viewer 分享，有效期 7 天。',
+      `当前 mapId：${mapId}`,
+      `Token ID：${token.id}`,
+      `本地调试网页：${localDebugURL}`,
+      `WebSocket 客户端地址：${wsURL}`,
+      `公网反代后地址：${wssURL}`,
+      '注意：WebSocket 地址不是普通网页地址，不能直接粘到浏览器地址栏打开；需要由网页协作客户端或反向代理后的协作页面连接。',
+    ].join('\n')
+
+    const content = [
+      'Code Mind 平台功能入口',
+      '',
+      '1. MCP 化',
+      '构建：go build -o codemind-mcp.exe ./cmd/mcp',
+      '配置：CODEMIND_API_URL=http://127.0.0.1:34117',
+      this.collabApiKey
+        ? '配置：CODEMIND_API_KEY=当前设置页中的协作 API Key'
+        : '配置：如启用 API Key，请到设置页生成并复制。',
+      '',
+      '2. VS Code 插件调用',
+      '打开 VS Code 左侧 Code Mind 面板，配置 codeMind.apiUrl 与 codeMind.apiKey。',
+      '命令面板运行：Code Mind: Getting Started',
+      '',
+      '3. 网页协作/互联网分享',
+      shareBlock,
+      '公网分享建议将 HTTPS 代理到 34117，将 WSS /ws 代理到 34118。',
+      '',
+      '完整说明见 docs/platform-usage.md',
+    ].join('\n')
+
+    try {
+      await navigator.clipboard.writeText(content)
+      this.showToast('平台调用说明已复制到剪贴板')
+    } catch {
+      window.alert(content)
+    }
+  }
+
   private clearCollabApiKey(): void {
     this.collabApiKey = ''
     this.setStatus('settings.collabApiKeyCleared')
@@ -8350,6 +8427,7 @@ class MindMapApp {
 
   private async saveCollabApiKey(): Promise<void> {
     try {
+      api.setOwnerApiKey(this.collabApiKey)
       await api.saveSettings({ collabApiKey: this.collabApiKey })
       this.setStatus('settings.collabApiKeySaved')
     } catch (error) {
@@ -8362,6 +8440,7 @@ class MindMapApp {
     try {
       const settings = await api.getSettings()
       this.collabApiKey = settings.collabApiKey ?? ''
+      api.setOwnerApiKey(this.collabApiKey)
     } catch {
       // If backend is unavailable, keep the key empty.
     }

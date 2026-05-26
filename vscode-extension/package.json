@@ -1,0 +1,175 @@
+{
+  "name": "codemind-vscode",
+  "displayName": "Code Mind",
+  "description": "Browse and modify Code Mind mindmaps directly from VS Code",
+  "version": "0.1.0",
+  "publisher": "codemind",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onView:codeMindExplorer"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "codeMindContainer",
+          "title": "Code Mind",
+          "icon": "resources/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "codeMindContainer": [
+        {
+          "id": "codeMindExplorer",
+          "name": "Mindmaps",
+          "icon": "resources/icon.svg"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "codeMind.refresh",
+        "title": "Refresh",
+        "category": "Code Mind",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "codeMind.gettingStarted",
+        "title": "Getting Started",
+        "category": "Code Mind",
+        "icon": "$(question)"
+      },
+      {
+        "command": "codeMind.configureApiUrl",
+        "title": "Configure API URL",
+        "category": "Code Mind",
+        "icon": "$(plug)"
+      },
+      {
+        "command": "codeMind.configureApiKey",
+        "title": "Configure API Key",
+        "category": "Code Mind",
+        "icon": "$(key)"
+      },
+      {
+        "command": "codeMind.openWebApp",
+        "title": "Open Web App",
+        "category": "Code Mind",
+        "icon": "$(browser)"
+      },
+      {
+        "command": "codeMind.createNode",
+        "title": "Create Node",
+        "category": "Code Mind",
+        "icon": "$(add)"
+      },
+      {
+        "command": "codeMind.renameNode",
+        "title": "Rename Node",
+        "category": "Code Mind",
+        "icon": "$(edit)"
+      },
+      {
+        "command": "codeMind.deleteNode",
+        "title": "Delete Node",
+        "category": "Code Mind",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "codeMind.openNote",
+        "title": "Open Note",
+        "category": "Code Mind",
+        "icon": "$(note)"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "codeMind.refresh",
+          "when": "view == codeMindExplorer",
+          "group": "navigation"
+        },
+        {
+          "command": "codeMind.gettingStarted",
+          "when": "view == codeMindExplorer",
+          "group": "navigation"
+        },
+        {
+          "command": "codeMind.configureApiUrl",
+          "when": "view == codeMindExplorer",
+          "group": "navigation"
+        },
+        {
+          "command": "codeMind.configureApiKey",
+          "when": "view == codeMindExplorer",
+          "group": "navigation"
+        },
+        {
+          "command": "codeMind.openWebApp",
+          "when": "view == codeMindExplorer",
+          "group": "navigation@0"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "codeMind.createNode",
+          "when": "view == codeMindExplorer",
+          "group": "inline@1"
+        },
+        {
+          "command": "codeMind.renameNode",
+          "when": "view == codeMindExplorer",
+          "group": "inline@2"
+        },
+        {
+          "command": "codeMind.deleteNode",
+          "when": "view == codeMindExplorer",
+          "group": "inline@3"
+        },
+        {
+          "command": "codeMind.openNote",
+          "when": "view == codeMindExplorer",
+          "group": "inline@4"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Code Mind",
+      "properties": {
+        "codeMind.apiUrl": {
+          "type": "string",
+          "default": "http://127.0.0.1:34117",
+          "description": "Code Mind REST API endpoint URL"
+        },
+        "codeMind.apiKey": {
+          "type": "string",
+          "default": "",
+          "description": "API key for authentication"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "lint": "eslint src --ext ts",
+    "package": "vsce package --no-dependencies --allow-missing-repository --skip-license"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.85.0",
+    "@typescript-eslint/eslint-plugin": "^6.15.0",
+    "@typescript-eslint/parser": "^6.15.0",
+    "@vscode/vsce": "^3.2.2",
+    "eslint": "^8.56.0",
+    "typescript": "^5.3.3"
+  }
+}

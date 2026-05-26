@@ -12,6 +12,8 @@ import type {
   CollabSettings,
   MindMapDocument,
   MindMapSummary,
+  ShareAccessLevel,
+  ShareToken,
 } from './types'
 
 const JSON_HEADERS = {
@@ -23,9 +25,29 @@ const API_BASE = resolveApiBase()
 const DEV_BACKEND_HINT =
   '当前 AI 请求会先访问本地 Go API，再由 Go API 转发到模型服务。开发模式请在项目根目录运行 `npm run dev`，或至少同时运行 `go run ./cmd/server` 和 `cd frontend && npm run dev`。'
 
+let ownerApiKey = ''
+
+function authHeaders(): Record<string, string> {
+  return ownerApiKey ? { 'X-API-Key': ownerApiKey } : {}
+}
+
+function jsonHeaders(extra?: Record<string, string>): Record<string, string> {
+  return {
+    ...JSON_HEADERS,
+    ...authHeaders(),
+    ...(extra ?? {}),
+  }
+}
+
 export const api = {
+  setOwnerApiKey(apiKey: string): void {
+    ownerApiKey = apiKey.trim()
+  },
+
   async listMaps(): Promise<MindMapSummary[]> {
-    const response = await fetch(`${API_BASE}/maps`)
+    const response = await fetch(`${API_BASE}/maps`, {
+      headers: authHeaders(),
+    })
     if (!response.ok) {
       throw await createAPIError(response)
     }
@@ -37,7 +59,7 @@ export const api = {
   async createMap(title = ''): Promise<MindMapDocument> {
     const response = await fetch(`${API_BASE}/maps`, {
       method: 'POST',
-      headers: JSON_HEADERS,
+      headers: jsonHeaders(),
       body: JSON.stringify({ title }),
     })
 
@@ -49,7 +71,9 @@ export const api = {
   },
 
   async loadMap(mapId: string): Promise<MindMapDocument> {
-    const response = await fetch(`${API_BASE}/maps/${encodeURIComponent(mapId)}`)
+    const response = await fetch(`${API_BASE}/maps/${encodeURIComponent(mapId)}`, {
+      headers: authHeaders(),
+    })
     if (!response.ok) {
       throw await createAPIError(response)
     }
@@ -60,7 +84,7 @@ export const api = {
   async saveMap(document: MindMapDocument): Promise<MindMapDocument> {
     const response = await fetch(`${API_BASE}/maps/${encodeURIComponent(document.id)}`, {
       method: 'PUT',
-      headers: JSON_HEADERS,
+      headers: jsonHeaders(),
       body: JSON.stringify(document),
     })
 
@@ -74,7 +98,7 @@ export const api = {
   async renameMap(mapId: string, title: string): Promise<MindMapDocument> {
     const response = await fetch(`${API_BASE}/maps/${encodeURIComponent(mapId)}`, {
       method: 'PATCH',
-      headers: JSON_HEADERS,
+      headers: jsonHeaders(),
       body: JSON.stringify({ title }),
     })
 
@@ -88,6 +112,7 @@ export const api = {
   async deleteMap(mapId: string): Promise<void> {
     const response = await fetch(`${API_BASE}/maps/${encodeURIComponent(mapId)}`, {
       method: 'DELETE',
+      headers: authHeaders(),
     })
 
     if (!response.ok) {
@@ -98,7 +123,7 @@ export const api = {
   async exportMarkdown(document: MindMapDocument): Promise<string> {
     const response = await fetch(`${API_BASE}/export/markdown`, {
       method: 'POST',
-      headers: JSON_HEADERS,
+      headers: jsonHeaders(),
       body: JSON.stringify(document),
     })
 
@@ -113,7 +138,7 @@ export const api = {
   async importDocument(content: string, format: 'markdown' | 'text'): Promise<MindMapDocument> {
     const response = await fetch(`${API_BASE}/import`, {
       method: 'POST',
-      headers: JSON_HEADERS,
+      headers: jsonHeaders(),
       body: JSON.stringify({ content, format }),
     })
 
@@ -134,7 +159,7 @@ export const api = {
   }): Promise<AIImportResponse> {
     const response = await fetch(`${API_BASE}/ai/import`, {
       method: 'POST',
-      headers: JSON_HEADERS,
+      headers: jsonHeaders(),
       body: JSON.stringify(input),
     })
 
@@ -158,7 +183,7 @@ export const api = {
   ): Promise<AIRelationResponse> {
     const response = await fetch(`${API_BASE}/ai/relations`, {
       method: 'POST',
-      headers: JSON_HEADERS,
+      headers: jsonHeaders(),
       body: JSON.stringify({
         document,
         settings,
@@ -184,7 +209,7 @@ export const api = {
   }): Promise<AINodeNotesResponse> {
     const response = await fetch(`${API_BASE}/ai/node-notes`, {
       method: 'POST',
-      headers: JSON_HEADERS,
+      headers: jsonHeaders(),
       body: JSON.stringify(input),
     })
 
@@ -206,7 +231,7 @@ export const api = {
   }): Promise<AIGenerateResponse> {
     const response = await fetch(`${API_BASE}/ai/generate`, {
       method: 'POST',
-      headers: JSON_HEADERS,
+      headers: jsonHeaders(),
       body: JSON.stringify(input),
     })
 
@@ -231,7 +256,7 @@ export const api = {
   }): Promise<AISuggestChildrenResponse> {
     const response = await fetch(`${API_BASE}/ai/suggest-children`, {
       method: 'POST',
-      headers: JSON_HEADERS,
+      headers: jsonHeaders(),
       body: JSON.stringify(input),
     })
 
@@ -245,7 +270,7 @@ export const api = {
   async testAIConnection(settings: AISettings): Promise<AITestResponse> {
     const response = await fetch(`${API_BASE}/ai/test`, {
       method: 'POST',
-      headers: JSON_HEADERS,
+      headers: jsonHeaders(),
       body: JSON.stringify({ settings }),
     })
 
@@ -265,19 +290,30 @@ export const api = {
     return await readJSON<CollabSettings>(response, '/api/settings')
   },
 
-  async pollMap(mapId: string, since: string): Promise<{ lastEditedAt: string; nodeCount: number; modifiedViaAPI: boolean }> {
-    const response = await fetch(`${API_BASE}/maps/${encodeURIComponent(mapId)}/poll?since=${encodeURIComponent(since)}`)
+  async pollMap(
+    mapId: string,
+    since: string,
+  ): Promise<{ lastEditedAt: string; nodeCount: number; modifiedViaAPI: boolean }> {
+    const response = await fetch(
+      `${API_BASE}/maps/${encodeURIComponent(mapId)}/poll?since=${encodeURIComponent(since)}`,
+      {
+        headers: authHeaders(),
+      },
+    )
     if (!response.ok) {
       throw await createAPIError(response)
     }
 
-    return await readJSON<{ lastEditedAt: string; nodeCount: number; modifiedViaAPI: boolean }>(response, `/api/maps/${encodeURIComponent(mapId)}/poll`)
+    return await readJSON<{ lastEditedAt: string; nodeCount: number; modifiedViaAPI: boolean }>(
+      response,
+      `/api/maps/${encodeURIComponent(mapId)}/poll`,
+    )
   },
 
   async saveSettings(settings: CollabSettings): Promise<CollabSettings> {
     const response = await fetch(`${API_BASE}/settings`, {
       method: 'PUT',
-      headers: JSON_HEADERS,
+      headers: jsonHeaders(),
       body: JSON.stringify(settings),
     })
 
@@ -286,6 +322,32 @@ export const api = {
     }
 
     return await readJSON<CollabSettings>(response, '/api/settings')
+  },
+
+  async createShareToken(input: {
+    mapId: string
+    accessLevel: ShareAccessLevel
+    displayName: string
+    expiresIn?: string
+    ownerApiKey?: string
+  }): Promise<ShareToken> {
+    const headers = input.ownerApiKey ? jsonHeaders({ 'X-API-Key': input.ownerApiKey }) : jsonHeaders()
+    const response = await fetch(`${API_BASE}/tokens`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        mapId: input.mapId,
+        accessLevel: input.accessLevel,
+        displayName: input.displayName,
+        expiresIn: input.expiresIn,
+      }),
+    })
+
+    if (!response.ok) {
+      throw await createAPIError(response)
+    }
+
+    return await readJSON<ShareToken>(response, '/api/tokens')
   },
 }
 
@@ -311,7 +373,9 @@ function normalizeDocument(document: MindMapDocument): MindMapDocument {
     relations: (document.relations ?? []).map((relation) => ({
       ...relation,
       branches: (relation.branches ?? []).filter((branch) => branch?.targetId),
-      waypoints: (relation.waypoints ?? []).filter((waypoint) => Number.isFinite(waypoint?.x) && Number.isFinite(waypoint?.y)),
+      waypoints: (relation.waypoints ?? []).filter(
+        (waypoint) => Number.isFinite(waypoint?.x) && Number.isFinite(waypoint?.y),
+      ),
     })),
     regions: document.regions ?? [],
   }
