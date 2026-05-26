@@ -102,7 +102,18 @@ export class LocalBackendManager implements vscode.Disposable {
 
   private backendCommand(): string {
     const cfg = vscode.workspace.getConfiguration('codeMind');
-    return (cfg.get<string>('backendCommand') || 'go run ./cmd/server').trim();
+    const configured = (cfg.get<string>('backendCommand') || '').trim();
+    if (configured) {
+      return configured;
+    }
+    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    if (workspaceRoot) {
+      const bundledServer = path.join(workspaceRoot, 'build', 'bin', 'codemind-server.exe');
+      if (fs.existsSync(bundledServer)) {
+        return bundledServer;
+      }
+    }
+    return 'go run ./cmd/server';
   }
 
   private backendCwd(): string {
@@ -111,7 +122,15 @@ export class LocalBackendManager implements vscode.Disposable {
     if (configured) {
       return configured;
     }
-    return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || process.cwd();
+    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    if (workspaceRoot) {
+      const bundledServerDir = path.join(workspaceRoot, 'build', 'bin');
+      if (fs.existsSync(path.join(bundledServerDir, 'codemind-server.exe'))) {
+        return bundledServerDir;
+      }
+      return workspaceRoot;
+    }
+    return process.cwd();
   }
 
   private dataDir(cwd: string): string {
