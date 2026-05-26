@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { spawn, ChildProcessWithoutNullStreams } from 'child_process';
 import * as http from 'http';
+import * as path from 'path';
 import { URL } from 'url';
 
 const DEFAULT_API_URL = 'http://127.0.0.1:34117';
@@ -37,12 +38,14 @@ export class LocalBackendManager implements vscode.Disposable {
 
     const commandLine = this.backendCommand();
     const cwd = this.backendCwd();
+    const dataDir = this.dataDir(cwd);
     const [command, ...args] = this.splitCommand(commandLine);
     const apiUrl = new URL(this.apiUrl());
     const port = apiUrl.port || (apiUrl.protocol === 'https:' ? '443' : '80');
 
     this.output.appendLine(`Starting Code Mind backend: ${commandLine}`);
     this.output.appendLine(`Backend cwd: ${cwd}`);
+    this.output.appendLine(`Backend data dir: ${dataDir}`);
 
     this.process = spawn(command, args, {
       cwd,
@@ -50,6 +53,7 @@ export class LocalBackendManager implements vscode.Disposable {
       env: {
         ...process.env,
         CODE_MIND_PORT: port,
+        CODE_MIND_DATA_DIR: dataDir,
       },
     });
 
@@ -94,6 +98,15 @@ export class LocalBackendManager implements vscode.Disposable {
       return configured;
     }
     return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || process.cwd();
+  }
+
+  private dataDir(cwd: string): string {
+    const cfg = vscode.workspace.getConfiguration('codeMind');
+    const configured = (cfg.get<string>('dataDir') || '').trim();
+    if (configured) {
+      return configured;
+    }
+    return path.join(cwd, 'data');
   }
 
   private splitCommand(commandLine: string): string[] {

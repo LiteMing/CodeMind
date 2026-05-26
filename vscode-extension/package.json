@@ -184,6 +184,11 @@
           "type": "string",
           "default": "",
           "description": "Working directory for the local backend command. Defaults to the first workspace folder"
+        },
+        "codeMind.dataDir": {
+          "type": "string",
+          "default": "",
+          "description": "Data directory used by the extension-managed backend. Defaults to ./data under backendCwd"
         }
       }
     }

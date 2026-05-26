@@ -16,14 +16,16 @@ func main() {
 		port = "7979"
 	}
 
-	// Resolve data directory relative to the executable's location,
-	// so the server works regardless of the working directory.
-	exePath, err := os.Executable()
-	if err != nil {
-		log.Fatal("failed to resolve executable path:", err)
+	dataDir := os.Getenv("CODE_MIND_DATA_DIR")
+	if dataDir == "" {
+		exePath, err := os.Executable()
+		if err != nil {
+			log.Fatal("failed to resolve executable path:", err)
+		}
+		exeDir := filepath.Dir(exePath)
+		dataDir = filepath.Join(exeDir, "data")
 	}
-	exeDir := filepath.Dir(exePath)
-	dataPath := filepath.Join(exeDir, "data", "maps")
+	dataPath := filepath.Join(dataDir, "maps")
 
 	fileStore := store.NewFileStore(dataPath)
 	settingsDir := filepath.Dir(dataPath) // "{exeDir}/data/"
