@@ -9,7 +9,7 @@ Open and operate Code Mind from inside VS Code.
 3. By default, the extension starts a local backend with `go run ./cmd/server`.
 4. If needed, run `Code Mind: Configure API URL` and keep the default `http://127.0.0.1:34117`.
 5. If you prefer connecting to the desktop app instead of the extension-managed backend, disable `codeMind.autoStartBackend`.
-6. To share the same maps with another Code Mind runtime, set `codeMind.dataDir` to the same `data` directory.
+6. Leave `codeMind.dataDir` empty to use the shared Code Mind app data directory, or set it only when you need a custom data directory.
 
 ## Features
 

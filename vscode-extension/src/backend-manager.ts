@@ -42,7 +42,7 @@ export class LocalBackendManager implements vscode.Disposable {
 
     const commandLine = this.backendCommand();
     const cwd = this.backendCwd();
-    const dataDir = this.dataDir(cwd);
+    const dataDir = this.dataDir();
     const apiUrl = new URL(this.apiUrl());
     const port = apiUrl.port || (apiUrl.protocol === 'https:' ? '443' : '80');
     const executablePath = this.executablePath(commandLine);
@@ -61,7 +61,7 @@ export class LocalBackendManager implements vscode.Disposable {
           env: {
             ...process.env,
             CODE_MIND_PORT: port,
-            CODE_MIND_DATA_DIR: dataDir,
+            ...(dataDir ? { CODE_MIND_DATA_DIR: dataDir } : {}),
           },
         })
       : spawn(commandLine, {
@@ -70,7 +70,7 @@ export class LocalBackendManager implements vscode.Disposable {
       env: {
         ...process.env,
         CODE_MIND_PORT: port,
-        CODE_MIND_DATA_DIR: dataDir,
+        ...(dataDir ? { CODE_MIND_DATA_DIR: dataDir } : {}),
       },
     });
 
@@ -165,13 +165,13 @@ export class LocalBackendManager implements vscode.Disposable {
     return process.cwd();
   }
 
-  private dataDir(cwd: string): string {
+  private dataDir(): string {
     const cfg = vscode.workspace.getConfiguration('codeMind');
     const configured = (cfg.get<string>('dataDir') || '').trim();
     if (configured) {
       return configured;
     }
-    return path.join(cwd, 'data');
+    return '';
   }
 
   private executablePath(commandLine: string): string | null {

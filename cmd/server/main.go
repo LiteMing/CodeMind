@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"code-mind/internal/appdata"
 	"code-mind/internal/server"
 	"code-mind/internal/store"
 )
@@ -16,14 +17,9 @@ func main() {
 		port = "7979"
 	}
 
-	dataDir := os.Getenv("CODE_MIND_DATA_DIR")
-	if dataDir == "" {
-		exePath, err := os.Executable()
-		if err != nil {
-			log.Fatal("failed to resolve executable path:", err)
-		}
-		exeDir := filepath.Dir(exePath)
-		dataDir = filepath.Join(exeDir, "data")
+	dataDir, err := appdata.ResolveDataDir()
+	if err != nil {
+		log.Fatal("failed to resolve data directory:", err)
 	}
 	dataPath := filepath.Join(dataDir, "maps")
 

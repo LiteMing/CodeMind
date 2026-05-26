@@ -111,7 +111,7 @@ export function registerCommands(
           '- If you prefer the desktop app, start the Code Mind desktop app first and disable `codeMind.autoStartBackend`.',
           '- Run `Code Mind: Start Local Backend` / `Code Mind: Stop Local Backend` to manage the backend process manually.',
           '- Configure `codeMind.backendCommand` and `codeMind.backendCwd` if your server command is not `go run ./cmd/server` from the workspace root.',
-          '- Configure `codeMind.dataDir` if you want the VS Code backend to use the same map data directory as another Code Mind runtime.',
+          '- Leave `codeMind.dataDir` empty to use the shared Code Mind app data directory, or configure it only when you need a custom data directory.',
           '- Run `Code Mind: Configure API URL` or click `Configure API URL` in the side bar.',
           '- Keep the URL as `http://127.0.0.1:34117` unless you changed the backend address.',
           '- Run `Code Mind: Configure API Key` if the desktop app has an API key configured.',
