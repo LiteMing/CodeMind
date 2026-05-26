@@ -77,7 +77,8 @@ export function registerCommands(
       try {
         await backendManager.ensureStarted();
       } catch (err) {
-        vscode.window.showWarningMessage(`Code Mind backend is not ready: ${err instanceof Error ? err.message : String(err)}`);
+        vscode.window.showErrorMessage(`Code Mind backend is not ready: ${err instanceof Error ? err.message : String(err)}`);
+        return;
       }
       const cfg = vscode.workspace.getConfiguration('codeMind');
       const apiUrl = (cfg.get<string>('apiUrl') || 'http://127.0.0.1:34117').replace(/\/+$/, '');

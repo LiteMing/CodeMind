@@ -39,7 +39,6 @@ export class LocalBackendManager implements vscode.Disposable {
     const commandLine = this.backendCommand();
     const cwd = this.backendCwd();
     const dataDir = this.dataDir(cwd);
-    const [command, ...args] = this.splitCommand(commandLine);
     const apiUrl = new URL(this.apiUrl());
     const port = apiUrl.port || (apiUrl.protocol === 'https:' ? '443' : '80');
 
@@ -47,7 +46,7 @@ export class LocalBackendManager implements vscode.Disposable {
     this.output.appendLine(`Backend cwd: ${cwd}`);
     this.output.appendLine(`Backend data dir: ${dataDir}`);
 
-    this.process = spawn(command, args, {
+    this.process = spawn(commandLine, {
       cwd,
       shell: true,
       env: {
@@ -107,11 +106,6 @@ export class LocalBackendManager implements vscode.Disposable {
       return configured;
     }
     return path.join(cwd, 'data');
-  }
-
-  private splitCommand(commandLine: string): string[] {
-    const matches = commandLine.match(/(?:[^\s"]+|"[^"]*")+/g) ?? [];
-    return matches.map((part) => part.replace(/^"|"$/g, ''));
   }
 
   private isHealthy(apiUrl: string): Promise<boolean> {
