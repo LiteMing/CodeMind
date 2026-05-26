@@ -3,6 +3,7 @@ import { CodeMindAPI } from './api-client';
 import { MindMapTreeProvider } from './tree-provider';
 import { NoteContentProvider, CODEMIND_NOTE_SCHEME } from './note-editor';
 import { registerCommands } from './commands';
+import { LocalBackendManager } from './backend-manager';
 
 let outputChannel: vscode.OutputChannel;
 
@@ -13,6 +14,7 @@ export function activate(context: vscode.ExtensionContext): void {
   const api = new CodeMindAPI();
   const treeProvider = new MindMapTreeProvider(api);
   const noteProvider = new NoteContentProvider(api);
+  const backendManager = new LocalBackendManager(outputChannel);
 
   const treeView = vscode.window.createTreeView('codeMindExplorer', {
     treeDataProvider: treeProvider,
@@ -21,10 +23,11 @@ export function activate(context: vscode.ExtensionContext): void {
 
   context.subscriptions.push(
     treeView,
+    backendManager,
     vscode.workspace.registerTextDocumentContentProvider(CODEMIND_NOTE_SCHEME, noteProvider),
   );
 
-  registerCommands(context, api, treeProvider, noteProvider);
+  registerCommands(context, api, treeProvider, noteProvider, backendManager);
 
   // Re-fetch tree when configuration changes (apiUrl/apiKey may have changed).
   context.subscriptions.push(

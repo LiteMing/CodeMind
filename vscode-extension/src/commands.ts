@@ -8,6 +8,7 @@ import {
 } from './api-client';
 import { MindMapTreeItem, MindMapTreeProvider } from './tree-provider';
 import { NoteContentProvider, buildNoteUri } from './note-editor';
+import { LocalBackendManager } from './backend-manager';
 
 /**
  * Command implementations for the Code Mind VS Code extension.
@@ -20,6 +21,7 @@ export function registerCommands(
   api: CodeMindAPI,
   provider: MindMapTreeProvider,
   noteProvider: NoteContentProvider,
+  backendManager: LocalBackendManager,
 ): void {
   context.subscriptions.push(
     vscode.commands.registerCommand('codeMind.refresh', () => provider.refresh()),
@@ -58,7 +60,25 @@ export function registerCommands(
       vscode.window.showInformationMessage(next.trim() ? 'Code Mind API Key saved.' : 'Code Mind API Key cleared.');
     }),
 
+    vscode.commands.registerCommand('codeMind.startLocalBackend', async () => {
+      try {
+        await backendManager.start();
+        vscode.window.showInformationMessage('Code Mind backend is starting. Open the Code Mind output panel for logs.');
+      } catch (err) {
+        vscode.window.showErrorMessage(`Code Mind: failed to start backend — ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }),
+
+    vscode.commands.registerCommand('codeMind.stopLocalBackend', () => {
+      backendManager.stop();
+    }),
+
     vscode.commands.registerCommand('codeMind.openWebApp', async () => {
+      try {
+        await backendManager.ensureStarted();
+      } catch (err) {
+        vscode.window.showWarningMessage(`Code Mind backend is not ready: ${err instanceof Error ? err.message : String(err)}`);
+      }
       const cfg = vscode.workspace.getConfiguration('codeMind');
       const apiUrl = (cfg.get<string>('apiUrl') || 'http://127.0.0.1:34117').replace(/\/+$/, '');
       const apiKey = cfg.get<string>('apiKey') || '';
@@ -82,7 +102,10 @@ export function registerCommands(
           '',
           '## 1. Connect to the desktop app',
           '',
-          '- Start the Code Mind desktop app first.',
+          '- By default, `Code Mind: Open Web App` tries to start a local backend from the current workspace.',
+          '- If you prefer the desktop app, start the Code Mind desktop app first and disable `codeMind.autoStartBackend`.',
+          '- Run `Code Mind: Start Local Backend` / `Code Mind: Stop Local Backend` to manage the backend process manually.',
+          '- Configure `codeMind.backendCommand` and `codeMind.backendCwd` if your server command is not `go run ./cmd/server` from the workspace root.',
           '- Run `Code Mind: Configure API URL` or click `Configure API URL` in the side bar.',
           '- Keep the URL as `http://127.0.0.1:34117` unless you changed the backend address.',
           '- Run `Code Mind: Configure API Key` if the desktop app has an API key configured.',

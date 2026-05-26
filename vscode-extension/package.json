@@ -65,6 +65,18 @@
         "icon": "$(browser)"
       },
       {
+        "command": "codeMind.startLocalBackend",
+        "title": "Start Local Backend",
+        "category": "Code Mind",
+        "icon": "$(debug-start)"
+      },
+      {
+        "command": "codeMind.stopLocalBackend",
+        "title": "Stop Local Backend",
+        "category": "Code Mind",
+        "icon": "$(debug-stop)"
+      },
+      {
         "command": "codeMind.createNode",
         "title": "Create Node",
         "category": "Code Mind",
@@ -115,6 +127,11 @@
           "command": "codeMind.openWebApp",
           "when": "view == codeMindExplorer",
           "group": "navigation@0"
+        },
+        {
+          "command": "codeMind.startLocalBackend",
+          "when": "view == codeMindExplorer",
+          "group": "navigation"
         }
       ],
       "view/item/context": [
@@ -152,6 +169,21 @@
           "type": "string",
           "default": "",
           "description": "API key for authentication"
+        },
+        "codeMind.autoStartBackend": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically start the local Code Mind backend before opening the Web App"
+        },
+        "codeMind.backendCommand": {
+          "type": "string",
+          "default": "go run ./cmd/server",
+          "description": "Command used by VS Code to start a local Code Mind backend"
+        },
+        "codeMind.backendCwd": {
+          "type": "string",
+          "default": "",
+          "description": "Working directory for the local backend command. Defaults to the first workspace folder"
         }
       }
     }

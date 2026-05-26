@@ -128,6 +128,10 @@ export class MindMapTreeProvider implements vscode.TreeDataProvider<MindMapTreeI
         vscode.TreeItemCollapsibleState.None,
       ),
       new MindMapTreeItem(
+        { kind: 'guide', id: 'start-backend', label: 'Start Local Backend', command: 'codeMind.startLocalBackend', icon: 'debug-start' },
+        vscode.TreeItemCollapsibleState.None,
+      ),
+      new MindMapTreeItem(
         { kind: 'guide', id: 'configure-url', label: 'Configure API URL', command: 'codeMind.configureApiUrl', icon: 'plug' },
         vscode.TreeItemCollapsibleState.None,
       ),
