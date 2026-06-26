@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/url"
 	"strings"
@@ -47,11 +48,6 @@ func tokenAuthMiddleware(provider APIKeyProvider, tokenStore *store.TokenStore, 
 			next.ServeHTTP(w, r.WithContext(ctx))
 			return
 		}
-		if r.URL.Path == "/api/settings" {
-			ctx := context.WithValue(r.Context(), accessLevelKey, AccessOwner)
-			next.ServeHTTP(w, r.WithContext(ctx))
-			return
-		}
 		if strings.HasPrefix(r.URL.Path, "/share/") {
 			ctx := context.WithValue(r.Context(), accessLevelKey, AccessOwner)
 			next.ServeHTTP(w, r.WithContext(ctx))
@@ -65,18 +61,23 @@ func tokenAuthMiddleware(provider APIKeyProvider, tokenStore *store.TokenStore, 
 
 		apiKey := provider.GetCollabAPIKey()
 
-		// 1. Check X-API-Key header (existing mechanism → owner level)
-		if apiKey != "" && r.Header.Get("X-API-Key") == apiKey {
-			ctx := context.WithValue(r.Context(), accessLevelKey, AccessOwner)
-			next.ServeHTTP(w, r.WithContext(ctx))
-			return
-		}
-		if apiKey != "" {
-			if cookie, err := r.Cookie("codemind_api_key"); err == nil && cookieAPIKey(cookie.Value) == apiKey {
+		if r.URL.Path == "/api/settings" {
+			if settingsAccessAllowed(apiKey, r) {
 				ctx := context.WithValue(r.Context(), accessLevelKey, AccessOwner)
 				next.ServeHTTP(w, r.WithContext(ctx))
 				return
 			}
+			writeJSON(w, http.StatusUnauthorized, map[string]string{
+				"error": "authentication required",
+			})
+			return
+		}
+
+		// 1. Check X-API-Key header (existing mechanism → owner level)
+		if apiKey != "" && requestHasAPIKey(r, apiKey) {
+			ctx := context.WithValue(r.Context(), accessLevelKey, AccessOwner)
+			next.ServeHTTP(w, r.WithContext(ctx))
+			return
 		}
 
 		// 2. Check Authorization: Bearer {token} or ?token= query param
@@ -126,6 +127,12 @@ func tokenAuthMiddleware(provider APIKeyProvider, tokenStore *store.TokenStore, 
 			})
 			return
 		}
+		if err := enforceTokenMapScope(r, token); err != nil {
+			writeJSON(w, http.StatusForbidden, map[string]string{
+				"error": err.Error(),
+			})
+			return
+		}
 
 		// 3. Enforce access level for write operations
 		if isWriteOperation(r) && token.AccessLevel == "viewer" {
@@ -157,19 +164,85 @@ func apiKeyMiddleware(provider APIKeyProvider, next http.Handler) http.Handler {
 			return
 		}
 
-		// Only enforce auth on /api/maps/ paths
-		if strings.HasPrefix(r.URL.Path, "/api/maps") {
-			provided := r.Header.Get("X-API-Key")
-			if provided != key {
+		if r.URL.Path == "/api/settings" {
+			if !settingsAccessAllowed(key, r) {
 				writeJSON(w, http.StatusUnauthorized, map[string]string{
 					"error": "authentication required: invalid or missing API key",
 				})
 				return
 			}
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		// Only enforce auth on protected API paths.
+		if isLegacyProtectedAPIPath(r.URL.Path) && !requestHasAPIKey(r, key) {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{
+				"error": "authentication required: invalid or missing API key",
+			})
+			return
 		}
 
 		next.ServeHTTP(w, r)
 	})
+}
+
+func isLegacyProtectedAPIPath(path string) bool {
+	return strings.HasPrefix(path, "/api/maps") || strings.HasPrefix(path, "/api/tokens")
+}
+
+func settingsAccessAllowed(apiKey string, r *http.Request) bool {
+	if apiKey == "" {
+		return true
+	}
+	if requestHasAPIKey(r, apiKey) {
+		return true
+	}
+	return isTrustedBrowserOrigin(r.Header.Get("Origin"))
+}
+
+func requestHasAPIKey(r *http.Request, apiKey string) bool {
+	if apiKey == "" {
+		return false
+	}
+	if r.Header.Get("X-API-Key") == apiKey {
+		return true
+	}
+	if cookie, err := r.Cookie("codemind_api_key"); err == nil && cookieAPIKey(cookie.Value) == apiKey {
+		return true
+	}
+	return false
+}
+
+func enforceTokenMapScope(r *http.Request, token *store.Token) error {
+	if token == nil || token.AccessLevel == string(AccessOwner) {
+		return nil
+	}
+	if r.URL.Path == "/api/maps" || r.URL.Path == "/api/maps/" {
+		return errors.New("token cannot list all maps")
+	}
+	mapID, ok := requestMapID(r.URL.Path)
+	if !ok {
+		return nil
+	}
+	if token.MapID != mapID {
+		return errors.New("token does not grant access to this map")
+	}
+	return nil
+}
+
+func requestMapID(path string) (string, bool) {
+	if !strings.HasPrefix(path, "/api/maps/") {
+		return "", false
+	}
+	suffix := strings.TrimSpace(strings.TrimPrefix(path, "/api/maps/"))
+	if suffix == "" {
+		return "", false
+	}
+	if index := strings.Index(suffix, "/"); index >= 0 {
+		suffix = suffix[:index]
+	}
+	return suffix, suffix != ""
 }
 
 func cookieAPIKey(value string) string {

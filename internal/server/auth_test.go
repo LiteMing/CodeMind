@@ -522,6 +522,74 @@ func TestTokenAuth_APIKeyTakesPrecedenceOverToken(t *testing.T) {
 	}
 }
 
+func TestTokenAuth_TokenCannotAccessDifferentMap(t *testing.T) {
+	provider := &mockAPIKeyProvider{key: "my-api-key"}
+	ts := newTestTokenStore(t)
+	token := createTestToken(t, ts, "map-1", "editor", "Alice", nil)
+	handler := tokenAuthMiddleware(provider, ts, accessLevelHandler)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/maps/map-2/tree", nil)
+	req.Header.Set("Authorization", "Bearer "+token.Secret)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected status 403, got %d", rec.Code)
+	}
+
+	var body map[string]string
+	json.NewDecoder(rec.Body).Decode(&body)
+	if body["error"] != "token does not grant access to this map" {
+		t.Errorf("unexpected error: %q", body["error"])
+	}
+}
+
+func TestTokenAuth_NonOwnerTokenCannotListAllMaps(t *testing.T) {
+	provider := &mockAPIKeyProvider{key: "my-api-key"}
+	ts := newTestTokenStore(t)
+	token := createTestToken(t, ts, "map-1", "viewer", "Bob", nil)
+	handler := tokenAuthMiddleware(provider, ts, accessLevelHandler)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/maps", nil)
+	req.Header.Set("Authorization", "Bearer "+token.Secret)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected status 403, got %d", rec.Code)
+	}
+}
+
+func TestTokenAuth_SettingsRejectsUntrustedOriginWhenKeyConfigured(t *testing.T) {
+	provider := &mockAPIKeyProvider{key: "my-api-key"}
+	ts := newTestTokenStore(t)
+	handler := tokenAuthMiddleware(provider, ts, accessLevelHandler)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/settings", nil)
+	req.Header.Set("Origin", "https://example.com")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected status 401, got %d", rec.Code)
+	}
+}
+
+func TestTokenAuth_SettingsAllowsTrustedLocalOriginWhenKeyConfigured(t *testing.T) {
+	provider := &mockAPIKeyProvider{key: "my-api-key"}
+	ts := newTestTokenStore(t)
+	handler := tokenAuthMiddleware(provider, ts, accessLevelHandler)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/settings", nil)
+	req.Header.Set("Origin", "http://127.0.0.1:5173")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", rec.Code)
+	}
+}
+
 func TestTokenAuth_NilTokenStore_NoAuthConfigured_AllowsAsOwner(t *testing.T) {
 	provider := &mockAPIKeyProvider{key: ""}
 	handler := tokenAuthMiddleware(provider, nil, accessLevelHandler)

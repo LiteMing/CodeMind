@@ -25,7 +25,11 @@ func main() {
 
 	fileStore := store.NewFileStore(dataPath)
 	settingsDir := filepath.Dir(dataPath) // "{exeDir}/data/"
-	appServer := server.New(fileStore, settingsDir)
+	tokenStore, err := store.NewTokenStore(filepath.Join(settingsDir, "tokens.json"))
+	if err != nil {
+		log.Fatal("failed to open token store:", err)
+	}
+	appServer := server.NewWithTokenStore(fileStore, settingsDir, tokenStore)
 
 	log.Printf("Code Mind server listening on http://localhost:%s", port)
 	if err := http.ListenAndServe(":"+port, appServer.Handler()); err != nil {

@@ -58,3 +58,32 @@ func TestCopyLegacyDataDirIfNeededSkipsWhenDestinationHasEntries(t *testing.T) {
 		t.Fatalf("legacy file should not be copied into non-empty destination")
 	}
 }
+
+func TestResolveWebviewUserDataDirUsesLocalAppData(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("CODE_MIND_WEBVIEW_DATA_DIR", "")
+	t.Setenv("LOCALAPPDATA", root)
+
+	got, err := ResolveWebviewUserDataDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	want := filepath.Join(root, "CodeMind", "WebView2")
+	if got != want {
+		t.Fatalf("ResolveWebviewUserDataDir() = %q, want %q", got, want)
+	}
+}
+
+func TestResolveWebviewUserDataDirHonorsOverride(t *testing.T) {
+	override := filepath.Join(t.TempDir(), "custom-webview")
+	t.Setenv("CODE_MIND_WEBVIEW_DATA_DIR", override)
+
+	got, err := ResolveWebviewUserDataDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != override {
+		t.Fatalf("ResolveWebviewUserDataDir() = %q, want %q", got, override)
+	}
+}

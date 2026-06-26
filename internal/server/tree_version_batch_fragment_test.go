@@ -456,6 +456,51 @@ func TestHandleNodeBatch_UpdateAndDelete(t *testing.T) {
 	}
 }
 
+func TestHandleNodeBatch_DeletePrunesDanglingRelations(t *testing.T) {
+	server := newTestServer(t)
+	handler := server.Handler()
+
+	doc := mindmap.NewDefaultDocument()
+	doc.ID = "batch-relation-delete"
+	now := doc.Meta.LastEditedAt
+	doc.Nodes = append(doc.Nodes,
+		mindmap.Node{ID: "node-a", ParentID: "root", Kind: mindmap.NodeKindTopic, Title: "A", Position: mindmap.Position{X: 1100, Y: 280}, CreatedAt: now, UpdatedAt: now},
+		mindmap.Node{ID: "node-b", ParentID: "root", Kind: mindmap.NodeKindTopic, Title: "B", Position: mindmap.Position{X: 1100, Y: 380}, CreatedAt: now, UpdatedAt: now},
+	)
+	doc.Relations = append(doc.Relations, mindmap.RelationEdge{
+		ID:        "rel-ab",
+		SourceID:  "node-a",
+		TargetID:  "node-b",
+		CreatedAt: now,
+		UpdatedAt: now,
+	})
+	if err := server.store.Save(doc); err != nil {
+		t.Fatal(err)
+	}
+
+	batchBody := `{"operations":[{"action":"delete","nodeId":"node-b","payload":{"cascade":true}}]}`
+	req := httptest.NewRequest(http.MethodPost, "/api/maps/batch-relation-delete/batch", strings.NewReader(batchBody))
+	req.Header.Set("Content-Type", "application/json")
+	res := httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", res.Code, res.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/maps/batch-relation-delete", nil)
+	res = httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+
+	var loaded mindmap.Document
+	if err := json.Unmarshal(res.Body.Bytes(), &loaded); err != nil {
+		t.Fatalf("failed to decode loaded document: %v", err)
+	}
+	if len(loaded.Relations) != 0 {
+		t.Fatalf("expected relations to be pruned, got %+v", loaded.Relations)
+	}
+}
+
 func TestHandleNodeBatch_Returns404ForNonExistentMap(t *testing.T) {
 	handler := newTestHandler(t)
 

@@ -8,6 +8,7 @@ import (
 )
 
 const envDataDir = "CODE_MIND_DATA_DIR"
+const envWebviewDataDir = "CODE_MIND_WEBVIEW_DATA_DIR"
 
 func ResolveDataDir() (string, error) {
 	if configured := os.Getenv(envDataDir); configured != "" {
@@ -24,6 +25,21 @@ func ResolveDataDir() (string, error) {
 		}
 	}
 	return dataDir, nil
+}
+
+func ResolveWebviewUserDataDir() (string, error) {
+	if configured := os.Getenv(envWebviewDataDir); configured != "" {
+		return configured, nil
+	}
+	base := os.Getenv("LOCALAPPDATA")
+	if base == "" {
+		userCacheDir, err := os.UserCacheDir()
+		if err != nil {
+			return "", fmt.Errorf("failed to resolve user cache dir: %w", err)
+		}
+		base = userCacheDir
+	}
+	return filepath.Join(base, "CodeMind", "WebView2"), nil
 }
 
 func DefaultDataDir() (string, error) {

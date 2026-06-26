@@ -147,6 +147,9 @@ func (d *Document) Validate() error {
 	if strings.TrimSpace(d.ID) == "" {
 		return errors.New("document id is required")
 	}
+	if !isSafeIdentifier(d.ID) {
+		return fmt.Errorf("document id contains unsafe characters: %s", d.ID)
+	}
 	if len(d.Nodes) == 0 {
 		return errors.New("document must contain at least one node")
 	}
@@ -156,6 +159,9 @@ func (d *Document) Validate() error {
 	for _, node := range d.Nodes {
 		if strings.TrimSpace(node.ID) == "" {
 			return errors.New("node id is required")
+		}
+		if !isSafeIdentifier(node.ID) {
+			return fmt.Errorf("node %s id contains unsafe characters", node.ID)
 		}
 		if strings.TrimSpace(node.Title) == "" {
 			return fmt.Errorf("node %s title is required", node.ID)
@@ -192,6 +198,12 @@ func (d *Document) Validate() error {
 	}
 
 	for _, edge := range d.Relations {
+		if strings.TrimSpace(edge.ID) == "" {
+			return errors.New("relation id is required")
+		}
+		if !isSafeIdentifier(edge.ID) {
+			return fmt.Errorf("relation %s id contains unsafe characters", edge.ID)
+		}
 		if edge.SourceID == edge.TargetID {
 			return fmt.Errorf("relation %s cannot connect node to itself", edge.ID)
 		}
@@ -230,6 +242,9 @@ func (d *Document) Validate() error {
 		if strings.TrimSpace(region.ID) == "" {
 			return errors.New("region id is required")
 		}
+		if !isSafeIdentifier(region.ID) {
+			return fmt.Errorf("region %s id contains unsafe characters", region.ID)
+		}
 		if region.Width <= 0 || region.Height <= 0 {
 			return fmt.Errorf("region %s must have positive width and height", region.ID)
 		}
@@ -263,6 +278,23 @@ func (d *Document) PrepareForSave(now time.Time) {
 	if d.Meta.LastOpenedAt.IsZero() {
 		d.Meta.LastOpenedAt = now
 	}
+}
+
+func isSafeIdentifier(value string) bool {
+	if strings.TrimSpace(value) != value || value == "" {
+		return false
+	}
+	for _, r := range value {
+		switch {
+		case r >= 'a' && r <= 'z':
+		case r >= 'A' && r <= 'Z':
+		case r >= '0' && r <= '9':
+		case r == '-' || r == '_' || r == '.' || r == ':':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func (d *Document) TouchOpened(now time.Time) {

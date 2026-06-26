@@ -230,7 +230,7 @@ func (s *Server) handleNodeByIDPatch(w http.ResponseWriter, r *http.Request, map
 			if b, ok := val.(bool); ok {
 				node.Collapsed = b
 			}
-		// Ignore non-updatable fields: id, parentId, kind, position, createdAt
+			// Ignore non-updatable fields: id, parentId, kind, position, createdAt
 		}
 	}
 
@@ -309,6 +309,8 @@ func (s *Server) handleNodeByIDDelete(w http.ResponseWriter, r *http.Request, ma
 		doc.Nodes = remaining
 		deletedCount = 1
 	}
+
+	pruneRelationsToExistingNodes(&doc)
 
 	if err := s.store.Save(doc); err != nil {
 		writeError(w, http.StatusInternalServerError, err)
@@ -481,4 +483,37 @@ func collectDescendants(doc mindmap.Document, nodeID string) map[string]bool {
 		}
 	}
 	return result
+}
+
+func pruneRelationsToExistingNodes(doc *mindmap.Document) int {
+	existing := make(map[string]struct{}, len(doc.Nodes))
+	for _, node := range doc.Nodes {
+		existing[node.ID] = struct{}{}
+	}
+
+	prunedCount := 0
+	relations := make([]mindmap.RelationEdge, 0, len(doc.Relations))
+	for _, relation := range doc.Relations {
+		if _, ok := existing[relation.SourceID]; !ok {
+			prunedCount++
+			continue
+		}
+		if _, ok := existing[relation.TargetID]; !ok {
+			prunedCount++
+			continue
+		}
+
+		branches := make([]mindmap.RelationBranch, 0, len(relation.Branches))
+		for _, branch := range relation.Branches {
+			if _, ok := existing[branch.TargetID]; ok {
+				branches = append(branches, branch)
+			} else {
+				prunedCount++
+			}
+		}
+		relation.Branches = branches
+		relations = append(relations, relation)
+	}
+	doc.Relations = relations
+	return prunedCount
 }

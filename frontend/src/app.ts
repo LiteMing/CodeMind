@@ -2768,11 +2768,12 @@ class MindMapApp {
                  </article>`
               : this.state.maps
                   .map((summary) => {
+                    const summaryId = escapeAttribute(summary.id)
                     return `
                       <article class="file-card">
                         <div class="file-card-top">
                           <div>
-                            <p class="section-label">${summary.id}</p>
+                            <p class="section-label">${escapeHtml(summary.id)}</p>
                             <h2>${escapeHtml(summary.title)}</h2>
                             <p class="file-meta">${this.t('home.lastEdited', {
                               value: formatRelativeTime(summary.lastEditedAt, this.state.preferences.locale),
@@ -2780,9 +2781,9 @@ class MindMapApp {
                           </div>
                         </div>
                         <div class="file-card-actions">
-                          <button type="button" class="chip-button" data-command="open-map:${summary.id}">${this.t('home.open')}</button>
-                          <button type="button" class="chip-button" data-command="rename-map:${summary.id}">${this.t('home.rename')}</button>
-                          <button type="button" class="chip-button danger" data-command="delete-map:${summary.id}">${this.t('home.delete')}</button>
+                          <button type="button" class="chip-button" data-command="open-map:${summaryId}">${this.t('home.open')}</button>
+                          <button type="button" class="chip-button" data-command="rename-map:${summaryId}">${this.t('home.rename')}</button>
+                          <button type="button" class="chip-button danger" data-command="delete-map:${summaryId}">${this.t('home.delete')}</button>
                         </div>
                       </article>
                     `
@@ -3370,7 +3371,7 @@ class MindMapApp {
               <p class="section-label">${this.t('inspector.note')}</p>
               ${singleSelection && selectedNote ? `<span class="metric-chip">${this.t('inspector.noteSaved')}</span>` : ''}
             </div>
-            <textarea class="settings-input inspector-note-input" data-node-note="${selectedNode.id}" placeholder="${escapeAttribute(
+            <textarea class="settings-input inspector-note-input" data-node-note="${escapeAttribute(selectedNode.id)}" placeholder="${escapeAttribute(
               singleSelection ? this.t('inspector.notePlaceholder') : this.t('inspector.noteDisabledPlaceholder'),
             )}" ${singleSelection ? '' : 'readonly'}>${escapeHtml(singleSelection ? selectedNote : '')}</textarea>
           </div>
@@ -4615,7 +4616,7 @@ class MindMapApp {
               const warningClass = this.state.cutting?.warningHierarchyEdgeKeys.has(`${parent.id}::${node.id}`)
                 ? ' cutting-warning'
                 : ''
-              return `<path class="edge edge-hierarchy${warningClass}" data-source-id="${parent.id}" data-target-id="${node.id}" d="${buildHierarchyPath(projectPosition(edgePoints.source), projectPosition(edgePoints.target), drawEdgeStyle)}" />`
+              return `<path class="edge edge-hierarchy${warningClass}" data-source-id="${escapeAttribute(parent.id)}" data-target-id="${escapeAttribute(node.id)}" d="${buildHierarchyPath(projectPosition(edgePoints.source), projectPosition(edgePoints.target), drawEdgeStyle)}" />`
             })
             .join('')
 
@@ -4643,6 +4644,7 @@ class MindMapApp {
         const isSelected = this.state.selectedRelationId === edge.id
         const selectedClass = isSelected ? ' is-selected' : ''
         const warningRelClass = this.state.cutting?.warningRelationIds.has(edge.id) ? ' cutting-warning' : ''
+        const edgeId = escapeAttribute(edge.id)
         const arrowDir = edge.arrowDirection ?? 'none'
         const markerStart = arrowDir === 'backward' || arrowDir === 'both' ? ' marker-start="url(#arrow-backward)"' : ''
         const markerEnd = arrowDir === 'forward' || arrowDir === 'both' ? ' marker-end="url(#arrow-forward)"' : ''
@@ -4694,11 +4696,11 @@ class MindMapApp {
             .join('')
         }
 
-        const hitPath = `<path class="edge-hit-area${selectedClass}" data-relation-click="${edge.id}" d="${hitSegments.join(' ')}" />`
+        const hitPath = `<path class="edge-hit-area${selectedClass}" data-relation-click="${edgeId}" d="${hitSegments.join(' ')}" />`
 
         // Midpoint dot for selected relation
         const midpointDot = isSelected
-          ? `<circle class="edge-midpoint-dot" data-midpoint-dot="${edge.id}" cx="${mid.x}" cy="${mid.y}" r="6" />`
+          ? `<circle class="edge-midpoint-dot" data-midpoint-dot="${edgeId}" cx="${mid.x}" cy="${mid.y}" r="6" />`
           : ''
 
         const branchPreview =
@@ -4842,44 +4844,45 @@ class MindMapApp {
         const nodePresentationStyle = buildNodeColorStyle(nodeColor)
         const anchorX = isAutoWidthEditingNode ? (autoWidthAnchorLeft ?? node.position.x) : node.position.x
         const articleStyle = `left: ${anchorX + originX}px; top: ${node.position.y + originY}px; ${nodePresentationStyle}`
+        const nodeId = escapeAttribute(node.id)
 
         const content = isEditingNode
-          ? `<textarea class="node-editor" style="${nodeDimensions}" data-node-editor="${node.id}" rows="1" spellcheck="false">${escapeHtml(
+          ? `<textarea class="node-editor" style="${nodeDimensions}" data-node-editor="${nodeId}" rows="1" spellcheck="false">${escapeHtml(
               node.title,
             )}</textarea>`
-          : `<button type="button" class="node-shell" style="${nodeDimensions}" data-node-button="${node.id}">
+          : `<button type="button" class="node-shell" style="${nodeDimensions}" data-node-button="${nodeId}">
                ${priorityBadge}
-               <span class="node-title" data-node-title="${node.id}">${escapeHtml(nodeVisibleTitle(node))}</span>
+               <span class="node-title" data-node-title="${nodeId}">${escapeHtml(nodeVisibleTitle(node))}</span>
                ${branchBadge}
              </button>`
 
         const resizeHandle =
           node.kind !== 'root'
-            ? `<button type="button" class="node-resizer" data-node-resizer="${node.id}" aria-label="Resize node"></button>`
+            ? `<button type="button" class="node-resizer" data-node-resizer="${nodeId}" aria-label="Resize node"></button>`
             : ''
         const collapseButton =
           childCount > 0
             ? `<button
                type="button"
                class="node-collapse-button"
-               data-node-collapse-button="${node.id}"
-               data-command="toggle-node-collapse:${node.id}"
+               data-node-collapse-button="${nodeId}"
+               data-command="toggle-node-collapse:${nodeId}"
                aria-label="${escapeAttribute(collapseLabel)}"
                title="${escapeAttribute(collapseLabel)}"
              ></button>`
             : ''
 
-        const connectorDot = `<button type="button" class="node-connector-dot" data-node-connector="${node.id}" aria-label="Drag to connect"></button>`
+        const connectorDot = `<button type="button" class="node-connector-dot" data-node-connector="${nodeId}" aria-label="Drag to connect"></button>`
 
         const parentConnectorDot =
           node.kind === 'floating'
-            ? `<button type="button" class="node-parent-connector-dot" data-node-parent-connector="${node.id}" aria-label="Drag to set parent"></button>`
+            ? `<button type="button" class="node-parent-connector-dot" data-node-parent-connector="${nodeId}" aria-label="Drag to set parent"></button>`
             : ''
 
         return `
           <article
             class="${classes}"
-            data-node-id="${node.id}"
+            data-node-id="${nodeId}"
             style="${articleStyle}"
           >
             ${content}
@@ -4933,17 +4936,19 @@ class MindMapApp {
           .map((relation) => {
             const otherNodeId = relation.sourceId === nodeId ? relation.targetId : relation.sourceId
             const otherNode = this.findNode(otherNodeId)
+            const otherNodeCommandId = escapeAttribute(otherNodeId)
+            const relationId = escapeAttribute(relation.id)
             return `
               <li class="relation-item">
                 <div class="relation-item-top">
-                  <button type="button" class="text-button" data-command="focus-node:${otherNodeId}">
+                  <button type="button" class="text-button" data-command="focus-node:${otherNodeCommandId}">
                     ${escapeHtml(otherNode?.title ?? this.t('common.unknownNode'))}
                   </button>
-                  <button type="button" class="ghost-button danger" data-command="delete-relation:${relation.id}">${this.t('action.remove')}</button>
+                  <button type="button" class="ghost-button danger" data-command="delete-relation:${relationId}">${this.t('action.remove')}</button>
                 </div>
                 <input
                   class="relation-input"
-                  data-relation-label="${relation.id}"
+                  data-relation-label="${relationId}"
                   value="${escapeAttribute(relation.label ?? '')}"
                   placeholder="${escapeAttribute(this.t('inspector.relationPlaceholder'))}"
                 />
@@ -5003,7 +5008,7 @@ class MindMapApp {
                           formatRelativeTime(snapshot.createdAt, this.state.preferences.locale),
                         )} · ${escapeHtml(this.t('dock.nodes', { value: snapshot.nodeCount }))}${metaSuffix}</p>
                       </div>
-                      <button type="button" class="ghost-button snapshot-restore-button" data-command="restore-snapshot:${snapshot.id}">${this.t('snapshot.restore')}</button>
+                      <button type="button" class="ghost-button snapshot-restore-button" data-command="restore-snapshot:${escapeAttribute(snapshot.id)}">${this.t('snapshot.restore')}</button>
                     </li>
                   `
                 })
@@ -6847,13 +6852,14 @@ class MindMapApp {
         const h = region.height
         const left = region.position.x - w / 2 + originX
         const top = region.position.y - h / 2 + originY
+        const regionId = escapeAttribute(region.id)
         const handles = isSelected
           ? HANDLES.map(
               (dir) =>
-                `<div class="region-resizer region-resizer-${dir}" data-region-resizer="${dir}" data-region-resizer-id="${region.id}"></div>`,
+                `<div class="region-resizer region-resizer-${dir}" data-region-resizer="${dir}" data-region-resizer-id="${regionId}"></div>`,
             ).join('')
           : ''
-        return `<div class="region-box${selectedClass}" data-region-id="${region.id}" data-region-drag="${region.id}" style="
+        return `<div class="region-box${selectedClass}" data-region-id="${regionId}" data-region-drag="${regionId}" style="
         left: ${left}px; top: ${top}px; width: ${w}px; height: ${h}px;
         background: ${bgColor}; border: 2px dashed ${borderColor};
         --region-accent: ${accent};
@@ -9411,7 +9417,7 @@ class MindMapApp {
     return matches
       .map((node) => {
         const active = node.id === this.state.graph.selectedNodeId
-        return `<button type="button" class="graph-result-item ${active ? 'is-active' : ''}" data-graph-node-result="${node.id}">${escapeHtml(shorten(node.title, 36))}</button>`
+        return `<button type="button" class="graph-result-item ${active ? 'is-active' : ''}" data-graph-node-result="${escapeAttribute(node.id)}">${escapeHtml(shorten(node.title, 36))}</button>`
       })
       .join('')
   }

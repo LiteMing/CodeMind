@@ -99,6 +99,7 @@ func (s *Server) handleNodeBatchPost(w http.ResponseWriter, r *http.Request, map
 
 	// All operations succeeded, commit changes
 	doc.Nodes = nodesCopy
+	pruneRelationsToExistingNodes(&doc)
 	if err := s.store.Save(doc); err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return

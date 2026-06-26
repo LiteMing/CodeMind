@@ -93,6 +93,18 @@ func (s *FileStore) Load(id string) (mindmap.Document, error) {
 	return s.loadLocked(id, true)
 }
 
+// LoadReadOnly loads a document without updating LastOpenedAt.
+func (s *FileStore) LoadReadOnly(id string) (mindmap.Document, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if err := s.ensureMigratedLocked(); err != nil {
+		return mindmap.Document{}, err
+	}
+
+	return s.loadLocked(id, false)
+}
+
 func (s *FileStore) Create(title string) (mindmap.Document, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

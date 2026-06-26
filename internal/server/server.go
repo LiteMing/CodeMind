@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path"
 	"path/filepath"
@@ -477,6 +478,7 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
+		setAPIKeyCookie(w, settings.CollabAPIKey)
 		writeJSON(w, http.StatusOK, settings)
 	default:
 		w.Header().Set("Allow", "GET, PUT")
@@ -507,7 +509,7 @@ func (s *Server) handleNodeTree(w http.ResponseWriter, r *http.Request, mapID st
 		return
 	}
 
-	doc, err := s.store.Load(mapID)
+	doc, err := s.store.LoadReadOnly(mapID)
 	if err != nil {
 		writeError(w, http.StatusNotFound, err)
 		return
@@ -550,7 +552,7 @@ func (s *Server) handleMapVersion(w http.ResponseWriter, r *http.Request, mapID 
 		return
 	}
 
-	doc, err := s.store.Load(mapID)
+	doc, err := s.store.LoadReadOnly(mapID)
 	if err != nil {
 		writeError(w, http.StatusNotFound, err)
 		return
@@ -581,7 +583,7 @@ func (s *Server) handleMapPoll(w http.ResponseWriter, r *http.Request, mapID str
 		return
 	}
 
-	doc, err := s.store.Load(mapID)
+	doc, err := s.store.LoadReadOnly(mapID)
 	if err != nil {
 		writeError(w, http.StatusNotFound, err)
 		return
@@ -3315,6 +3317,22 @@ func writeAIError(w http.ResponseWriter, statusCode int, err error) {
 	writeError(w, statusCode, err)
 }
 
+func setAPIKeyCookie(w http.ResponseWriter, apiKey string) {
+	cookie := &http.Cookie{
+		Name:     "codemind_api_key",
+		Value:    url.QueryEscape(apiKey),
+		Path:     "/",
+		SameSite: http.SameSiteLaxMode,
+		HttpOnly: true,
+		MaxAge:   365 * 24 * 60 * 60,
+	}
+	if strings.TrimSpace(apiKey) == "" {
+		cookie.Value = ""
+		cookie.MaxAge = -1
+	}
+	http.SetCookie(w, cookie)
+}
+
 func isAIRawModeActive(debugRequest aiDebugRequest) bool {
 	return debugRequest.RawMode && strings.TrimSpace(debugRequest.RawRequest) != ""
 }
@@ -3329,7 +3347,16 @@ func loggingMiddleware(next http.Handler) http.Handler {
 
 func corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
+		origin := strings.TrimSpace(r.Header.Get("Origin"))
+		if origin != "" {
+			if !isTrustedBrowserOrigin(origin) {
+				http.Error(w, "origin not allowed", http.StatusForbidden)
+				return
+			}
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Access-Control-Allow-Credentials", "true")
+			w.Header().Add("Vary", "Origin")
+		}
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-API-Key")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, PUT, PATCH, POST, DELETE, OPTIONS")
 
@@ -3340,4 +3367,27 @@ func corsMiddleware(next http.Handler) http.Handler {
 
 		next.ServeHTTP(w, r)
 	})
+}
+
+func isTrustedBrowserOrigin(origin string) bool {
+	if strings.TrimSpace(origin) == "" {
+		return true
+	}
+	parsed, err := url.Parse(origin)
+	if err != nil {
+		return false
+	}
+	if parsed.Scheme == "wails" {
+		return parsed.Hostname() == "wails.localhost" || parsed.Hostname() == "localhost"
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return false
+	}
+	host := strings.ToLower(parsed.Hostname())
+	switch host {
+	case "localhost", "127.0.0.1", "::1":
+		return true
+	default:
+		return false
+	}
 }

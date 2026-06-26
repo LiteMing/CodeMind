@@ -282,7 +282,10 @@ export const api = {
   },
 
   async getSettings(): Promise<CollabSettings> {
-    const response = await fetch(`${API_BASE}/settings`)
+    const response = await fetch(`${API_BASE}/settings`, {
+      credentials: 'include',
+      headers: authHeaders(),
+    })
     if (!response.ok) {
       throw await createAPIError(response)
     }
@@ -313,6 +316,7 @@ export const api = {
   async saveSettings(settings: CollabSettings): Promise<CollabSettings> {
     const response = await fetch(`${API_BASE}/settings`, {
       method: 'PUT',
+      credentials: 'include',
       headers: jsonHeaders(),
       body: JSON.stringify(settings),
     })

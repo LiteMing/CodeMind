@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -1018,6 +1019,28 @@ func TestLoadMapTouchesLastOpenedAtWithoutEditing(t *testing.T) {
 	}
 	if !stored.Meta.LastOpenedAt.After(lastOpenedAt) {
 		t.Fatalf("expected persisted LastOpenedAt to move forward from %s, got %s", lastOpenedAt, stored.Meta.LastOpenedAt)
+	}
+}
+
+func TestPollMapDoesNotTouchLastOpenedAt(t *testing.T) {
+	storePath := t.TempDir()
+	handler := New(store.NewFileStore(storePath), storePath).Handler()
+
+	lastEditedAt := time.Date(2026, time.March, 1, 9, 30, 0, 0, time.UTC)
+	lastOpenedAt := time.Date(2026, time.March, 2, 10, 0, 0, 0, time.UTC)
+	writeTestDocument(t, storePath, newStoredDocument("roadmap", "Roadmap", lastEditedAt, lastOpenedAt))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/maps/roadmap/poll?since="+url.QueryEscape(lastEditedAt.Format(time.RFC3339Nano)), nil)
+	res := httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d with body %s", res.Code, res.Body.String())
+	}
+
+	stored := readStoredDocument(t, storePath, "roadmap")
+	if !stored.Meta.LastOpenedAt.Equal(lastOpenedAt) {
+		t.Fatalf("expected LastOpenedAt to stay %s, got %s", lastOpenedAt, stored.Meta.LastOpenedAt)
 	}
 }
 

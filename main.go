@@ -23,6 +23,10 @@ func main() {
 		log.Fatal("failed to resolve data directory:", err)
 	}
 	dataDir := filepath.Join(dataRoot, "maps")
+	webviewUserDataDir, err := appdata.ResolveWebviewUserDataDir()
+	if err != nil {
+		log.Fatal("failed to resolve webview data directory:", err)
+	}
 
 	fileStore := store.NewFileStore(dataDir)
 	app := NewApp(fileStore)
@@ -41,6 +45,7 @@ func main() {
 		OnShutdown:       app.shutdown,
 		Windows: &windows.Options{
 			WebviewIsTransparent: false,
+			WebviewUserDataPath:  webviewUserDataDir,
 		},
 	})
 	if err != nil {

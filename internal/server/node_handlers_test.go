@@ -749,6 +749,60 @@ func TestHandleNodeByIDDelete_Returns400ForRootNode(t *testing.T) {
 	}
 }
 
+func TestHandleNodeByIDDelete_PrunesRelationsReferencingDeletedNode(t *testing.T) {
+	server := newTestServer(t)
+	handler := server.Handler()
+
+	doc := mindmap.NewDefaultDocument()
+	doc.ID = "relation-delete"
+	now := time.Now().UTC()
+	doc.Nodes = append(doc.Nodes,
+		mindmap.Node{ID: "node-a", ParentID: "root", Kind: mindmap.NodeKindTopic, Title: "A", Position: mindmap.Position{X: 1100, Y: 280}, CreatedAt: now, UpdatedAt: now},
+		mindmap.Node{ID: "node-b", ParentID: "root", Kind: mindmap.NodeKindTopic, Title: "B", Position: mindmap.Position{X: 1100, Y: 380}, CreatedAt: now, UpdatedAt: now},
+		mindmap.Node{ID: "node-c", ParentID: "root", Kind: mindmap.NodeKindTopic, Title: "C", Position: mindmap.Position{X: 1100, Y: 480}, CreatedAt: now, UpdatedAt: now},
+	)
+	doc.Relations = append(doc.Relations,
+		mindmap.RelationEdge{ID: "rel-ab", SourceID: "node-a", TargetID: "node-b", Label: "blocked", CreatedAt: now, UpdatedAt: now},
+		mindmap.RelationEdge{
+			ID:        "rel-ac",
+			SourceID:  "node-a",
+			TargetID:  "node-c",
+			Branches:  []mindmap.RelationBranch{{TargetID: "node-b"}},
+			CreatedAt: now,
+			UpdatedAt: now,
+		},
+	)
+	if err := server.store.Save(doc); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/maps/relation-delete/nodes/node-b", nil)
+	res := httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", res.Code, res.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/maps/relation-delete", nil)
+	res = httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+
+	var loaded mindmap.Document
+	if err := json.Unmarshal(res.Body.Bytes(), &loaded); err != nil {
+		t.Fatalf("failed to decode loaded document: %v", err)
+	}
+	if len(loaded.Relations) != 1 {
+		t.Fatalf("expected dangling relation to be removed, got %d relation(s)", len(loaded.Relations))
+	}
+	if loaded.Relations[0].ID != "rel-ac" {
+		t.Fatalf("expected surviving relation rel-ac, got %q", loaded.Relations[0].ID)
+	}
+	if len(loaded.Relations[0].Branches) != 0 {
+		t.Fatalf("expected dangling branch target to be removed, got %+v", loaded.Relations[0].Branches)
+	}
+}
+
 func TestHandleNodesGet_CompactOmitsPositionAndTimestamps(t *testing.T) {
 	server := newTestServer(t)
 	handler := server.Handler()
