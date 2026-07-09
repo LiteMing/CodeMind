@@ -128,6 +128,9 @@ export async function runCommand(app: MindMapApp, rawCommand: string): Promise<v
       case 'close-settings':
         app.closeSettings()
         return
+      case 'show-shortcut-overlay':
+        app.showShortcutOverlay()
+        return
       case 'complete-onboarding':
         app.completeOnboarding()
         return
@@ -288,6 +291,9 @@ export async function runCommand(app: MindMapApp, rawCommand: string): Promise<v
         return
       case 'cycle-priority':
         app.cycleSelectedNodePriority()
+        return
+      case 'cycle-node-color':
+        app.cycleSelectedNodeColor()
         return
       case 'open-ai-wheel': {
         const targetId = app.state.selectedNodeId
@@ -1121,7 +1127,7 @@ export async function showPlatformHelp(app: MindMapApp): Promise<void> {
 
   try {
     await navigator.clipboard.writeText(content)
-    app.showToast('平台调用说明已复制到剪贴板')
+    app.showToast(app.t('toast.platformHelpCopied'))
   } catch {
     window.alert(content)
   }

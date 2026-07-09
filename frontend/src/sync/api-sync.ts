@@ -273,7 +273,7 @@ export async function pollForAPIChanges(app: MindMapApp): Promise<void> {
     }
 
     // Show toast notification
-    app.showAPIToast('🤖 AI 已更新脑图')
+    app.showAPIToast(app.t('toast.aiUpdatedMap'))
 
     // Re-render
     app.render()

@@ -129,6 +129,7 @@ export function renderFixedToolbar(app: MindMapApp): string {
               app.t('toolbar.theme', { theme: themeLabel(locale, app.state.document.theme) }),
             ),
             renderMenuItem('toggle-settings', app.t('toolbar.settings')),
+            renderMenuItem('show-shortcut-overlay', app.t('toolbar.shortcuts')),
           ].join(''),
         )}
       </div>
@@ -137,6 +138,7 @@ export function renderFixedToolbar(app: MindMapApp): string {
         <button type="button" class="chip-button" data-command="undo" ${app.canUndo() ? '' : 'disabled'}>${app.t('toolbar.undo')}</button>
         <button type="button" class="chip-button" data-command="redo" ${app.canRedo() ? '' : 'disabled'}>${app.t('toolbar.redo')}</button>
         <button type="button" class="chip-button" data-command="save">${app.t('toolbar.save')}</button>
+        <button type="button" class="chip-button" data-command="show-shortcut-overlay" title="${app.t('toolbar.shortcuts')} (Ctrl+/)" aria-label="${app.t('toolbar.shortcuts')}">?</button>
       </div>
     </div>
   `

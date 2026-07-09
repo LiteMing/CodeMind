@@ -34,7 +34,7 @@ import type {
   ShellRefs,
   ToastItem,
 } from './app-types'
-import { resolveNodeColorPalette } from './color-palette'
+import { NODE_COLOR_VALUES, normalizeNodeColor, resolveNodeColorPalette } from './color-palette'
 import {
   autoLayoutHierarchy,
   childrenOf,
@@ -853,6 +853,17 @@ export class MindMapApp {
     const currentIndex = PRIORITY_VALUES.indexOf(node.priority || '')
     const nextIndex = (currentIndex + 1) % PRIORITY_VALUES.length
     ops.setPriority(this, PRIORITY_VALUES[nextIndex])
+  }
+
+  cycleSelectedNodeColor(): void {
+    const node = this.selectedNode()
+    if (!node) {
+      return
+    }
+
+    const currentIndex = NODE_COLOR_VALUES.indexOf(normalizeNodeColor(node.color))
+    const nextIndex = (currentIndex + 1) % NODE_COLOR_VALUES.length
+    ops.setNodeColor(this, NODE_COLOR_VALUES[nextIndex])
   }
 
   updateNode(nodeId: string, updater: (node: MindNode) => void): void {
@@ -2044,7 +2055,7 @@ export class MindMapApp {
     const colorBtn = document.createElement('button')
     colorBtn.type = 'button'
     colorBtn.className = 'context-toolbar-btn'
-    colorBtn.setAttribute('data-command', 'toggle-fixed-menu:color')
+    colorBtn.setAttribute('data-command', 'cycle-node-color')
     colorBtn.setAttribute('aria-label', 'Color')
     colorBtn.title = this.t('inspector.color')
     colorBtn.innerHTML =

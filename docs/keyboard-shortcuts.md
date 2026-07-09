@@ -26,7 +26,8 @@ This document summarizes the current keyboard behavior of the editor.
 ## Clipboard
 
 - `Ctrl/Cmd + C`: copy the current primary node and all of its descendants as one subtree.
-- `Ctrl/Cmd + V`: paste the copied subtree as children of the current primary node.
+- `Ctrl/Cmd + X`: cut the selected subtree(s) — copies (including relation edges inside the selection) then deletes.
+- `Ctrl/Cmd + V`: paste the copied subtree as children of the current primary node. Relation edges whose endpoints were both copied are rebuilt.
 - Pasting converts the pasted subtree root into a normal topic node under the current target.
 - Current limitation: copy uses the primary selected subtree, not every node in a multi-selection.
 
@@ -42,6 +43,13 @@ Both delete the current selection. If multiple nodes are selected, their descend
 - `Ctrl/Cmd + Z`: undo
 - `Ctrl/Cmd + Y`: redo
 - `Ctrl/Cmd + Shift + Z`: redo
+
+## View
+
+- `Ctrl/Cmd + +`: zoom in (smooth interpolation)
+- `Ctrl/Cmd + -`: zoom out
+- `Ctrl/Cmd + 0`: reset zoom to default
+- `Ctrl/Cmd + /`: toggle the keyboard-shortcut overlay (also available from the toolbar `?` button and the View menu)
 
 ## Layout And Save
 

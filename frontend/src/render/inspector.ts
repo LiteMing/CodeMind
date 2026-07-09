@@ -92,11 +92,12 @@ export function renderInspector(app: MindMapApp): void {
       <section class="inspector-card">
         <div class="inspector-header">
           <div>
-            <p class="section-label">${app.t('inspector.selected')}</p>
+            <p class="section-label inspector-section-header" data-command="toggle-inspector-section:node">${app.t('inspector.selected')} ${app.inspectorSectionsCollapsed.has('node') ? '▸' : '▾'}</p>
             <h2>${escapeHtml(selectionTitle)}</h2>
           </div>
           <button type="button" class="ghost-button" data-command="toggle-inspector">${app.t('panel.side.hide')}</button>
         </div>
+        <div class="${app.inspectorSectionsCollapsed.has('node') ? 'section-collapsed' : 'section-expanded'}">
         <div class="metric-row">
           <span class="metric-chip">${app.t('dock.selected', { value: selectedCount })}</span>
           <span class="metric-chip">${app.t('inspector.type', { value: kindLabel(app.state.preferences.locale, selectedNode.kind) })}</span>
@@ -136,6 +137,7 @@ export function renderInspector(app: MindMapApp): void {
           </button>
           <button type="button" class="chip-button ${app.state.connectSourceNodeId ? 'is-active' : ''}" data-command="connect-selected" ${singleSelection ? '' : 'disabled'}>${app.t('action.linkRelation')}</button>
           <button type="button" class="chip-button danger" data-command="delete-selected" ${canDeleteSelection ? '' : 'disabled'}>${app.t('action.delete')}</button>
+        </div>
         </div>
       </section>
 

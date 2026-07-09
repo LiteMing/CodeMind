@@ -339,7 +339,7 @@ export function deleteSelectedNode(app: MindMapApp): void {
     })
     app.render()
     scheduleAutosave(app, 'status.deletionSaveScheduled')
-    app.showToast(`已删除 ${removedNodes} 个节点`)
+    app.showToast(app.t('toast.nodesDeleted', { value: removedNodes }))
   }
 
   if (animatingElements.length > 0) {
@@ -725,7 +725,7 @@ export function pasteCopiedSubtree(app: MindMapApp): void {
   app.setStatus('status.subtreePasted', { count: insertedNodes.length })
   app.render()
   scheduleAutosave(app, 'status.layoutSaveScheduled')
-  app.showToast(`已粘贴 ${insertedNodes.length} 个节点`)
+  app.showToast(app.t('toast.nodesPasted', { value: insertedNodes.length }))
 }
 
 export function createRelation(app: MindMapApp, sourceId: string, targetId: string): void {

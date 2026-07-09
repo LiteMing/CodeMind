@@ -21,6 +21,7 @@ export function renderShortcutOverlay(app: MindMapApp): void {
         { key: 'F2', desc: app.t('guide.shortcut.f2') },
         { key: 'Space', desc: app.t('guide.shortcut.space') },
         { key: `${mod}+C`, desc: app.t('guide.shortcut.ctrlC') },
+        { key: `${mod}+X`, desc: app.t('guide.shortcut.ctrlX') },
         { key: `${mod}+V`, desc: app.t('guide.shortcut.ctrlV') },
       ],
     },
