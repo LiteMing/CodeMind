@@ -21,3 +21,4 @@ vscode-extension/out/
 Thumbs.db
 .DS_Store
 .wails-probe/
+__pycache__/
