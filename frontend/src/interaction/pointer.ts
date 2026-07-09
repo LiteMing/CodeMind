@@ -1600,8 +1600,9 @@ export function handleInspectorPointerDown(app: MindMapApp, event: PointerEvent)
   // Drag via header or collapsed handle card
   const header = target.closest('.inspector-header') || target.closest('.inspector-handle-card')
   if (header && event.button === 0) {
-    // Don't drag if clicking a button inside the header
-    if (target.closest('button')) {
+    // Don't drag if clicking an interactive element inside the header
+    // (buttons, and command-bearing labels like the collapsible section title)
+    if (target.closest('button') || target.closest('[data-command]')) {
       return
     }
     event.preventDefault()
