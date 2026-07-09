@@ -1,5 +1,5 @@
 import type { MindMapApp } from '../app'
-import { childrenOf, touchDocument } from '../document'
+import { childrenOf, tidySubtree, touchDocument } from '../document'
 import { clamp, parsePixelValue } from '../utils'
 import { estimateNodeWidth } from '../node-sizing'
 import { MIN_NODE_HEIGHT, MIN_NODE_WIDTH } from '../node-render'
@@ -445,6 +445,14 @@ export function commitNodeEditor(
   })
   if (!options.preserveSelection) {
     ops.applySelectionState(app, [nodeId], nodeId)
+  }
+  // The committed title may have changed the node's height (multi-line text);
+  // re-tidy the local sibling neighborhood so nothing overlaps (UX-10). Only
+  // when auto layout is enabled on collapse-like operations — respect fully
+  // manual layouts otherwise.
+  const parentId = existingNode.parentId
+  if (parentId && app.state.preferences.interaction.autoLayoutOnCollapse) {
+    tidySubtree(app.state.document, parentId, app.state.preferences.appearance.childGapX)
   }
   touchDocument(app.state.document)
   app.setStatus('status.nodeTitleUpdated')

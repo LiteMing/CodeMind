@@ -918,6 +918,11 @@ export function commitNodeNote(app: MindMapApp, nodeId: string, rawNote: string)
   app.updateNode(nodeId, (node) => {
     node.note = nextNote
   })
+  // Note text affects rendered node height — re-tidy the local sibling
+  // neighborhood so nothing overlaps (UX-10).
+  if (existingNode.parentId && app.state.preferences.interaction.autoLayoutOnCollapse) {
+    tidySubtree(app.state.document, existingNode.parentId, app.state.preferences.appearance.childGapX)
+  }
   touchDocument(app.state.document)
   app.setStatus('status.noteUpdated')
   app.render()

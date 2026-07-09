@@ -173,6 +173,17 @@ export function handleGlobalKeyDown(app: MindMapApp, event: KeyboardEvent): void
     return
   }
 
+  // Holding a key down must not machine-gun structural edits: every repeat
+  // used to run history deep-copy + full relayout + full re-render and froze
+  // the canvas on large maps (UX-08).
+  if (
+    event.repeat &&
+    (event.key === 'Tab' || event.key === 'Enter' || event.key === 'Delete' || event.key === 'Backspace')
+  ) {
+    event.preventDefault()
+    return
+  }
+
   if (event.key === 'Tab') {
     event.preventDefault()
     ops.createChildNode(app, selectedNode.id)

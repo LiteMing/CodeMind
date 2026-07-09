@@ -2534,3 +2534,9 @@ code {
     transform: scale(1);
   }
 }
+
+/* UX-08: cheap node shadow when zoomed out — the large blur is invisible at
+   this scale but dominates paint cost with hundreds of nodes on screen */
+.zoom-far .node-card {
+  box-shadow: 0 2px 6px rgba(20, 30, 42, 0.1);
+}

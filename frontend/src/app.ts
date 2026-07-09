@@ -1561,6 +1561,11 @@ export class MindMapApp {
     this.refs.regionLayer.style.setProperty('zoom', String(this.viewport.scale))
     this.refs.edgeLayer.style.width = `${scaledWidth}px`
     this.refs.edgeLayer.style.height = `${scaledHeight}px`
+
+    // Zoomed out, the 28px node shadow blur is imperceptible but dominates
+    // paint cost once every node is on screen (UX-08: 300 nodes @40% ran at
+    // ~15fps). Swap to a cheap shadow below 70% zoom.
+    this.refs.scroll.classList.toggle('zoom-far', this.viewport.scale < 0.7)
   }
 
   canUndo(): boolean {

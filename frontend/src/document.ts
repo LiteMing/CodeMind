@@ -523,13 +523,13 @@ function layoutGroup(
     return
   }
 
-  const weights = nodes.map((node) => branchWeight(document, node.id))
-  const totalUnits = weights.reduce((sum, value) => sum + value, 0)
-  let cursorY = root.position.y - ((totalUnits - 1) * NODE_GAP_Y) / 2
+  const extents = nodes.map((node) => branchExtent(document, node.id))
+  const total = extents.reduce((sum, value) => sum + value, 0)
+  let cursorY = root.position.y - total / 2
 
   nodes.forEach((node, index) => {
-    layoutBranch(document, root, node.id, side, cursorY, childGapX, moved)
-    cursorY += weights[index] * NODE_GAP_Y
+    layoutBranch(document, root, node.id, side, cursorY, extents[index], childGapX, moved)
+    cursorY += extents[index]
   })
 }
 
@@ -539,6 +539,7 @@ function layoutBranch(
   nodeId: string,
   side: -1 | 1,
   topY: number,
+  extent: number,
   childGapX: number,
   moved: Set<string>,
 ): void {
@@ -547,12 +548,11 @@ function layoutBranch(
     return
   }
 
-  const weight = branchWeight(document, nodeId)
   const columnEdge = resolveRelativeChildColumnEdge(document, parent, side, childGapX)
   const nodeWidth = estimateNodeWidth(node, childrenOf(document, node.id).length)
   node.position = {
     x: resolveAlignedChildCenter(columnEdge, side, nodeWidth),
-    y: topY + ((weight - 1) * NODE_GAP_Y) / 2,
+    y: topY + extent / 2,
   }
   node.updatedAt = new Date().toISOString()
   moved.add(node.id)
@@ -562,29 +562,46 @@ function layoutBranch(
     return
   }
 
-  let childCursorY = topY
-  for (const child of children) {
-    const childWeight = branchWeight(document, child.id)
-    layoutBranch(document, node, child.id, side, childCursorY, childGapX, moved)
-    childCursorY += childWeight * NODE_GAP_Y
-  }
+  const childExtents = children.map((child) => branchExtent(document, child.id))
+  const childSum = childExtents.reduce((sum, value) => sum + value, 0)
+  // Center the children block within this branch's band (the band may be
+  // taller than the children when the node itself is tall).
+  let childCursorY = topY + (extent - childSum) / 2
+  children.forEach((child, index) => {
+    layoutBranch(document, node, child.id, side, childCursorY, childExtents[index], childGapX, moved)
+    childCursorY += childExtents[index]
+  })
 }
 
-function branchWeight(document: MindMapDocument, nodeId: string): number {
+/** Vertical breathing room added around each node's actual height. A typical
+ * single-line node (~56px) lands on the legacy NODE_GAP_Y=96 band, so default
+ * density is unchanged; taller (multi-line) nodes get proportionally more
+ * space instead of overlapping their siblings (UX-10). */
+const BRANCH_VERTICAL_MARGIN = 40
+
+function nodeLayoutHeight(document: MindMapDocument, node: MindNode): number {
+  const childCount = childrenOf(document, node.id).length
+  const width = node.width ?? estimateNodeWidth(node, childCount)
+  return node.height ?? estimateNodeHeight(node, childCount, width)
+}
+
+/** Vertical space a branch occupies: its own height (plus margin) or the sum
+ * of its children's extents, whichever is larger. Replaces the fixed
+ * leaf-count × NODE_GAP_Y weighting that ignored node heights. */
+function branchExtent(document: MindMapDocument, nodeId: string): number {
   const node = findNode(document, nodeId)
   if (!node) {
-    return 1
+    return NODE_GAP_Y
   }
 
+  const own = Math.max(nodeLayoutHeight(document, node) + BRANCH_VERTICAL_MARGIN, NODE_GAP_Y)
   const children = branchChildren(document, node)
   if (children.length === 0) {
-    return 1
+    return own
   }
 
-  return Math.max(
-    1,
-    children.reduce((sum, child) => sum + branchWeight(document, child.id), 0),
-  )
+  const childSum = children.reduce((sum, child) => sum + branchExtent(document, child.id), 0)
+  return Math.max(own, childSum)
 }
 
 function branchChildren(document: MindMapDocument, node: MindNode): MindNode[] {
