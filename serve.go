@@ -12,7 +12,9 @@ import (
 	"code-mind/internal/store"
 )
 
-func main() {
+// runServe starts the headless HTTP server (formerly cmd/server). It shares
+// the same data directory, token store, and permission model as the GUI.
+func runServe() {
 	port := os.Getenv("CODE_MIND_PORT")
 	if port == "" {
 		port = "7979"
@@ -25,7 +27,7 @@ func main() {
 	dataPath := filepath.Join(dataDir, "maps")
 
 	fileStore := store.NewFileStore(dataPath)
-	settingsDir := filepath.Dir(dataPath) // "{exeDir}/data/"
+	settingsDir := filepath.Dir(dataPath)
 	tokenStore, err := store.NewTokenStore(filepath.Join(settingsDir, "tokens.json"))
 	if err != nil {
 		log.Fatal("failed to open token store:", err)

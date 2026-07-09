@@ -1,4 +1,4 @@
-package main
+package mcp
 
 import (
 	"bufio"
@@ -103,7 +103,8 @@ func newMCPServer() *MCPServer {
 	}
 }
 
-func main() {
+// Run starts the stdio MCP adapter. It blocks until stdin is closed.
+func Run() {
 	// Disable log output to stdout (MCP uses stdout for JSON-RPC)
 	log.SetOutput(os.Stderr)
 

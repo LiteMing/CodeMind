@@ -6,11 +6,7 @@
 
 - 先启动 Code Mind 桌面应用。
 - 确认本地 REST API 可访问：`http://127.0.0.1:34117/api/health`。
-- MCP 可执行文件来自项目的 `cmd/mcp`，构建命令：
-
-```powershell
-go build -o codemind-mcp.exe ./cmd/mcp
-```
+- MCP 与桌面应用是同一个可执行文件：`codemind.exe mcp` 即 stdio MCP server，无需单独构建。开发时也可用 `go run . mcp`。
 
 ### MCP Client 配置
 
@@ -20,7 +16,8 @@ go build -o codemind-mcp.exe ./cmd/mcp
 {
   "mcpServers": {
     "codemind": {
-      "command": "C:\\path\\to\\codemind-mcp.exe",
+      "command": "C:\\path\\to\\codemind.exe",
+      "args": ["mcp"],
       "env": {
         "CODEMIND_API_URL": "http://127.0.0.1:34117",
         "CODEMIND_API_KEY": ""

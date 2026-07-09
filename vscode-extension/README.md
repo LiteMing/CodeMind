@@ -4,12 +4,11 @@ Open and operate Code Mind from inside VS Code.
 
 ## Usage
 
-1. Open the Code Mind repository in VS Code.
+1. Start a Code Mind backend: launch the Code Mind desktop app, or run `codemind serve` for a headless server. The extension is a thin client and does not bundle its own backend.
 2. Run `Code Mind: Open Web App` to open the full local web UI inside VS Code.
-3. By default, the extension starts a local backend with `go run ./cmd/server`.
-4. If needed, run `Code Mind: Configure API URL` and keep the default `http://127.0.0.1:34117`.
-5. If you prefer connecting to the desktop app instead of the extension-managed backend, disable `codeMind.autoStartBackend`.
-6. Leave `codeMind.dataDir` empty to use the shared Code Mind app data directory, or set it only when you need a custom data directory.
+3. If needed, run `Code Mind: Configure API URL` and keep the default `http://127.0.0.1:34117`.
+4. Optionally set `codeMind.backendCommand` (e.g. `codemind.exe serve`) to let VS Code start the backend for you.
+5. Leave `codeMind.dataDir` empty to use the shared Code Mind app data directory, or set it only when you need a custom data directory.
 
 ## Features
 

@@ -73,7 +73,6 @@ $comments = [string]$wailsConfig.info.comments
 $sourceExe = Join-Path $projectRoot "build\\bin\\$baseName.exe"
 $versionedExe = Join-Path $projectRoot "build\\bin\\$baseName-$version.exe"
 $pendingExe = Join-Path $projectRoot "build\\bin\\$baseName-$version.pending.exe"
-$serverExe = Join-Path $projectRoot 'build\\bin\\codemind-server.exe'
 $generatedInfoPath = Join-Path $projectRoot 'build\\windows\\info.generated.json'
 $generatedManifestPath = Join-Path $projectRoot 'build\\windows\\wails.generated.manifest'
 
@@ -85,7 +84,6 @@ $manifestContent = $manifestTemplate.Replace('{{.Name}}', [string]$wailsConfig.n
 Push-Location $projectRoot
 try {
   wails build -nopackage
-  go build -o $serverExe .\\cmd\\server
   go run .\\scripts\\patch_windows_resources -exe $sourceExe -icon $iconPath -manifest $generatedManifestPath -info $generatedInfoPath
 } finally {
   Pop-Location

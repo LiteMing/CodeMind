@@ -47,10 +47,11 @@
 
 ## Structure
 
-- `cmd/server`: Go HTTP server（Web 模式，端口 7979）
+- `main.go` / `serve.go`: 单一二进制入口（无参数=桌面 GUI；`serve`=headless HTTP server，端口 7979；`mcp`=stdio MCP 适配器）
 - `internal/mindmap`: 文档模型、导入导出
 - `internal/store`: 本地 JSON 持久化 + Settings 存储
 - `internal/server`: REST API（含协作 API、AI 代理、认证中间件）
+- `internal/mcp`: stdio MCP 适配器（HTTP API 的薄视图）
 - `frontend`: Vite + TypeScript 客户端
 - `build`: 打包输出 + API-GUIDE.md（面向 AI Agent 的使用指南）
 - `docs`: 开发计划与总结
@@ -103,7 +104,7 @@ npm run dev
 Backend only:
 
 ```powershell
-go run ./cmd/server
+go run . serve
 ```
 
 Production frontend build:

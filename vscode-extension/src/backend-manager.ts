@@ -1,33 +1,39 @@
 import * as vscode from 'vscode';
 import { spawn, ChildProcessWithoutNullStreams } from 'child_process';
-import * as fs from 'fs';
 import * as http from 'http';
-import * as path from 'path';
 import { URL } from 'url';
 
 const DEFAULT_API_URL = 'http://127.0.0.1:34117';
 
+/**
+ * Thin-client backend manager. The extension no longer bundles or builds its
+ * own server binary; it connects to an already-running Code Mind backend
+ * (desktop app or `codemind serve`). Spawning a backend is only supported
+ * when the user explicitly configures `codeMind.backendCommand`.
+ */
 export class LocalBackendManager implements vscode.Disposable {
   private process: ChildProcessWithoutNullStreams | null = null;
   private output: vscode.OutputChannel;
   private lastLogLines: string[] = [];
-  private context: vscode.ExtensionContext;
 
-  constructor(output: vscode.OutputChannel, context: vscode.ExtensionContext) {
+  constructor(output: vscode.OutputChannel, _context: vscode.ExtensionContext) {
     this.output = output;
-    this.context = context;
   }
 
   async ensureStarted(): Promise<void> {
-    const cfg = vscode.workspace.getConfiguration('codeMind');
-    const autoStart = cfg.get<boolean>('autoStartBackend') ?? true;
-    if (!autoStart) {
-      return;
-    }
-
     const apiUrl = this.apiUrl();
     if (await this.isHealthy(apiUrl)) {
       return;
+    }
+
+    const cfg = vscode.workspace.getConfiguration('codeMind');
+    const autoStart = cfg.get<boolean>('autoStartBackend') ?? true;
+    if (!autoStart || !this.backendCommand()) {
+      throw new Error(
+        `No Code Mind backend is reachable at ${apiUrl}. ` +
+          'Start the Code Mind desktop app or run `codemind serve`, ' +
+          'or set `codeMind.backendCommand` to let VS Code start one.',
+      );
     }
 
     await this.start();
@@ -41,30 +47,25 @@ export class LocalBackendManager implements vscode.Disposable {
     }
 
     const commandLine = this.backendCommand();
+    if (!commandLine) {
+      throw new Error(
+        'No backend command configured. The extension is a thin client: ' +
+          'start the Code Mind desktop app or run `codemind serve` yourself, ' +
+          'or set `codeMind.backendCommand` (e.g. `C:\\path\\to\\codemind.exe serve`).',
+      );
+    }
+
     const cwd = this.backendCwd();
     const dataDir = this.dataDir();
     const apiUrl = new URL(this.apiUrl());
     const port = apiUrl.port || (apiUrl.protocol === 'https:' ? '443' : '80');
-    const executablePath = this.executablePath(commandLine);
 
     this.output.appendLine(`Starting Code Mind backend: ${commandLine}`);
     this.output.appendLine(`Backend cwd: ${cwd}`);
     this.output.appendLine(`Backend data dir: ${dataDir}`);
     this.recordLog(`Starting Code Mind backend: ${commandLine}`);
-    this.recordLog(`Backend cwd: ${cwd}`);
-    this.recordLog(`Backend data dir: ${dataDir}`);
 
-    this.process = executablePath
-      ? spawn(executablePath, [], {
-          cwd,
-          shell: false,
-          env: {
-            ...process.env,
-            CODE_MIND_PORT: port,
-            ...(dataDir ? { CODE_MIND_DATA_DIR: dataDir } : {}),
-          },
-        })
-      : spawn(commandLine, {
+    this.process = spawn(commandLine, {
       cwd,
       shell: true,
       env: {
@@ -126,22 +127,7 @@ export class LocalBackendManager implements vscode.Disposable {
 
   private backendCommand(): string {
     const cfg = vscode.workspace.getConfiguration('codeMind');
-    const configured = (cfg.get<string>('backendCommand') || '').trim();
-    if (configured && configured !== 'go run ./cmd/server') {
-      return configured;
-    }
-    const extensionServer = path.join(this.context.extensionPath, 'resources', 'backend', 'codemind-server.exe');
-    if (fs.existsSync(extensionServer)) {
-      return extensionServer;
-    }
-    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-    if (workspaceRoot) {
-      const bundledServer = path.join(workspaceRoot, 'build', 'bin', 'codemind-server.exe');
-      if (fs.existsSync(bundledServer)) {
-        return bundledServer;
-      }
-    }
-    return 'go run ./cmd/server';
+    return (cfg.get<string>('backendCommand') || '').trim();
   }
 
   private backendCwd(): string {
@@ -150,36 +136,12 @@ export class LocalBackendManager implements vscode.Disposable {
     if (configured) {
       return configured;
     }
-    const extensionServerDir = path.join(this.context.extensionPath, 'resources', 'backend');
-    if (fs.existsSync(path.join(extensionServerDir, 'codemind-server.exe'))) {
-      return extensionServerDir;
-    }
-    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-    if (workspaceRoot) {
-      const bundledServerDir = path.join(workspaceRoot, 'build', 'bin');
-      if (fs.existsSync(path.join(bundledServerDir, 'codemind-server.exe'))) {
-        return bundledServerDir;
-      }
-      return workspaceRoot;
-    }
-    return process.cwd();
+    return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd();
   }
 
   private dataDir(): string {
     const cfg = vscode.workspace.getConfiguration('codeMind');
-    const configured = (cfg.get<string>('dataDir') || '').trim();
-    if (configured) {
-      return configured;
-    }
-    return '';
-  }
-
-  private executablePath(commandLine: string): string | null {
-    const trimmed = commandLine.trim().replace(/^"|"$/g, '');
-    if (/\.exe$/i.test(trimmed) && fs.existsSync(trimmed)) {
-      return trimmed;
-    }
-    return null;
+    return (cfg.get<string>('dataDir') || '').trim();
   }
 
   private recordLog(text: string): void {

@@ -184,12 +184,12 @@
         "codeMind.autoStartBackend": {
           "type": "boolean",
           "default": true,
-          "description": "Automatically start the local Code Mind backend before opening the Web App"
+          "description": "If a backend command is configured, start it automatically before opening the Web App"
         },
         "codeMind.backendCommand": {
           "type": "string",
-          "default": "go run ./cmd/server",
-          "description": "Command used by VS Code to start a local Code Mind backend"
+          "default": "",
+          "description": "Optional command used by VS Code to start a local Code Mind backend (e.g. \"codemind.exe serve\"). Leave empty to connect to an already-running backend"
         },
         "codeMind.backendCwd": {
           "type": "string",
