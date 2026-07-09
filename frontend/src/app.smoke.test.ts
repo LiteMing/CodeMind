@@ -311,8 +311,11 @@ describe('app interaction smoke', () => {
     expect(root.querySelector('[data-node-note="root"]')!.closest('.section-collapsed')).toBeTruthy()
 
     badge!.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
-    // openNodeNoteEditor focuses on the next animation frame.
-    await new Promise((resolve) => setTimeout(resolve, 60))
+    // The click lands while the inspector's slide-in animation is still
+    // "in flight" (jsdom never fires animationend, so the 300ms safety
+    // timeout clears it) — openNodeNoteEditor retries until it settles,
+    // then focuses on the next animation frame. Wait past the whole window.
+    await new Promise((resolve) => setTimeout(resolve, 600))
     await flush()
 
     const reopenedInput = root.querySelector<HTMLTextAreaElement>('[data-node-note="root"]')
