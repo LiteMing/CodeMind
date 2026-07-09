@@ -1,11 +1,52 @@
 import { api } from './api'
+import { renderHeader, renderWorkspace } from './render/shell'
+import { renderGraphOverlay, drawGraphScene, updateGraphSummaryPanel } from './render/graph'
+import {
+  renderOverlay,
+  renderRegionDrawPreview,
+  renderOnboarding,
+  renderToasts,
+  renderCanvasGuide,
+  updateCanvasGuide,
+} from './render/overlay'
+import {
+  saveDocument,
+  saveSnapshot,
+  exportMarkdown,
+  refreshMaps,
+  createMap,
+  openMap,
+  goHome,
+  renameMap,
+  deleteMap,
+  saveCollabApiKey,
+  scheduleAutosave,
+} from './sync/api-sync'
+import {
+  openAIWheel,
+  closeAIWheel,
+  importFileWithAI,
+  openAIWorkspace,
+  closeAIWorkspace,
+  toggleAIDebug,
+  toggleAIRawMode,
+  testAIConnection,
+  applyAINodeNotes,
+  applyAINodeNotesForTargets,
+  applyAIRelations,
+  applyAIRelationsForFocus,
+  generateAIMap,
+  expandAIMap,
+  applyAISuggestNodes,
+  applyAIQuickAssist,
+  resetAIConnectionFeedback,
+  persistGeneratedDocument,
+} from './ai/actions'
 import { PRIORITY_VALUES } from './app-types'
 import { renderHome } from './render/home'
-import { renderNodes, renderEdges } from './render/canvas'
+import { renderEdges } from './render/canvas'
 import { renderSettings } from './render/settings'
 import { renderInspector } from './render/inspector'
-import { renderFixedToolbar } from './render/toolbar'
-import { renderContextMenu } from './render/context-menu'
 import { renderShortcutOverlay } from './render/shortcut-overlay'
 import { renderAIWorkspace } from './render/ai-panel'
 import { UxEngine, MinimapRenderer } from './ux-engine'
@@ -13,7 +54,6 @@ import type { NodeBounds, MinimapNodeData } from './ux-engine'
 import type {
   ActiveEditorPreviewState,
   AIDebugAction,
-  AINoteTargetState,
   AppState,
   CopiedSubtree,
   DragState,
@@ -28,11 +68,10 @@ import type {
   ShellRefs,
   ToastItem,
 } from './app-types'
-import { normalizeNodeColor, resolveNodeColorPalette, rgbaFromRgb, applyAlphaToHex } from './color-palette'
+import { normalizeNodeColor, resolveNodeColorPalette } from './color-palette'
 import {
   autoLayoutHierarchy,
   childrenOf,
-  connectedRelations,
   createDefaultDocument,
   createId,
   createNode,
@@ -62,15 +101,9 @@ import {
   parseCubicBezierFromPath,
   parsePolylineFromPath,
 } from './cutting-geometry'
-import { type GraphHitNode, buildGraphFrame, traceRoundedRectPath } from './graph-frame'
-import { type TranslationKey, kindLabel, nodeColorLabel, themeLabel, translate } from './i18n'
-import {
-  nodeVisibleTitle,
-  normalizeNodeNote,
-  deriveNoteChildTitle,
-  MIN_NODE_WIDTH,
-  MIN_NODE_HEIGHT,
-} from './node-render'
+import { type GraphHitNode } from './graph-frame'
+import { type TranslationKey, nodeColorLabel, themeLabel, translate } from './i18n'
+import { nodeVisibleTitle, normalizeNodeNote, MIN_NODE_WIDTH, MIN_NODE_HEIGHT } from './node-render'
 import { estimateNodeHeight, estimateNodeWidth, TOPIC_NODE_MAX_WIDTH } from './node-sizing'
 import {
   DEFAULT_LM_STUDIO_URL,
@@ -86,16 +119,9 @@ import {
   normalizeTopPanelPosition,
   savePreferences,
 } from './preferences'
-import { listLocalSnapshots, loadLocalSnapshot, saveLocalSnapshot, type LocalSnapshotSummary } from './snapshots'
-import {
-  normalizeAITemplateId,
-  promptTemplateCopy,
-  createTemplateDocument,
-  normalizedRelationPairKey,
-} from './templates'
+import { listLocalSnapshots, loadLocalSnapshot, type LocalSnapshotSummary } from './snapshots'
+import { normalizeAITemplateId, promptTemplateCopy, createTemplateDocument } from './templates'
 import type {
-  AIDebugInfo,
-  AIDebugRequest,
   AppPreferences,
   AITemplateId,
   ArrowDirection,
@@ -103,7 +129,6 @@ import type {
   GestureAction,
   EdgeStyle,
   Locale,
-  MindMapDocument,
   MindMapSummary,
   MindNode,
   NodeColor,
@@ -119,10 +144,6 @@ import {
   cloneDocument,
   directionalCrossDelta,
   directionalPrimaryDelta,
-  downloadTextFile,
-  escapeAttribute,
-  escapeHtml,
-  getAIDebugInfo,
   getErrorMessage,
   getWorkspaceBounds,
   isTypingTarget,
@@ -132,8 +153,6 @@ import {
   rectanglesIntersect,
   rectanglesOverlapCoords,
   requiredElement,
-  shorten,
-  slugify,
   type WorkspaceBounds,
   WORKSPACE_MIN_WIDTH,
   WORKSPACE_MIN_HEIGHT,
@@ -144,7 +163,6 @@ const MAX_ZOOM = 2.4
 const ZOOM_SENSITIVITY = 0.0018
 const AUTO_NODE_EDITOR_MAX_WIDTH = TOPIC_NODE_MAX_WIDTH
 const DRAG_SNAP_THRESHOLD = 18
-const AUTO_SNAPSHOT_MIN_INTERVAL_MS = 2 * 60 * 1000
 const HISTORY_LIMIT = 120
 const GRAPH_DEFAULT_ZOOM = 1.16
 const GRAPH_MIN_ZOOM = 0.68
@@ -165,11 +183,11 @@ export async function createApp(rootEl: HTMLElement): Promise<void> {
 
 export class MindMapApp {
   readonly rootEl: HTMLElement
-  private autosaveHandle: number | null = null
+  autosaveHandle: number | null = null
   refs: ShellRefs | null = null
   private pan: PanState | null = null
   private graphDrag: GraphDragState | null = null
-  private didInitializeViewport = false
+  didInitializeViewport = false
   viewport = { x: 0, y: 0, scale: 1 }
   private historyPast: HistorySnapshot[] = []
   private historyFuture: HistorySnapshot[] = []
@@ -177,7 +195,7 @@ export class MindMapApp {
   private liveNodeIds = new Set<string>()
   private liveNodeDimensionIds = new Set<string>()
   private graphAnimationHandle: number | null = null
-  private graphHitNodes: GraphHitNode[] = []
+  graphHitNodes: GraphHitNode[] = []
   private copiedSubtree: CopiedSubtree | null = null
   private suppressContextMenuOnce = false
   private suppressClickOnce = false
@@ -210,10 +228,10 @@ export class MindMapApp {
     originX: 0,
     originY: 0,
   }
-  private collabApiKey = ''
-  private pollHandle: number | null = null
-  private lastKnownEditTime: string = ''
-  private lastFrontendSaveTime: string = ''
+  collabApiKey = ''
+  pollHandle: number | null = null
+  lastKnownEditTime: string = ''
+  lastFrontendSaveTime: string = ''
   private inspectorDrag: { x: number; y: number; width: number; dragged: boolean } = {
     x: 0,
     y: 0,
@@ -234,12 +252,12 @@ export class MindMapApp {
     rightEdge: number
   } | null = null
   private toastContainer: HTMLElement | null = null
-  private toastTimers: Map<string, number> = new Map()
+  toastTimers: Map<string, number> = new Map()
   private toastIdCounter = 0
   /** Tracks which Inspector sections are collapsed (default: all collapsed) */
   inspectorSectionsCollapsed: Set<string> = new Set(['relations', 'snapshots', 'advanced'])
   state: AppState
-  private uxEngine: UxEngine
+  uxEngine: UxEngine
   private minimapRenderer: MinimapRenderer | null = null
   private minimapDragging = false
 
@@ -352,7 +370,7 @@ export class MindMapApp {
     }
 
     try {
-      await this.refreshMaps('status.mapListLoaded')
+      await refreshMaps(this, 'status.mapListLoaded')
     } catch (error) {
       this.setStatus('status.mapListFailed', { reason: getErrorMessage(error) })
     }
@@ -427,7 +445,7 @@ export class MindMapApp {
       this.state.fixedMenu = ''
     }
     if (closedAIWheel) {
-      this.closeAIWheel()
+      closeAIWheel(this)
     }
 
     const settingsScrim = target.closest<HTMLElement>('[data-settings-scrim]')
@@ -438,7 +456,7 @@ export class MindMapApp {
 
     const aiScrim = target.closest<HTMLElement>('[data-ai-scrim]')
     if (aiScrim && target === aiScrim) {
-      this.closeAIWorkspace()
+      closeAIWorkspace(this)
       return
     }
 
@@ -496,8 +514,8 @@ export class MindMapApp {
     const graphResultNodeId = target.closest<HTMLElement>('[data-graph-node-result]')?.dataset.graphNodeResult
     if (graphResultNodeId) {
       this.state.graph.selectedNodeId = graphResultNodeId
-      this.updateGraphSummaryPanel()
-      this.drawGraphScene()
+      updateGraphSummaryPanel(this)
+      drawGraphScene(this)
       return
     }
 
@@ -559,8 +577,8 @@ export class MindMapApp {
     }
 
     if (closedContextMenu || closedFixedMenu || closedAIWheel) {
-      this.renderOverlay()
-      this.renderHeader()
+      renderOverlay(this)
+      renderHeader(this)
     }
 
     if (clickedWorkspace) {
@@ -753,7 +771,7 @@ export class MindMapApp {
             }
             this.state.midpointDrag.mode = 'branch'
             this.setStatus('status.connectionBranchMode')
-            this.renderWorkspace()
+            renderWorkspace(this)
           }, RELATION_HANDLE_LONG_PRESS_DELAY_MS),
         }
         this.state.selectedRelationId = relationId
@@ -772,7 +790,7 @@ export class MindMapApp {
         this.state.selectedNodeId = null
         this.state.selectedNodeIds = []
         this.state.selectedRegionId = null
-        this.renderWorkspace()
+        renderWorkspace(this)
         event.preventDefault()
         return
       }
@@ -980,7 +998,7 @@ export class MindMapApp {
       const deltaY = event.clientY - this.graphDrag.startY
       this.state.graph.rotation = this.graphDrag.startRotation + deltaX * 0.0085
       this.state.graph.tilt = clamp(this.graphDrag.startTilt + deltaY * 0.0055, -1.1, 1.1)
-      this.drawGraphScene()
+      drawGraphScene(this)
       event.preventDefault()
       return
     }
@@ -993,7 +1011,7 @@ export class MindMapApp {
     if (this.state.connectorDrag && event.pointerId === this.state.connectorDrag.pointerId) {
       this.state.connectorDrag.currentClientX = event.clientX
       this.state.connectorDrag.currentClientY = event.clientY
-      this.renderWorkspace()
+      renderWorkspace(this)
       event.preventDefault()
       return
     }
@@ -1002,7 +1020,7 @@ export class MindMapApp {
     if (this.state.parentConnectorDrag && event.pointerId === this.state.parentConnectorDrag.pointerId) {
       this.state.parentConnectorDrag.currentClientX = event.clientX
       this.state.parentConnectorDrag.currentClientY = event.clientY
-      this.renderWorkspace()
+      renderWorkspace(this)
       event.preventDefault()
       return
     }
@@ -1019,7 +1037,7 @@ export class MindMapApp {
           dragState.mode = 'move'
         }
       }
-      this.renderWorkspace()
+      renderWorkspace(this)
       event.preventDefault()
       return
     }
@@ -1033,7 +1051,7 @@ export class MindMapApp {
       const docPos = this.clientToCanvasPosition(event.clientX, event.clientY)
       this.state.regionDraw.currentCanvasX = docPos.x
       this.state.regionDraw.currentCanvasY = docPos.y
-      this.renderRegionDrawPreview()
+      renderRegionDrawPreview(this)
       event.preventDefault()
       return
     }
@@ -1076,7 +1094,7 @@ export class MindMapApp {
         region.height = Math.round(newH)
         region.position = { x: Math.round(newCx), y: Math.round(newCy) }
         region.updatedAt = new Date().toISOString()
-        this.renderWorkspace()
+        renderWorkspace(this)
       }
       event.preventDefault()
       return
@@ -1150,7 +1168,7 @@ export class MindMapApp {
           this.suppressClickOnce = true
         }
       }
-      this.renderOverlay()
+      renderOverlay(this)
       if (this.state.marquee.active) {
         event.preventDefault()
       }
@@ -1171,7 +1189,7 @@ export class MindMapApp {
       if (!resizeState.historyCaptured && (Math.abs(deltaX) > 1 || Math.abs(deltaY) > 1)) {
         this.captureHistory()
         resizeState.historyCaptured = true
-        this.renderHeader()
+        renderHeader(this)
       }
 
       const nextWidth = clampMin(resizeState.startWidth + deltaX / this.viewport.scale, MIN_NODE_WIDTH)
@@ -1213,7 +1231,7 @@ export class MindMapApp {
     ) {
       this.captureHistory()
       this.state.drag.historyCaptured = true
-      this.renderHeader()
+      renderHeader(this)
     }
 
     const anchorStart = this.state.drag.initialPositions[this.state.drag.nodeId]
@@ -1360,7 +1378,7 @@ export class MindMapApp {
       if (targetNodeId && targetNodeId !== sourceNodeId) {
         this.createRelation(sourceNodeId, targetNodeId)
       } else {
-        this.renderWorkspace()
+        renderWorkspace(this)
       }
       return
     }
@@ -1385,7 +1403,7 @@ export class MindMapApp {
           const childDescendants = descendantIds(this.state.document, childNodeId)
           if (childDescendants.includes(targetNodeId)) {
             this.setStatus('status.circularParentError')
-            this.renderWorkspace()
+            renderWorkspace(this)
             return
           }
           this.captureHistory()
@@ -1393,10 +1411,10 @@ export class MindMapApp {
           childNode.parentId = targetNodeId
           touchDocument(this.state.document)
           this.setStatus('status.parentSet')
-          this.scheduleAutosave('status.saved')
+          scheduleAutosave(this, 'status.saved')
         }
       } else {
-        this.renderWorkspace()
+        renderWorkspace(this)
       }
       return
     }
@@ -1408,7 +1426,7 @@ export class MindMapApp {
       this.clearMidpointDragLongPress(dragState)
       this.state.midpointDrag = null
       if (!relation) {
-        this.renderWorkspace()
+        renderWorkspace(this)
         return
       }
 
@@ -1421,7 +1439,7 @@ export class MindMapApp {
         if (targetNodeId) {
           this.addBranchTargetToRelation(relation, targetNodeId)
         } else {
-          this.renderWorkspace()
+          renderWorkspace(this)
         }
         return
       }
@@ -1430,7 +1448,7 @@ export class MindMapApp {
       if (dragState.mode === 'move' || moved > RELATION_HANDLE_MOVE_THRESHOLD) {
         this.moveRelationMidpoint(relation, this.clientToCanvasPosition(event.clientX, event.clientY))
       } else {
-        this.renderWorkspace()
+        renderWorkspace(this)
       }
       return
     }
@@ -1456,8 +1474,8 @@ export class MindMapApp {
       this.state.regionResize = null
       if (wasResized) {
         touchDocument(this.state.document)
-        this.renderWorkspace()
-        this.scheduleAutosave('status.layoutSaveScheduled')
+        renderWorkspace(this)
+        scheduleAutosave(this, 'status.layoutSaveScheduled')
       }
       return
     }
@@ -1468,8 +1486,8 @@ export class MindMapApp {
       this.state.regionDrag = null
       if (wasMoved) {
         touchDocument(this.state.document)
-        this.renderWorkspace()
-        this.scheduleAutosave('status.layoutSaveScheduled')
+        renderWorkspace(this)
+        scheduleAutosave(this, 'status.layoutSaveScheduled')
       }
       return
     }
@@ -1485,7 +1503,7 @@ export class MindMapApp {
         this.applyMarqueeSelection(marquee)
         this.suppressContextMenuOnce = true
       }
-      this.renderOverlay()
+      renderOverlay(this)
       return
     }
 
@@ -1509,9 +1527,9 @@ export class MindMapApp {
       this.state.resize = null
       if (resized) {
         touchDocument(this.state.document)
-        this.renderWorkspace()
-        this.renderHeader()
-        this.scheduleAutosave('status.layoutSaveScheduled')
+        renderWorkspace(this)
+        renderHeader(this)
+        scheduleAutosave(this, 'status.layoutSaveScheduled')
       }
     }
 
@@ -1546,9 +1564,9 @@ export class MindMapApp {
     this.state.drag = null
     if (moved) {
       touchDocument(this.state.document)
-      this.renderWorkspace()
-      this.renderHeader()
-      this.scheduleAutosave('status.layoutSaveScheduled')
+      renderWorkspace(this)
+      renderHeader(this)
+      scheduleAutosave(this, 'status.layoutSaveScheduled')
     }
   }
 
@@ -1661,7 +1679,7 @@ export class MindMapApp {
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
       event.preventDefault()
       this.flashToolbarButton(event)
-      void this.saveDocument('status.saved')
+      void saveDocument(this, 'status.saved')
       return
     }
 
@@ -1744,14 +1762,14 @@ export class MindMapApp {
         region.position = { x: rs.startCenterX, y: rs.startCenterY }
       }
       this.state.regionResize = null
-      this.renderWorkspace()
+      renderWorkspace(this)
       return
     }
 
     if (event.key === 'Escape' && this.state.connectorDrag) {
       event.preventDefault()
       this.state.connectorDrag = null
-      this.renderWorkspace()
+      renderWorkspace(this)
       return
     }
 
@@ -1759,14 +1777,14 @@ export class MindMapApp {
       event.preventDefault()
       this.clearMidpointDragLongPress(this.state.midpointDrag)
       this.state.midpointDrag = null
-      this.renderWorkspace()
+      renderWorkspace(this)
       return
     }
 
     if (event.key === 'Escape' && this.state.selectedRelationId) {
       event.preventDefault()
       this.state.selectedRelationId = null
-      this.renderWorkspace()
+      renderWorkspace(this)
       return
     }
 
@@ -1880,7 +1898,7 @@ export class MindMapApp {
 
     if (target instanceof HTMLInputElement && target.dataset.snapshotName !== undefined && event.key === 'Enter') {
       event.preventDefault()
-      this.saveSnapshot('manual')
+      saveSnapshot(this, 'manual')
     }
   }
 
@@ -2285,7 +2303,7 @@ export class MindMapApp {
     }
 
     // Trigger re-render to show cutting line and warning highlights
-    this.renderWorkspace()
+    renderWorkspace(this)
   }
 
   private cancelCutting(): void {
@@ -2294,7 +2312,7 @@ export class MindMapApp {
     }
     this.state.cutting = null
     this.refs?.scroll?.classList.remove('is-cutting')
-    this.renderWorkspace()
+    renderWorkspace(this)
   }
 
   private executeCutting(): void {
@@ -2390,7 +2408,7 @@ export class MindMapApp {
 
     // Clean up cutting state, restore cursor, and re-render
     this.cancelCutting()
-    this.scheduleAutosave('status.saved')
+    scheduleAutosave(this, 'status.saved')
   }
 
   private startMarqueeSelection(
@@ -2411,7 +2429,7 @@ export class MindMapApp {
       currentClientY,
       active: Math.hypot(currentClientX - startClientX, currentClientY - startClientY) > 8,
     }
-    this.renderOverlay()
+    renderOverlay(this)
   }
 
   private armNodeLongPress(nodeId: string, dragNodeIds: string[], event: PointerEvent): void {
@@ -2488,16 +2506,16 @@ export class MindMapApp {
         }
         return
       case 'ai-quick':
-        await this.applyAIQuickAssist(nodeId)
+        await applyAIQuickAssist(this, nodeId)
         return
       case 'ai-suggest-children':
-        await this.applyAISuggestNodes(nodeId, 'children')
+        await applyAISuggestNodes(this, nodeId, 'children')
         return
       case 'ai-suggest-siblings':
-        await this.applyAISuggestNodes(nodeId, 'siblings')
+        await applyAISuggestNodes(this, nodeId, 'siblings')
         return
       case 'ai-wheel':
-        this.openAIWheel(nodeId, origin?.clientX, origin?.clientY)
+        openAIWheel(this, nodeId, origin?.clientX, origin?.clientY)
         return
       case 'new-child':
         this.createChildNode(nodeId)
@@ -2517,33 +2535,7 @@ export class MindMapApp {
     }
   }
 
-  private openAIWheel(nodeId: string, clientX?: number, clientY?: number): void {
-    this.state.contextMenu = null
-    this.state.fixedMenu = ''
-    const fallback = this.nodeClientCenter(nodeId)
-    this.state.aiWheel = {
-      open: true,
-      nodeId,
-      clientX: Math.round(clientX ?? fallback.x),
-      clientY: Math.round(clientY ?? fallback.y),
-    }
-    this.renderHeader()
-    this.renderOverlay()
-  }
-
-  private closeAIWheel(): void {
-    if (!this.state.aiWheel.open) {
-      return
-    }
-    this.state.aiWheel = {
-      open: false,
-      nodeId: null,
-      clientX: 0,
-      clientY: 0,
-    }
-  }
-
-  private nodeClientCenter(nodeId: string): { x: number; y: number } {
+  nodeClientCenter(nodeId: string): { x: number; y: number } {
     const element = this.rootEl.querySelector<HTMLElement>(`[data-node-id="${nodeId}"]`)
     if (!element) {
       return { x: window.innerWidth / 2, y: window.innerHeight / 2 }
@@ -2653,8 +2645,8 @@ export class MindMapApp {
       if (matchedNode) {
         this.state.graph.selectedNodeId = matchedNode.id
       }
-      this.updateGraphSummaryPanel()
-      this.drawGraphScene()
+      updateGraphSummaryPanel(this)
+      drawGraphScene(this)
       return
     }
 
@@ -2703,7 +2695,7 @@ export class MindMapApp {
     }
   }
 
-  private render(): void {
+  render(): void {
     this.flushLiveNodeUpdate()
     this.applyLocale()
     this.applyTheme()
@@ -2714,17 +2706,17 @@ export class MindMapApp {
     }
 
     this.ensureShell()
-    this.renderHeader()
-    this.renderWorkspace()
+    renderHeader(this)
+    renderWorkspace(this)
     renderInspector(this)
     this.syncInspectorNoteInputs()
-    this.renderOverlay()
+    renderOverlay(this)
     renderSettings(this)
     renderAIWorkspace(this)
-    this.renderGraphOverlay()
-    this.renderOnboarding()
-    this.updateCanvasGuide()
-    this.renderCanvasGuide()
+    renderGraphOverlay(this)
+    renderOnboarding(this)
+    updateCanvasGuide(this)
+    renderCanvasGuide(this)
     this.initializeViewportIfNeeded()
     this.syncFloatingLayout()
     this.syncInspectorDrag()
@@ -2861,61 +2853,12 @@ export class MindMapApp {
     this.initMinimap()
   }
 
-  private renderHeader(): void {
-    if (!this.refs) {
-      return
-    }
-
-    const locale = this.state.preferences.locale
-    const chromeLayout = this.state.preferences.appearance.chromeLayout
-    this.refs.topChrome.dataset.panelPosition = this.state.preferences.appearance.topPanelPosition
-    this.refs.topChrome.dataset.chromeLayout = chromeLayout
-    this.refs.topPanel.classList.toggle('is-collapsed', this.state.topPanelCollapsed)
-    this.refs.topPanel.classList.toggle('is-hidden', chromeLayout === 'fixed')
-    this.refs.fixedToolbar.classList.toggle('is-visible', chromeLayout === 'fixed')
-    this.refs.fixedToolbar.innerHTML = chromeLayout === 'fixed' ? renderFixedToolbar(this) : ''
-    this.refs.eyebrow.textContent = this.t('app.eyebrow')
-    this.refs.title.textContent = this.state.document.title
-    this.refs.saveIndicator.classList.toggle('is-dirty', this.state.dirty)
-    this.refs.saveIndicator.title = this.t(this.state.dirty ? 'status.unsaved' : 'status.allSaved')
-    this.refs.status.textContent = this.t(this.state.status.key, this.state.status.values)
-    this.refs.homeButton.textContent = this.t('toolbar.home')
-    this.refs.topPanelButton.textContent = this.t(this.state.topPanelCollapsed ? 'panel.top.show' : 'panel.top.hide')
-    this.refs.renameMapButton.textContent = this.t('toolbar.renameMap')
-    this.refs.deleteMapButton.textContent = this.t('toolbar.deleteMap')
-    this.refs.undoButton.textContent = this.t('toolbar.undo')
-    this.refs.redoButton.textContent = this.t('toolbar.redo')
-    this.refs.saveButton.textContent = this.t('toolbar.save')
-    this.refs.layoutButton.textContent = this.t('toolbar.autoLayout')
-    this.refs.exportButton.textContent = this.t('toolbar.exportMarkdown')
-    this.refs.importButton.textContent = this.t('toolbar.import')
-    this.refs.aiButton.textContent = this.t('toolbar.ai')
-    this.refs.graphButton.textContent = this.t('toolbar.graph3d')
-    this.refs.settingsButton.textContent = this.t('toolbar.settings')
-    this.refs.panelButton.textContent = this.t(this.state.inspectorCollapsed ? 'panel.side.show' : 'panel.side.hide')
-    this.refs.themeButton.textContent = this.t('toolbar.theme', {
-      theme: themeLabel(locale, this.state.document.theme),
-    })
-    this.refs.topbarConnectButton.textContent = this.t('toolbar.connect')
-    this.refs.undoButton.disabled = !this.canUndo()
-    this.refs.redoButton.disabled = !this.canRedo()
-    this.refs.topbarConnectButton.classList.toggle('is-active', this.state.connectSourceNodeId !== null)
-    this.refs.aiButton.classList.toggle('is-active', this.state.ai.open)
-    this.refs.aiButton.disabled = this.state.ai.busy
-    this.refs.graphButton.classList.toggle('is-active', this.state.graph.open)
-    this.refs.settingsButton.classList.toggle('is-active', this.state.settingsOpen)
-    this.refs.panelButton.classList.toggle('is-active', !this.state.inspectorCollapsed)
-    this.refs.topPanelButton.setAttribute('aria-pressed', String(!this.state.topPanelCollapsed))
-    this.updateZoomControlTitles()
-    document.title = `${this.state.document.title} - Code Mind`
-  }
-
   private toggleFixedMenu(menuId: FixedMenuId): void {
     if (this.state.preferences.appearance.chromeLayout !== 'fixed') {
       return
     }
     this.state.fixedMenu = this.state.fixedMenu === menuId ? '' : menuId
-    this.renderHeader()
+    renderHeader(this)
   }
 
   canSuggestSiblings(nodeId?: string): boolean {
@@ -2928,59 +2871,6 @@ export class MindMapApp {
       return false
     }
     return Boolean(this.findNode(node.parentId))
-  }
-
-  private aiQuickKindLabel(kind: 'children' | 'siblings' | 'notes' | 'relations'): string {
-    switch (kind) {
-      case 'children':
-        return this.t('ai.suggestChildrenAction')
-      case 'siblings':
-        return this.t('ai.suggestSiblingsAction')
-      case 'notes':
-        return this.t('ai.notesAction')
-      case 'relations':
-        return this.t('ai.connectAction')
-      default:
-        return kind
-    }
-  }
-
-  private renderWorkspace(): void {
-    if (!this.refs) {
-      return
-    }
-
-    const bounds = getWorkspaceBounds(this.state.document)
-    this.applyCanvasMetrics(bounds)
-    this.refs.edgeLayer.setAttribute('viewBox', `0 0 ${bounds.width} ${bounds.height}`)
-    this.updateCanvasViewportView()
-    this.refs.scroll.classList.toggle('is-marqueeing', Boolean(this.state.marquee))
-    this.refs.edgeLayer.innerHTML = renderEdges(this)
-    this.refs.regionLayer.innerHTML = this.renderRegions()
-    this.refs.nodeLayer.innerHTML = renderNodes(this)
-  }
-
-  private renderRegionDrawPreview(): void {
-    if (!this.refs || !this.state.regionDraw || this.state.regionDraw.pointerId === -1) {
-      return
-    }
-    const rd = this.state.regionDraw
-    const originX = this.workspaceBounds.originX
-    const originY = this.workspaceBounds.originY
-    const left = Math.min(rd.startCanvasX, rd.currentCanvasX) + originX
-    const top = Math.min(rd.startCanvasY, rd.currentCanvasY) + originY
-    const w = Math.abs(rd.currentCanvasX - rd.startCanvasX)
-    const h = Math.abs(rd.currentCanvasY - rd.startCanvasY)
-    const palette = resolveNodeColorPalette(rd.color)
-    const borderColor = palette ? `rgba(${palette.accentRgb.join(',')}, 0.6)` : 'rgba(96,165,250,0.5)'
-    const bgColor = palette ? `rgba(${palette.surfaceRgb.join(',')}, 0.15)` : 'rgba(96,165,250,0.1)'
-    // Show preview overlay in the region layer
-    this.refs.regionLayer.innerHTML =
-      this.renderRegions() +
-      `<div class="region-box region-draw-preview" style="
-      left: ${left}px; top: ${top}px; width: ${w}px; height: ${h}px;
-      background: ${bgColor}; border: 2px dashed ${borderColor};
-    "></div>`
   }
 
   private syncFloatingLayout(): void {
@@ -3177,50 +3067,7 @@ export class MindMapApp {
     }
   }
 
-  private renderOverlay(): void {
-    if (!this.refs) {
-      return
-    }
-
-    if (this.overlayBlocksCanvas()) {
-      this.refs.overlayLayer.innerHTML = ''
-      this.refs.overlayLayer.classList.remove('is-visible')
-      return
-    }
-
-    const marqueeMarkup = this.state.marquee?.active ? this.renderMarqueeBox(this.state.marquee) : ''
-    const contextMenuMarkup = this.state.contextMenu ? renderContextMenu(this) : ''
-    const aiWheelMarkup = this.state.aiWheel.open ? this.renderAIWheel() : ''
-
-    this.refs.overlayLayer.classList.toggle('is-visible', Boolean(marqueeMarkup || contextMenuMarkup || aiWheelMarkup))
-    this.refs.overlayLayer.innerHTML = `${marqueeMarkup}${contextMenuMarkup}${aiWheelMarkup}`
-    if (this.state.contextMenu) {
-      this.syncContextMenuPosition()
-    }
-    if (this.state.aiWheel.open) {
-      this.syncAIWheelPosition()
-    }
-  }
-
-  private renderMarqueeBox(marquee: MarqueeState): string {
-    const left = Math.min(marquee.startClientX, marquee.currentClientX)
-    const top = Math.min(marquee.startClientY, marquee.currentClientY)
-    const width = Math.abs(marquee.currentClientX - marquee.startClientX)
-    const height = Math.abs(marquee.currentClientY - marquee.startClientY)
-    const stageRect = this.refs?.overlayLayer.getBoundingClientRect()
-    if (!stageRect) {
-      return ''
-    }
-
-    return `
-      <div
-        class="marquee-box"
-        style="left: ${Math.round(left - stageRect.left)}px; top: ${Math.round(top - stageRect.top)}px; width: ${Math.round(width)}px; height: ${Math.round(height)}px;"
-      ></div>
-    `
-  }
-
-  private syncContextMenuPosition(): void {
+  syncContextMenuPosition(): void {
     if (!this.refs || !this.state.contextMenu) {
       return
     }
@@ -3244,207 +3091,6 @@ export class MindMapApp {
     )
     menu.style.left = `${Math.round(left)}px`
     menu.style.top = `${Math.round(top)}px`
-  }
-
-  private syncAIWheelPosition(): void {
-    if (!this.refs || !this.state.aiWheel.open) {
-      return
-    }
-
-    const wheel = this.refs.overlayLayer.querySelector<HTMLElement>('[data-ai-wheel]')
-    if (!wheel) {
-      return
-    }
-
-    const stageRect = this.refs.overlayLayer.getBoundingClientRect()
-    const wheelRect = wheel.getBoundingClientRect()
-    const halfWidth = wheelRect.width / 2
-    const halfHeight = wheelRect.height / 2
-    const left = clamp(
-      this.state.aiWheel.clientX - stageRect.left,
-      halfWidth + 12,
-      Math.max(halfWidth + 12, stageRect.width - halfWidth - 12),
-    )
-    const top = clamp(
-      this.state.aiWheel.clientY - stageRect.top,
-      halfHeight + 12,
-      Math.max(halfHeight + 12, stageRect.height - halfHeight - 12),
-    )
-
-    wheel.style.left = `${Math.round(left)}px`
-    wheel.style.top = `${Math.round(top)}px`
-  }
-
-  private renderAIWheel(): string {
-    if (!this.refs || !this.state.aiWheel.open || !this.state.aiWheel.nodeId) {
-      return ''
-    }
-
-    const labels = {
-      children: this.state.preferences.locale === 'zh-CN' ? '子节点' : 'Children',
-      notes: this.state.preferences.locale === 'zh-CN' ? '注释' : 'Notes',
-      relations: this.state.preferences.locale === 'zh-CN' ? '连线' : 'Relations',
-      siblings: this.state.preferences.locale === 'zh-CN' ? '同级节点' : 'Siblings',
-      close: this.state.preferences.locale === 'zh-CN' ? '关闭 AI 轮盘' : 'Close AI wheel',
-    }
-
-    return `
-      <section class="ai-wheel" data-ai-wheel style="left: 0; top: 0;">
-        <button type="button" class="ai-wheel-button ai-wheel-button-top" data-command="ai-wheel-children">${labels.children}</button>
-        <button type="button" class="ai-wheel-button ai-wheel-button-left" data-command="ai-wheel-notes">${labels.notes}</button>
-        <button type="button" class="ai-wheel-button ai-wheel-button-right" data-command="ai-wheel-relations">${labels.relations}</button>
-        <button type="button" class="ai-wheel-button ai-wheel-button-bottom" data-command="ai-wheel-siblings">${labels.siblings}</button>
-        <button type="button" class="ai-wheel-center" data-command="close-ai-wheel" aria-label="${labels.close}">AI</button>
-      </section>
-    `
-  }
-
-  aiDebugActionLabel(action: AIDebugAction): string {
-    switch (action) {
-      case 'generate':
-        return this.t('ai.generate')
-      case 'import':
-        return this.t('ai.import')
-      case 'notes':
-        return this.t('ai.notes')
-      case 'relations':
-        return this.t('ai.connect')
-      default:
-        return ''
-    }
-  }
-
-  aiNoteChildActionLabel(): string {
-    return this.state.preferences.locale === 'zh-CN' ? '生成注释并添加为下级节点' : 'Generate Notes as Child Nodes'
-  }
-
-  aiStatusTone(): 'is-busy' | 'is-error' | 'is-ok' | 'is-info' | null {
-    switch (this.state.status.key) {
-      case 'status.aiRunning':
-      case 'status.aiTestingConnection':
-        return 'is-busy'
-      case 'status.aiFailed':
-      case 'status.aiConnectionFailed':
-        return 'is-error'
-      case 'status.aiRelationsApplied':
-      case 'status.aiNotesApplied':
-      case 'status.aiConnectionOK':
-        return 'is-ok'
-      case 'status.aiNoRelations':
-      case 'status.aiNoNoteTargets':
-      case 'status.aiNoNotes':
-      case 'status.aiTopicRequired':
-        return 'is-info'
-      default:
-        return null
-    }
-  }
-
-  private renderGraphOverlay(): void {
-    if (!this.refs) {
-      return
-    }
-
-    if (!this.state.graph.open) {
-      this.stopGraphAnimation()
-      this.refs.graphLayer.innerHTML = ''
-      this.refs.graphLayer.className = ''
-      return
-    }
-
-    this.refs.graphLayer.className = 'graph-layer is-visible'
-    this.refs.graphLayer.innerHTML = `
-      <div class="graph-scrim" data-graph-scrim>
-        <section class="graph-sheet" role="dialog" aria-modal="true">
-          <header class="graph-header">
-            <div>
-              <p class="section-label">${this.t('toolbar.graph3d')}</p>
-              <h2>${this.t('graph.title')}</h2>
-              <p class="inspector-copy">${this.t('graph.subtitle')}</p>
-            </div>
-            <div class="ai-action-row">
-              <button type="button" class="chip-button" data-command="toggle-graph-autorotate">${this.t(
-                'graph.autoRotate',
-                {
-                  value: this.state.graph.autoRotate ? this.t('common.on') : this.t('common.off'),
-                },
-              )}</button>
-              <button type="button" class="chip-button" data-command="reset-graph-view">${this.t('graph.resetView')}</button>
-              <button type="button" class="chip-button" data-command="focus-graph-selected" ${this.state.graph.selectedNodeId ? '' : 'disabled'}>${this.t('graph.focusAction')}</button>
-              <button type="button" class="ghost-button" data-command="close-graph-overlay">${this.t('settings.close')}</button>
-            </div>
-          </header>
-
-          <div class="graph-toolbar">
-            <input
-              class="settings-input"
-              data-graph-search
-              value="${escapeAttribute(this.state.graph.search)}"
-              placeholder="${escapeAttribute(this.t('graph.searchPlaceholder'))}"
-            />
-            <span class="metric-chip">${this.t('graph.dragHint')}</span>
-            <span class="metric-chip">${this.t('graph.zoomHint')}</span>
-            <button type="button" class="chip-button" data-command="graph-zoom-out">${this.t('graph.zoomOut')}</button>
-            <span class="metric-chip" data-graph-zoom-value>${this.t('graph.zoomValue', { value: Math.round(this.state.graph.zoom * 100) })}</span>
-            <button type="button" class="chip-button" data-command="graph-zoom-in">${this.t('graph.zoomIn')}</button>
-            <span class="metric-chip">${this.t('dock.nodes', { value: this.state.document.nodes.length })}</span>
-            <span class="metric-chip">${this.t('dock.relations', { value: this.state.document.relations.length })}</span>
-          </div>
-
-          <div class="graph-layout">
-            <div class="graph-canvas-shell">
-              <canvas class="graph-canvas" data-graph-canvas></canvas>
-            </div>
-            <aside class="graph-sidebar">
-              <div class="graph-result-list" data-graph-result-list>${this.renderGraphResultsList()}</div>
-              <div class="graph-summary" data-graph-summary>${this.renderGraphSummaryContent()}</div>
-            </aside>
-          </div>
-        </section>
-      </div>
-    `
-
-    this.syncGraphAnimation()
-    this.drawGraphScene()
-  }
-
-  private renderOnboarding(): void {
-    if (!this.refs) {
-      return
-    }
-
-    if (!this.onboardingOpen()) {
-      this.refs.onboardingLayer.innerHTML = ''
-      this.refs.onboardingLayer.className = ''
-      return
-    }
-
-    const locale = this.state.preferences.locale
-    this.refs.onboardingLayer.className = 'onboarding-layer is-visible'
-    this.refs.onboardingLayer.innerHTML = `
-      <div class="onboarding-scrim">
-        <section class="onboarding-dialog" role="dialog" aria-modal="true">
-          <p class="section-label">${this.t('toolbar.settings')}</p>
-          <h2>${this.t('onboarding.title')}</h2>
-          <p class="inspector-copy">${this.t('onboarding.subtitle')}</p>
-          <div class="locale-grid">
-            ${this.renderLocaleOption('zh-CN', locale)}
-            ${this.renderLocaleOption('en', locale)}
-          </div>
-          <button type="button" class="action-button primary-action" data-command="complete-onboarding">${this.t('onboarding.continue')}</button>
-        </section>
-      </div>
-    `
-  }
-
-  private renderLocaleOption(option: Locale, activeLocale: Locale): string {
-    const activeClass = option === activeLocale ? 'is-active' : ''
-    return `
-      <button type="button" class="locale-option ${activeClass}" data-locale-option="${option}">
-        <strong>${escapeHtml(this.t(`onboarding.locale.${option}.title` as TranslationKey))}</strong>
-        <span>${escapeHtml(this.t(`onboarding.locale.${option}.copy` as TranslationKey))}</span>
-      </button>
-    `
   }
 
   resolveNodeRenderMetrics(node: MindNode, childCount: number): NodeRenderMetrics {
@@ -3485,7 +3131,7 @@ export class MindMapApp {
     return this.rootEl.querySelector<HTMLTextAreaElement>(`[data-node-editor="${nodeId}"]`)
   }
 
-  private captureActiveNodeEditorDraft(): {
+  captureActiveNodeEditorDraft(): {
     nodeId: string
     value: string
     selectionStart: number
@@ -3509,7 +3155,7 @@ export class MindMapApp {
     }
   }
 
-  private restoreActiveNodeEditorDraft(
+  restoreActiveNodeEditorDraft(
     draft: {
       nodeId: string
       value: string
@@ -3794,7 +3440,7 @@ export class MindMapApp {
     this.state.selectedNodeId = nextPrimary
   }
 
-  private setSelection(nodeIds: string[], primaryNodeId: string | null = nodeIds[nodeIds.length - 1] ?? null): void {
+  setSelection(nodeIds: string[], primaryNodeId: string | null = nodeIds[nodeIds.length - 1] ?? null): void {
     this.finishActiveNodeEditing()
     this.applySelectionState(nodeIds, primaryNodeId)
     this.state.selectedRegionId = null
@@ -3945,7 +3591,7 @@ export class MindMapApp {
       nodes,
     }
     this.setStatus('status.subtreeCopied', { count: nodes.length })
-    this.renderHeader()
+    renderHeader(this)
   }
 
   private cutSelectedSubtree(): void {
@@ -3995,7 +3641,7 @@ export class MindMapApp {
     touchDocument(this.state.document)
     this.selectNode(findRoot(this.state.document)?.id ?? 'root')
     this.setStatus('status.subtreeCut', { count: allSubtreeIds.size })
-    this.scheduleAutosave('status.saved')
+    scheduleAutosave(this, 'status.saved')
   }
 
   private pasteCopiedSubtree(): void {
@@ -4080,7 +3726,7 @@ export class MindMapApp {
     touchDocument(this.state.document)
     this.setStatus('status.subtreePasted', { count: insertedNodes.length })
     this.render()
-    this.scheduleAutosave('status.layoutSaveScheduled')
+    scheduleAutosave(this, 'status.layoutSaveScheduled')
     this.showToast(`已粘贴 ${insertedNodes.length} 个节点`)
   }
 
@@ -4173,7 +3819,7 @@ export class MindMapApp {
     this.render()
     this.applyNodeCreateAnimation(newNode.id)
     this.dismissCanvasGuide()
-    this.scheduleAutosave('status.childSaveScheduled')
+    scheduleAutosave(this, 'status.childSaveScheduled')
   }
 
   private createSiblingNode(nodeId: string): void {
@@ -4230,7 +3876,7 @@ export class MindMapApp {
     touchDocument(this.state.document)
     this.render()
     this.applyNodeCreateAnimation(newNode.id)
-    this.scheduleAutosave('status.siblingSaveScheduled')
+    scheduleAutosave(this, 'status.siblingSaveScheduled')
   }
 
   private createFloatingNode(nodeId: string): void {
@@ -4262,7 +3908,7 @@ export class MindMapApp {
     }
     touchDocument(this.state.document)
     this.render()
-    this.scheduleAutosave('status.siblingSaveScheduled')
+    scheduleAutosave(this, 'status.siblingSaveScheduled')
   }
 
   private createRelation(sourceId: string, targetId: string): void {
@@ -4303,7 +3949,7 @@ export class MindMapApp {
     touchDocument(this.state.document)
     this.setStatus('status.relationCreated')
     this.render()
-    this.scheduleAutosave('status.relationSaveScheduled')
+    scheduleAutosave(this, 'status.relationSaveScheduled')
   }
 
   private deleteSelectedNode(): void {
@@ -4378,7 +4024,7 @@ export class MindMapApp {
         relations: removedRelations,
       })
       this.render()
-      this.scheduleAutosave('status.deletionSaveScheduled')
+      scheduleAutosave(this, 'status.deletionSaveScheduled')
       this.showToast(`已删除 ${removedNodes} 个节点`)
     }
 
@@ -4442,7 +4088,7 @@ export class MindMapApp {
     touchDocument(this.state.document)
     this.setStatus(priority ? 'status.priorityApplied' : 'status.priorityCleared', priority ? { priority } : undefined)
     this.render()
-    this.scheduleAutosave('status.prioritySaveScheduled')
+    scheduleAutosave(this, 'status.prioritySaveScheduled')
   }
 
   private cycleSelectedNodePriority(): void {
@@ -4483,10 +4129,10 @@ export class MindMapApp {
       color ? { color: nodeColorLabel(this.state.preferences.locale, color) } : undefined,
     )
     this.render()
-    this.scheduleAutosave('status.colorSaveScheduled')
+    scheduleAutosave(this, 'status.colorSaveScheduled')
   }
 
-  private updateNode(nodeId: string, updater: (node: MindNode) => void): void {
+  updateNode(nodeId: string, updater: (node: MindNode) => void): void {
     const node = this.findNode(nodeId)
     if (!node) {
       return
@@ -4628,7 +4274,7 @@ export class MindMapApp {
     if (options.renderAfter !== false) {
       this.render()
     }
-    this.scheduleAutosave('status.titleSaveScheduled')
+    scheduleAutosave(this, 'status.titleSaveScheduled')
   }
 
   private commitNodeNote(nodeId: string, rawNote: string): void {
@@ -4650,7 +4296,7 @@ export class MindMapApp {
     touchDocument(this.state.document)
     this.setStatus('status.noteUpdated')
     this.render()
-    this.scheduleAutosave('status.noteSaveScheduled')
+    scheduleAutosave(this, 'status.noteSaveScheduled')
   }
 
   private commitRelationLabel(relationId: string, rawLabel: string): void {
@@ -4665,7 +4311,7 @@ export class MindMapApp {
     touchDocument(this.state.document)
     this.setStatus('status.relationLabelUpdated')
     this.render()
-    this.scheduleAutosave('status.labelSaveScheduled')
+    scheduleAutosave(this, 'status.labelSaveScheduled')
   }
 
   private toggleSelectedCollapse(): void {
@@ -4694,7 +4340,7 @@ export class MindMapApp {
     touchDocument(this.state.document)
     this.setStatus('status.layoutUpdated', { count: movedNodes })
     this.render()
-    this.scheduleAutosave('status.layoutSaveScheduled')
+    scheduleAutosave(this, 'status.layoutSaveScheduled')
   }
 
   private tidySubtreeCommand(nodeId: string): void {
@@ -4722,7 +4368,7 @@ export class MindMapApp {
     touchDocument(this.state.document)
     this.setStatus('status.subtreeTidied', { count: movedNodes })
     this.render()
-    this.scheduleAutosave('status.layoutSaveScheduled')
+    scheduleAutosave(this, 'status.layoutSaveScheduled')
   }
 
   private relayoutHierarchyAfterInsert(insertedNode: MindNode): void {
@@ -4808,7 +4454,7 @@ export class MindMapApp {
         touchDocument(this.state.document)
         this.setStatus('status.branchCollapsed')
         this.render()
-        this.scheduleAutosave('status.layoutSaveScheduled')
+        scheduleAutosave(this, 'status.layoutSaveScheduled')
       }, maxDelay + animDuration)
     } else {
       // --- Expand: toggle state first, then animate children in with reverse stagger ---
@@ -4833,7 +4479,7 @@ export class MindMapApp {
       touchDocument(this.state.document)
       this.setStatus('status.branchExpanded')
       this.render()
-      this.scheduleAutosave('status.layoutSaveScheduled')
+      scheduleAutosave(this, 'status.layoutSaveScheduled')
 
       // After render, apply expand stagger animation (parent-to-leaf order)
       const expandNodeIds = descendantIds(this.state.document, nodeId)
@@ -4889,21 +4535,21 @@ export class MindMapApp {
     try {
       switch (command) {
         case 'create-map':
-          await this.createMap()
+          await createMap(this)
           return
         case 'open-map':
           if (argument) {
-            await this.openMap(argument)
+            await openMap(this, argument)
           }
           return
         case 'go-home':
-          await this.goHome()
+          await goHome(this)
           return
         case 'rename-map':
-          await this.renameMap(argument || this.state.currentMapId || this.state.document.id)
+          await renameMap(this, argument || this.state.currentMapId || this.state.document.id)
           return
         case 'delete-map':
-          await this.deleteMap(argument || this.state.currentMapId || this.state.document.id)
+          await deleteMap(this, argument || this.state.currentMapId || this.state.document.id)
           return
         case 'toggle-top-panel':
           this.toggleTopPanel()
@@ -4921,16 +4567,16 @@ export class MindMapApp {
           await this.showPlatformHelp()
           return
         case 'open-ai-workspace':
-          this.openAIWorkspace()
+          openAIWorkspace(this)
           return
         case 'close-ai-workspace':
-          this.closeAIWorkspace()
+          closeAIWorkspace(this)
           return
         case 'toggle-ai-debug':
-          this.toggleAIDebug()
+          toggleAIDebug(this)
           return
         case 'toggle-ai-raw-mode':
-          this.toggleAIRawMode()
+          toggleAIRawMode(this)
           return
         case 'open-graph-overlay':
           this.openGraphOverlay()
@@ -4966,10 +4612,10 @@ export class MindMapApp {
           this.redo()
           return
         case 'save':
-          await this.saveDocument('status.saved')
+          await saveDocument(this, 'status.saved')
           return
         case 'save-snapshot':
-          this.saveSnapshot('manual')
+          saveSnapshot(this, 'manual')
           return
         case 'restore-snapshot':
           if (argument) {
@@ -4997,7 +4643,7 @@ export class MindMapApp {
           this.zoomFit()
           return
         case 'export-markdown':
-          await this.exportMarkdown()
+          await exportMarkdown(this)
           return
         case 'import-file':
           this.pendingImportMode = 'auto'
@@ -5010,57 +4656,57 @@ export class MindMapApp {
           this.startRelationMode()
           return
         case 'ai-connect-relations':
-          await this.applyAIRelations()
+          await applyAIRelations(this)
           return
         case 'ai-complete-node-notes':
-          await this.applyAINodeNotes()
+          await applyAINodeNotes(this)
           return
         case 'ai-complete-node-notes-as-children':
-          await this.applyAINodeNotes('children')
+          await applyAINodeNotes(this, 'children')
           return
         case 'ai-generate-map':
-          await this.generateAIMap()
+          await generateAIMap(this)
           return
         case 'ai-expand-map':
-          await this.expandAIMap()
+          await expandAIMap(this)
           return
         case 'ai-import-file':
           this.pendingImportMode = 'ai'
           this.refs?.importInput.click()
           return
         case 'ai-suggest-children':
-          await this.applyAISuggestNodes(this.selectedNode()?.id ?? '', 'children')
+          await applyAISuggestNodes(this, this.selectedNode()?.id ?? '', 'children')
           return
         case 'ai-suggest-siblings':
-          await this.applyAISuggestNodes(this.selectedNode()?.id ?? '', 'siblings')
+          await applyAISuggestNodes(this, this.selectedNode()?.id ?? '', 'siblings')
           return
         case 'ai-wheel-children': {
           const targetNodeId = this.state.aiWheel.nodeId ?? this.selectedNode()?.id ?? ''
-          this.closeAIWheel()
-          await this.applyAISuggestNodes(targetNodeId, 'children')
+          closeAIWheel(this)
+          await applyAISuggestNodes(this, targetNodeId, 'children')
           return
         }
         case 'ai-wheel-notes': {
           const targetNodeId = this.state.aiWheel.nodeId ?? this.selectedNode()?.id ?? ''
-          this.closeAIWheel()
-          await this.applyAINodeNotesForTargets([targetNodeId], 'replace')
+          closeAIWheel(this)
+          await applyAINodeNotesForTargets(this, [targetNodeId], 'replace')
           return
         }
         case 'ai-wheel-relations': {
           const targetNodeId = this.state.aiWheel.nodeId ?? this.selectedNode()?.id ?? ''
-          this.closeAIWheel()
-          await this.applyAIRelationsForFocus([targetNodeId])
+          closeAIWheel(this)
+          await applyAIRelationsForFocus(this, [targetNodeId])
           return
         }
         case 'ai-wheel-siblings': {
           const targetNodeId = this.state.aiWheel.nodeId ?? this.selectedNode()?.id ?? ''
-          this.closeAIWheel()
-          await this.applyAISuggestNodes(targetNodeId, 'siblings')
+          closeAIWheel(this)
+          await applyAISuggestNodes(this, targetNodeId, 'siblings')
           return
         }
         case 'close-ai-wheel':
-          this.closeAIWheel()
-          this.renderOverlay()
+          closeAIWheel(this)
+          renderOverlay(this)
           return
         case 'create-template-map':
           await this.createTemplateMap(normalizeAITemplateId(argument))
@@ -5074,7 +4720,7 @@ export class MindMapApp {
           }
           return
         case 'test-ai-connection':
-          await this.testAIConnection()
+          await testAIConnection(this)
           return
         case 'collab-generate-key':
           this.generateCollabApiKey()
@@ -5086,7 +4732,7 @@ export class MindMapApp {
           this.clearCollabApiKey()
           return
         case 'collab-save-key':
-          await this.saveCollabApiKey()
+          await saveCollabApiKey(this)
           return
         case 'new-child':
           this.createChildNode(this.selectedNode()?.id ?? 'root')
@@ -5118,8 +4764,8 @@ export class MindMapApp {
           const targetId = this.state.selectedNodeId
           if (targetId) {
             const center = this.nodeClientCenter(targetId)
-            this.openAIWheel(targetId, center.x, center.y)
-            this.renderOverlay()
+            openAIWheel(this, targetId, center.x, center.y)
+            renderOverlay(this)
           }
           return
         }
@@ -5186,7 +4832,7 @@ export class MindMapApp {
     touchDocument(this.state.document)
     this.setStatus('status.relationRemoved')
     this.render()
-    this.scheduleAutosave('status.relationRemovalSaveScheduled')
+    scheduleAutosave(this, 'status.relationRemovalSaveScheduled')
   }
 
   // ---- Region Box methods ----
@@ -5234,7 +4880,7 @@ export class MindMapApp {
     touchDocument(this.state.document)
     this.setStatus('status.regionCreated')
     this.render()
-    this.scheduleAutosave('status.relationSaveScheduled')
+    scheduleAutosave(this, 'status.relationSaveScheduled')
   }
 
   private deleteRegion(regionId: string): void {
@@ -5244,7 +4890,7 @@ export class MindMapApp {
     touchDocument(this.state.document)
     this.setStatus('status.regionDeleted')
     this.render()
-    this.scheduleAutosave('status.deletionSaveScheduled')
+    scheduleAutosave(this, 'status.deletionSaveScheduled')
   }
 
   private setRegionColor(regionId: string, color: NodeColor): void {
@@ -5256,10 +4902,10 @@ export class MindMapApp {
     region.updatedAt = new Date().toISOString()
     touchDocument(this.state.document)
     this.render()
-    this.scheduleAutosave('status.colorSaveScheduled')
+    scheduleAutosave(this, 'status.colorSaveScheduled')
   }
 
-  private nodeOverlapsRegion(node: MindNode, region: RegionBox): boolean {
+  nodeOverlapsRegion(node: MindNode, region: RegionBox): boolean {
     const childCount = childrenOf(this.state.document, node.id).length
     const metrics = this.resolveNodeRenderMetrics(node, childCount)
     const nodeLeft = metrics.position.x - metrics.width / 2
@@ -5288,48 +4934,8 @@ export class MindMapApp {
   }
 
   private applyLiveRegionDrag(_region: RegionBox, _movedNodeIds: string[]): void {
-    this.renderWorkspace()
+    renderWorkspace(this)
   }
-
-  private renderRegions(): string {
-    if (!this.state.document.regions || this.state.document.regions.length === 0) {
-      return ''
-    }
-    const originX = this.workspaceBounds.originX
-    const originY = this.workspaceBounds.originY
-    const HANDLES: readonly string[] = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w']
-    return this.state.document.regions
-      .map((region) => {
-        const palette = resolveNodeColorPalette(region.color)
-        const accent = palette?.accent ?? '#60a5fa'
-        const bgColor = palette ? `rgba(${palette.surfaceRgb.join(',')}, 0.12)` : 'rgba(96,165,250,0.08)'
-        const borderColor = palette ? `rgba(${palette.accentRgb.join(',')}, 0.4)` : 'rgba(96,165,250,0.3)'
-        const isSelected = this.state.selectedRegionId === region.id
-        const selectedClass = isSelected ? ' is-selected' : ''
-        const w = region.width
-        const h = region.height
-        const left = region.position.x - w / 2 + originX
-        const top = region.position.y - h / 2 + originY
-        const regionId = escapeAttribute(region.id)
-        const handles = isSelected
-          ? HANDLES.map(
-              (dir) =>
-                `<div class="region-resizer region-resizer-${dir}" data-region-resizer="${dir}" data-region-resizer-id="${regionId}"></div>`,
-            ).join('')
-          : ''
-        return `<div class="region-box${selectedClass}" data-region-id="${regionId}" data-region-drag="${regionId}" style="
-        left: ${left}px; top: ${top}px; width: ${w}px; height: ${h}px;
-        background: ${bgColor}; border: 2px dashed ${borderColor};
-        --region-accent: ${accent};
-      ">
-        <span class="region-label">${escapeHtml(region.label)}</span>
-        ${handles}
-      </div>`
-      })
-      .join('')
-  }
-
-  // ---- Relation arrow direction ----
 
   private setRelationArrowDirection(relationId: string, direction: ArrowDirection): void {
     const relation = this.state.document.relations.find((r) => r.id === relationId)
@@ -5340,7 +4946,7 @@ export class MindMapApp {
     touchDocument(this.state.document)
     this.setStatus('status.arrowDirectionChanged')
     this.render()
-    this.scheduleAutosave('status.relationSaveScheduled')
+    scheduleAutosave(this, 'status.relationSaveScheduled')
   }
 
   // ---- Connection branching ----
@@ -5350,7 +4956,7 @@ export class MindMapApp {
     if (!relation) return
     this.state.selectedRelationId = relationId
     this.setStatus('status.connectionBranchMode')
-    this.renderWorkspace()
+    renderWorkspace(this)
   }
 
   private clearMidpointDragLongPress(dragState: MidpointDragState | null): void {
@@ -5373,19 +4979,19 @@ export class MindMapApp {
     relation.midpointOffset = midpoint
     relation.updatedAt = new Date().toISOString()
     touchDocument(this.state.document)
-    this.renderWorkspace()
-    this.scheduleAutosave('status.relationSaveScheduled')
+    renderWorkspace(this)
+    scheduleAutosave(this, 'status.relationSaveScheduled')
   }
 
   private addBranchTargetToRelation(relation: RelationEdge, targetNodeId: string): void {
     if (this.relationIncludesTarget(relation, targetNodeId)) {
       this.setStatus('status.relationAlreadyExists')
-      this.renderWorkspace()
+      renderWorkspace(this)
       return
     }
 
     if (!this.findNode(targetNodeId)) {
-      this.renderWorkspace()
+      renderWorkspace(this)
       return
     }
 
@@ -5399,8 +5005,8 @@ export class MindMapApp {
     relation.updatedAt = new Date().toISOString()
     touchDocument(this.state.document)
     this.setStatus('status.connectionBranched')
-    this.renderWorkspace()
-    this.scheduleAutosave('status.relationSaveScheduled')
+    renderWorkspace(this)
+    scheduleAutosave(this, 'status.relationSaveScheduled')
   }
 
   private resolveRelationMidpointPosition(relationId: string): Position | null {
@@ -5466,7 +5072,7 @@ export class MindMapApp {
     this.applyTheme()
     this.setStatus('status.themeSwitched', { theme: themeLabel(this.state.preferences.locale, theme) })
     this.render()
-    this.scheduleAutosave('status.themeSaveScheduled')
+    scheduleAutosave(this, 'status.themeSaveScheduled')
   }
 
   private startRelationMode(): void {
@@ -5487,74 +5093,7 @@ export class MindMapApp {
     this.render()
   }
 
-  private async saveDocument(statusKey: TranslationKey, values?: Record<string, string | number>): Promise<void> {
-    const editorDraft = this.captureActiveNodeEditorDraft()
-    try {
-      const savedDocument = await api.saveMap(this.state.document)
-      this.state.document = savedDocument
-      this.state.currentMapId = savedDocument.id
-      this.state.dirty = false
-      this.lastFrontendSaveTime = savedDocument.meta.lastEditedAt || new Date().toISOString()
-      this.lastKnownEditTime = this.lastFrontendSaveTime
-      await this.refreshMaps()
-      this.maybeSaveAutoSnapshot(savedDocument)
-      this.setStatus(statusKey, values)
-      this.restoreActiveNodeEditorDraft(editorDraft)
-    } catch (error) {
-      this.setStatus('status.saveFailed', { reason: getErrorMessage(error) })
-      this.restoreActiveNodeEditorDraft(editorDraft)
-    }
-
-    this.applyTheme()
-    this.render()
-  }
-
-  private saveSnapshot(mode: 'manual' | 'auto'): void {
-    const mapId = this.state.currentMapId
-    if (!mapId) {
-      return
-    }
-
-    saveLocalSnapshot({
-      mapId,
-      title: this.resolveSnapshotTitle(mode),
-      mapTitle: this.state.document.title,
-      mode,
-      document: this.state.document,
-    })
-
-    if (mode === 'manual') {
-      this.state.snapshotDraftName = ''
-      this.setStatus('status.snapshotSaved')
-      this.render()
-    }
-  }
-
-  private maybeSaveAutoSnapshot(document: MindMapDocument): void {
-    if (!this.state.preferences.interaction.autoSnapshots) {
-      return
-    }
-
-    const mapId = document.id || this.state.currentMapId
-    if (!mapId) {
-      return
-    }
-
-    const latestAutoSnapshot = listLocalSnapshots(mapId).find((snapshot) => snapshot.mode === 'auto')
-    if (latestAutoSnapshot && Date.now() - Date.parse(latestAutoSnapshot.createdAt) < AUTO_SNAPSHOT_MIN_INTERVAL_MS) {
-      return
-    }
-
-    saveLocalSnapshot({
-      mapId,
-      title: this.resolveSnapshotTitle('auto', document.title),
-      mapTitle: document.title,
-      mode: 'auto',
-      document,
-    })
-  }
-
-  private resolveSnapshotTitle(mode: 'manual' | 'auto', documentTitle = this.state.document.title): string {
+  resolveSnapshotTitle(mode: 'manual' | 'auto', documentTitle = this.state.document.title): string {
     const draft = mode === 'manual' ? this.state.snapshotDraftName.trim() : ''
     if (draft) {
       return draft
@@ -5589,19 +5128,7 @@ export class MindMapApp {
     this.applyTheme()
     this.setStatus('status.snapshotRestored')
     this.render()
-    this.scheduleAutosave('status.saved')
-  }
-
-  private async exportMarkdown(): Promise<void> {
-    try {
-      const markdown = await api.exportMarkdown(this.state.document)
-      downloadTextFile(`${slugify(this.state.document.title || 'code-mind')}.md`, markdown)
-      this.setStatus('status.exported')
-    } catch (error) {
-      this.setStatus('status.exportFailed', { reason: getErrorMessage(error) })
-    }
-
-    this.render()
+    scheduleAutosave(this, 'status.saved')
   }
 
   private async importFile(file: File, mode: PendingImportMode = 'auto'): Promise<void> {
@@ -5609,7 +5136,7 @@ export class MindMapApp {
     const isRuleFormat = ['md', 'markdown', 'txt'].includes(extension)
 
     if (mode === 'ai' || (!isRuleFormat && mode === 'auto')) {
-      await this.importFileWithAI(file)
+      await importFileWithAI(this, file)
       return
     }
 
@@ -5630,164 +5157,11 @@ export class MindMapApp {
       this.setStatus('status.imported', { filename: file.name })
       this.applyTheme()
       this.render()
-      await this.saveDocument('status.importedSaved')
+      await saveDocument(this, 'status.importedSaved')
     } catch (error) {
       this.setStatus('status.importFailed', { reason: getErrorMessage(error) })
       this.render()
     }
-  }
-
-  private async importFileWithAI(file: File): Promise<void> {
-    if (this.state.ai.busy) {
-      return
-    }
-
-    this.state.ai.busy = true
-    this.setStatus('status.aiRunning')
-    this.render()
-
-    try {
-      const content = await file.text()
-      const extension = file.name.split('.').pop()?.toLowerCase() ?? ''
-      const result = await api.importDocumentWithAI({
-        fileName: file.name,
-        format: extension,
-        content,
-        instructions: this.state.ai.importInstructions,
-        settings: this.state.preferences.ai,
-        debug: this.buildAIDebugRequest(this.state.ai.importRawRequest),
-      })
-
-      this.state.ai.lastSummary = result.summary
-      this.state.ai.lastModel = result.model
-      this.captureAIDebug('import', result.debug)
-      await this.persistGeneratedDocument(result.document)
-      this.state.ai.open = false
-      this.setStatus('status.aiImported', { filename: file.name, count: result.document.nodes.length })
-    } catch (error) {
-      const reason = getErrorMessage(error)
-      this.captureAIDebug('import', getAIDebugInfo(error), reason)
-      this.setStatus('status.aiFailed', { reason })
-    } finally {
-      this.state.ai.busy = false
-      this.render()
-    }
-  }
-
-  private async refreshMaps(statusKey?: TranslationKey): Promise<void> {
-    const maps = await api.listMaps()
-    this.state.maps = maps
-    if (statusKey) {
-      this.setStatus(statusKey)
-    }
-  }
-
-  private async createMap(): Promise<void> {
-    const title = window.prompt(this.t('dialog.newMapTitle'), this.t('node.untitled')) ?? ''
-    const doc = await api.createMap(title)
-    await this.refreshMaps()
-    this.openLoadedDocument(doc, 'status.mapCreated')
-    this.render()
-  }
-
-  private async openMap(mapId: string): Promise<void> {
-    const doc = await api.loadMap(mapId)
-    this.openLoadedDocument(doc, 'status.loaded')
-    this.render()
-  }
-
-  private async goHome(): Promise<void> {
-    await this.refreshMaps('status.mapListLoaded')
-    this.stopPolling()
-    this.state.view = 'home'
-    this.state.currentMapId = null
-    this.state.snapshotDraftName = ''
-    this.state.ai.open = false
-    this.state.graph.open = false
-    this.stopGraphAnimation()
-    this.destroyMinimap()
-    this.uxEngine.destroy()
-    this.refs = null
-    this.resetHistory()
-    this.render()
-  }
-
-  private async renameMap(mapId: string): Promise<void> {
-    const currentTitle =
-      this.state.currentMapId === mapId ? this.state.document.title : (this.findMapSummary(mapId)?.title ?? '')
-    const nextTitle = window.prompt(this.t('dialog.renameMap'), currentTitle)
-    if (nextTitle === null) {
-      return
-    }
-
-    const doc = await api.renameMap(mapId, nextTitle)
-    await this.refreshMaps()
-    if (this.state.currentMapId === mapId) {
-      this.state.document = doc
-      this.resetHistory()
-    }
-    this.setStatus('status.mapRenamed')
-    this.render()
-  }
-
-  private async deleteMap(mapId: string): Promise<void> {
-    if (!window.confirm(this.t('dialog.deleteMap'))) {
-      return
-    }
-
-    await api.deleteMap(mapId)
-    await this.refreshMaps()
-
-    if (this.state.currentMapId === mapId || this.state.view === 'home') {
-      this.state.view = 'home'
-      this.state.currentMapId = null
-      this.refs = null
-      this.resetHistory()
-    }
-
-    this.setStatus('status.mapDeleted')
-    this.render()
-  }
-
-  private openAIWorkspace(): void {
-    if (this.state.panelAnimating.has('ai')) {
-      return
-    }
-    this.state.ai.open = true
-    this.state.graph.open = false
-    this.stopGraphAnimation()
-    this.setStatus('status.aiPanelOpened')
-    this.render()
-    this.animatePanelIn('ai', this.refs?.aiLayer?.querySelector('.ai-drawer') as HTMLElement | null)
-  }
-
-  private closeAIWorkspace(): void {
-    if (!this.state.ai.open) {
-      return
-    }
-    if (this.state.panelAnimating.has('ai')) {
-      return
-    }
-
-    const drawer = this.refs?.aiLayer?.querySelector('.ai-drawer') as HTMLElement | null
-    this.animatePanelOut('ai', drawer, () => {
-      this.state.ai.open = false
-      this.setStatus('status.aiPanelClosed')
-      this.render()
-    })
-  }
-
-  private toggleAIDebug(): void {
-    this.state.ai.debugOpen = !this.state.ai.debugOpen
-    this.render()
-  }
-
-  private toggleAIRawMode(): void {
-    this.state.ai.rawMode = !this.state.ai.rawMode
-    if (this.state.ai.rawMode) {
-      this.state.ai.debugOpen = true
-    }
-    this.render()
   }
 
   private openGraphOverlay(): void {
@@ -5820,9 +5194,9 @@ export class MindMapApp {
     this.state.graph.rotation = 0.72
     this.state.graph.tilt = 0.18
     this.state.graph.zoom = GRAPH_DEFAULT_ZOOM
-    this.drawGraphScene()
+    drawGraphScene(this)
     this.setStatus('status.graphViewReset')
-    this.renderHeader()
+    renderHeader(this)
   }
 
   private nudgeGraphZoom(direction: -1 | 1): void {
@@ -5837,83 +5211,10 @@ export class MindMapApp {
     }
 
     this.state.graph.zoom = clampedZoom
-    this.drawGraphScene()
+    drawGraphScene(this)
   }
 
-  private async testAIConnection(): Promise<void> {
-    if (this.state.ai.busy || this.state.ai.testing) {
-      return
-    }
-
-    this.state.ai.testing = true
-    this.state.ai.connectionMessage = ''
-    this.state.ai.connectionModel = ''
-    this.state.ai.connectionOK = null
-    this.setStatus('status.aiTestingConnection')
-    this.render()
-
-    try {
-      const result = await api.testAIConnection(this.state.preferences.ai)
-      this.state.ai.connectionOK = result.ok
-      this.state.ai.connectionModel = result.model
-      this.state.ai.connectionMessage = result.message
-      this.setStatus('status.aiConnectionOK', { model: result.model || this.t('common.unknown') })
-    } catch (error) {
-      const reason = getErrorMessage(error)
-      this.state.ai.connectionOK = false
-      this.state.ai.connectionModel = ''
-      this.state.ai.connectionMessage = reason
-      this.setStatus('status.aiConnectionFailed', { reason })
-    } finally {
-      this.state.ai.testing = false
-      this.render()
-    }
-  }
-
-  resolveAINoteTargets(): AINoteTargetState {
-    const selectedNodes = this.selectedNodeIds()
-      .map((nodeId) => this.findNode(nodeId))
-      .filter((node): node is MindNode => Boolean(node))
-    const selectedNonRootNodes = selectedNodes.filter((node) => node.kind !== 'root')
-    if (selectedNonRootNodes.length > 0) {
-      return { mode: 'selection', nodes: selectedNonRootNodes }
-    }
-
-    const nonRootNodes = this.state.document.nodes.filter((node) => node.kind !== 'root')
-    if (nonRootNodes.length > 0) {
-      return { mode: 'all', nodes: nonRootNodes }
-    }
-
-    const root = findRoot(this.state.document)
-    return root.id ? { mode: 'all', nodes: [root] } : { mode: 'all', nodes: [] }
-  }
-
-  private buildAIDebugRequest(rawRequest: string): AIDebugRequest {
-    return {
-      rawMode: this.state.ai.rawMode,
-      rawRequest: this.state.ai.rawMode ? rawRequest : '',
-    }
-  }
-
-  private captureAIDebug(action: AIDebugAction, debug?: AIDebugInfo, errorMessage = ''): void {
-    this.state.ai.lastDebugAction = action
-    this.state.ai.lastDebugInfo = debug ?? null
-    this.state.ai.lastDebugError = errorMessage
-
-    if (errorMessage && debug) {
-      this.state.ai.debugOpen = true
-    }
-    if (!debug) {
-      return
-    }
-
-    const request = debug.upstreamRequest.trim()
-    if (request) {
-      this.storeCapturedRawRequest(action, debug.upstreamRequest)
-    }
-  }
-
-  private storeCapturedRawRequest(action: AIDebugAction, rawRequest: string): void {
+  storeCapturedRawRequest(action: AIDebugAction, rawRequest: string): void {
     switch (action) {
       case 'generate':
         this.state.ai.generateRawRequest = rawRequest
@@ -5932,512 +5233,13 @@ export class MindMapApp {
     }
   }
 
-  private async applyAINodeNotes(mode: 'replace' | 'children' = 'replace'): Promise<void> {
-    const targets = this.resolveAINoteTargets()
-    if (targets.nodes.length === 0) {
-      this.setStatus('status.aiNoNoteTargets')
-      this.render()
-      return
-    }
-
-    await this.applyAINodeNotesForTargets(
-      targets.nodes.map((node) => node.id),
-      mode,
-    )
-  }
-
-  private async applyAINodeNotesForTargets(
-    targetNodeIds: string[],
-    mode: 'replace' | 'children' = 'replace',
-  ): Promise<number> {
-    if (this.state.ai.busy) {
-      return 0
-    }
-
-    this.state.ai.busy = true
-    this.setStatus('status.aiRunning')
-    this.renderHeader()
-    renderAIWorkspace(this)
-
-    try {
-      const result = await api.completeNodeNotes({
-        document: this.state.document,
-        settings: this.state.preferences.ai,
-        targetNodeIds,
-        instructions: this.state.ai.noteInstructions,
-        debug: this.buildAIDebugRequest(this.state.ai.noteRawRequest),
-      })
-      this.state.ai.lastSummary = result.summary
-      this.state.ai.lastModel = result.model
-      this.captureAIDebug('notes', result.debug)
-
-      const nextNotes = result.notes.filter((item) => Boolean(this.findNode(item.id)) && item.note.trim() !== '')
-      if (nextNotes.length === 0) {
-        this.setStatus('status.aiNoNotes')
-        return 0
-      }
-
-      let appliedCount = 0
-
-      if (mode === 'children') {
-        const preparedChildren = nextNotes
-          .map((item) => {
-            const parent = this.findNode(item.id)
-            const normalizedNote = normalizeNodeNote(item.note)
-            if (!parent || !normalizedNote) {
-              return null
-            }
-
-            return { parent, normalizedNote }
-          })
-          .filter((item): item is { parent: MindNode; normalizedNote: string } => Boolean(item))
-
-        if (preparedChildren.length === 0) {
-          this.setStatus('status.aiNoNotes')
-          return 0
-        }
-
-        this.captureHistory()
-        const createdIds: string[] = []
-        for (const { parent, normalizedNote } of preparedChildren) {
-          parent.collapsed = false
-          parent.updatedAt = new Date().toISOString()
-          const childNode = createNode({
-            parentId: parent.id,
-            kind: 'topic',
-            position: nextChildPosition(
-              this.state.document,
-              parent.id,
-              this.state.preferences.appearance.layoutMode,
-              this.state.preferences.appearance.childGapX,
-            ),
-            title: deriveNoteChildTitle(parent, normalizedNote, this.state.preferences.locale),
-            color: normalizeNodeColor(parent.color) || undefined,
-          })
-          childNode.note = normalizedNote
-          this.state.document.nodes.push(childNode)
-          createdIds.push(childNode.id)
-          appliedCount += 1
-        }
-
-        autoLayoutHierarchy(
-          this.state.document,
-          this.state.preferences.appearance.layoutMode,
-          this.state.preferences.appearance.childGapX,
-        )
-        this.setSelection(createdIds, createdIds[0] ?? null)
-      } else {
-        const changes = nextNotes.filter(
-          (item) => normalizeNodeNote(this.findNode(item.id)?.note) !== normalizeNodeNote(item.note),
-        )
-        if (changes.length === 0) {
-          this.setStatus('status.aiNoNotes')
-          return 0
-        }
-
-        this.captureHistory()
-        for (const item of changes) {
-          this.updateNode(item.id, (draft) => {
-            draft.note = normalizeNodeNote(item.note)
-          })
-        }
-        appliedCount = changes.length
-      }
-
-      touchDocument(this.state.document)
-      this.setStatus('status.aiNotesApplied', { count: appliedCount })
-      this.render()
-      this.scheduleAutosave(mode === 'children' ? 'status.childSaveScheduled' : 'status.noteSaveScheduled')
-      return appliedCount
-    } catch (error) {
-      const reason = getErrorMessage(error)
-      this.captureAIDebug('notes', getAIDebugInfo(error), reason)
-      this.setStatus('status.aiFailed', { reason })
-      return 0
-    } finally {
-      this.state.ai.busy = false
-      this.render()
-    }
-  }
-
-  private async applyAIRelations(): Promise<void> {
-    await this.applyAIRelationsForFocus()
-  }
-
-  private async applyAIRelationsForFocus(focusNodeIds?: string[]): Promise<number> {
-    if (this.state.ai.busy) {
-      return 0
-    }
-
-    this.state.ai.busy = true
-    this.setStatus('status.aiRunning')
-    this.renderHeader()
-    renderAIWorkspace(this)
-
-    try {
-      const result = await api.suggestRelations(
-        this.state.document,
-        this.state.preferences.ai,
-        this.state.ai.relationInstructions,
-        focusNodeIds,
-        this.buildAIDebugRequest(this.state.ai.relationRawRequest),
-      )
-      this.state.ai.lastSummary = result.summary
-      this.state.ai.lastModel = result.model
-      this.captureAIDebug('relations', result.debug)
-
-      const nextRelations = result.relations.filter((relation) => {
-        return Boolean(this.findNode(relation.sourceId) && this.findNode(relation.targetId))
-      })
-      if (nextRelations.length === 0) {
-        this.setStatus('status.aiNoRelations')
-        return 0
-      }
-
-      this.captureHistory()
-      const now = new Date().toISOString()
-      const existingPairs = new Set(
-        this.state.document.relations.map((relation) =>
-          normalizedRelationPairKey(relation.sourceId, relation.targetId),
-        ),
-      )
-      let added = 0
-      for (const relation of nextRelations) {
-        const key = normalizedRelationPairKey(relation.sourceId, relation.targetId)
-        if (existingPairs.has(key)) {
-          continue
-        }
-        existingPairs.add(key)
-        this.state.document.relations.push({
-          id: createId('rel'),
-          sourceId: relation.sourceId,
-          targetId: relation.targetId,
-          label: relation.label,
-          createdAt: now,
-          updatedAt: now,
-        })
-        added += 1
-      }
-
-      if (added === 0) {
-        this.setStatus('status.aiNoRelations')
-        return 0
-      }
-
-      touchDocument(this.state.document)
-      this.setStatus('status.aiRelationsApplied', { count: added })
-      this.render()
-      this.scheduleAutosave('status.relationSaveScheduled')
-      return added
-    } catch (error) {
-      const reason = getErrorMessage(error)
-      this.captureAIDebug('relations', getAIDebugInfo(error), reason)
-      this.setStatus('status.aiFailed', { reason })
-      return 0
-    } finally {
-      this.state.ai.busy = false
-      this.render()
-    }
-  }
-
-  private async generateAIMap(): Promise<void> {
-    const topic = this.state.ai.topic.trim()
-    if (!topic) {
-      this.setStatus('status.aiTopicRequired')
-      this.render()
-      return
-    }
-    if (this.state.ai.busy) {
-      return
-    }
-
-    this.state.ai.busy = true
-    this.setStatus('status.aiRunning')
-    this.render()
-
-    try {
-      const result = await api.generateKnowledgeMap({
-        topic,
-        template: this.state.ai.template,
-        instructions: this.state.ai.generationInstructions,
-        settings: this.state.preferences.ai,
-        mode: 'new',
-        debug: this.buildAIDebugRequest(this.state.ai.generateRawRequest),
-      })
-
-      this.state.ai.lastSummary = result.summary
-      this.state.ai.lastModel = result.model
-      this.captureAIDebug('generate', result.debug)
-      await this.persistGeneratedDocument(result.document)
-      this.state.ai.open = false
-      this.setStatus('status.aiMapGenerated', { count: result.document.nodes.length })
-    } catch (error) {
-      const reason = getErrorMessage(error)
-      this.captureAIDebug('generate', getAIDebugInfo(error), reason)
-      this.setStatus('status.aiFailed', { reason })
-    } finally {
-      this.state.ai.busy = false
-      this.render()
-    }
-  }
-
-  private async expandAIMap(): Promise<void> {
-    const previousNodeCount = this.state.document.nodes.length
-    const topic =
-      this.state.ai.topic.trim() || this.state.document.title.trim() || findRoot(this.state.document).title.trim()
-    if (!topic) {
-      this.setStatus('status.aiTopicRequired')
-      this.render()
-      return
-    }
-    if (this.state.ai.busy) {
-      return
-    }
-
-    this.state.ai.busy = true
-    this.setStatus('status.aiRunning')
-    this.render()
-
-    try {
-      const result = await api.generateKnowledgeMap({
-        topic,
-        template: this.state.ai.template,
-        instructions: this.state.ai.generationInstructions,
-        settings: this.state.preferences.ai,
-        mode: 'expand',
-        document: this.state.document,
-        debug: this.buildAIDebugRequest(this.state.ai.generateRawRequest),
-      })
-
-      this.state.ai.lastSummary = result.summary
-      this.state.ai.lastModel = result.model
-      this.captureAIDebug('generate', result.debug)
-      await this.persistExpandedDocument(result.document)
-      this.state.ai.open = false
-      this.setStatus('status.aiMapExpanded', { count: Math.max(result.document.nodes.length - previousNodeCount, 0) })
-    } catch (error) {
-      const reason = getErrorMessage(error)
-      this.captureAIDebug('generate', getAIDebugInfo(error), reason)
-      this.setStatus('status.aiFailed', { reason })
-    } finally {
-      this.state.ai.busy = false
-      this.render()
-    }
-  }
-
-  private async applyAISuggestNodes(targetNodeId: string, mode: 'children' | 'siblings' = 'children'): Promise<number> {
-    const selectedNode = this.findNode(targetNodeId)
-    if (!selectedNode) {
-      this.setStatus('status.aiNoSelection')
-      this.render()
-      return 0
-    }
-    if (mode === 'siblings' && !this.canSuggestSiblings(selectedNode.id)) {
-      this.setStatus('status.aiNoSiblingTarget')
-      this.render()
-      return 0
-    }
-    if (this.state.ai.busy) {
-      return 0
-    }
-
-    this.state.ai.busy = true
-    this.setStatus('status.aiRunning')
-    this.renderHeader()
-
-    try {
-      const result = await api.suggestChildren({
-        document: this.state.document,
-        settings: this.state.preferences.ai,
-        targetNodeId: selectedNode.id,
-        mode,
-        instructions: this.state.ai.noteInstructions,
-        debug: this.buildAIDebugRequest(this.state.ai.noteRawRequest),
-      })
-      this.state.ai.lastSummary = result.summary
-      this.state.ai.lastModel = result.model
-      this.captureAIDebug('notes', result.debug)
-
-      const suggestions = result.suggestions.filter((item) => item.title.trim() !== '')
-      if (suggestions.length === 0) {
-        this.setStatus('status.aiNoSuggestions')
-        return 0
-      }
-
-      this.captureHistory()
-      const createdIds: string[] = []
-      const parentId = mode === 'siblings' ? (selectedNode.parentId ?? '') : selectedNode.id
-      const parentNode = this.findNode(parentId)
-      if (parentNode) {
-        parentNode.collapsed = false
-        parentNode.updatedAt = new Date().toISOString()
-      }
-      selectedNode.collapsed = false
-      selectedNode.updatedAt = new Date().toISOString()
-      for (const suggestion of suggestions) {
-        const childNode = createNode({
-          parentId,
-          kind: 'topic',
-          position:
-            mode === 'siblings'
-              ? nextSiblingPosition(
-                  this.state.document,
-                  selectedNode,
-                  this.state.preferences.appearance.layoutMode,
-                  this.state.preferences.appearance.childGapX,
-                )
-              : nextChildPosition(
-                  this.state.document,
-                  selectedNode.id,
-                  this.state.preferences.appearance.layoutMode,
-                  this.state.preferences.appearance.childGapX,
-                ),
-          title: suggestion.title,
-          color: normalizeNodeColor((parentNode ?? selectedNode).color) || undefined,
-        })
-        childNode.note = suggestion.note
-        this.state.document.nodes.push(childNode)
-        createdIds.push(childNode.id)
-      }
-
-      autoLayoutHierarchy(
-        this.state.document,
-        this.state.preferences.appearance.layoutMode,
-        this.state.preferences.appearance.childGapX,
-      )
-      this.setSelection(createdIds, createdIds[0] ?? null)
-      touchDocument(this.state.document)
-      this.setStatus('status.aiSuggestionsApplied', { count: createdIds.length })
-      this.render()
-      this.scheduleAutosave('status.childSaveScheduled')
-      return createdIds.length
-    } catch (error) {
-      const reason = getErrorMessage(error)
-      this.captureAIDebug('notes', getAIDebugInfo(error), reason)
-      this.setStatus('status.aiFailed', { reason })
-      return 0
-    } finally {
-      this.state.ai.busy = false
-      this.render()
-    }
-  }
-
-  private async applyAIQuickAssist(nodeId: string): Promise<void> {
-    const selectedNode = this.findNode(nodeId)
-    if (!selectedNode) {
-      this.setStatus('status.aiNoSelection')
-      this.render()
-      return
-    }
-    if (this.state.ai.busy) {
-      return
-    }
-
-    const quickConfig = this.state.preferences.interaction
-    if (
-      !quickConfig.aiQuickChildren &&
-      !quickConfig.aiQuickSiblings &&
-      !quickConfig.aiQuickNotes &&
-      !quickConfig.aiQuickRelations
-    ) {
-      this.setStatus('status.aiQuickDisabled')
-      this.render()
-      return
-    }
-
-    const applied: Array<{ kind: 'children' | 'siblings' | 'notes' | 'relations'; count: number }> = []
-    if (quickConfig.aiQuickChildren) {
-      const count = await this.applyAISuggestNodes(nodeId, 'children')
-      applied.push({ kind: 'children', count })
-      if (this.state.status.key === 'status.aiFailed') {
-        return
-      }
-    }
-    if (quickConfig.aiQuickSiblings && this.canSuggestSiblings(nodeId)) {
-      const count = await this.applyAISuggestNodes(nodeId, 'siblings')
-      applied.push({ kind: 'siblings', count })
-      if (this.state.status.key === 'status.aiFailed') {
-        return
-      }
-    }
-    if (quickConfig.aiQuickNotes) {
-      const count = await this.applyAINodeNotesForTargets([nodeId], 'replace')
-      applied.push({ kind: 'notes', count })
-      if (this.state.status.key === 'status.aiFailed') {
-        return
-      }
-    }
-    if (quickConfig.aiQuickRelations) {
-      const count = await this.applyAIRelationsForFocus([nodeId])
-      applied.push({ kind: 'relations', count })
-      if (this.state.status.key === 'status.aiFailed') {
-        return
-      }
-    }
-
-    const summary = applied.filter((item) => item.count > 0)
-    if (summary.length === 0) {
-      this.setStatus('status.aiQuickNoChanges')
-      this.render()
-      return
-    }
-
-    this.setStatus('status.aiQuickApplied', {
-      summary: summary.map((item) => `${this.aiQuickKindLabel(item.kind)} ${item.count}`).join(' / '),
-    })
-    this.render()
-  }
-
   private async createTemplateMap(templateId: AITemplateId): Promise<void> {
     const templateDocument = createTemplateDocument(templateId, this.state.preferences.locale)
-    await this.persistGeneratedDocument(templateDocument)
+    await persistGeneratedDocument(this, templateDocument)
     this.state.ai.lastSummary = promptTemplateCopy(templateId, this.state.preferences.locale)
     this.state.ai.open = false
     this.setStatus('status.templateMapCreated', { title: templateDocument.title })
     this.render()
-  }
-
-  private async persistGeneratedDocument(document: MindMapDocument): Promise<void> {
-    const created = await api.createMap(document.title)
-    const nextDocument: MindMapDocument = {
-      ...document,
-      id: created.id,
-      meta: created.meta,
-    }
-    const saved = await api.saveMap(nextDocument)
-    await this.refreshMaps()
-    this.openLoadedDocument(saved, 'status.loaded')
-  }
-
-  private async persistExpandedDocument(document: MindMapDocument): Promise<void> {
-    const baseDocument = this.state.document
-    const nextDocument: MindMapDocument = {
-      ...document,
-      id: baseDocument.id,
-      meta: baseDocument.meta,
-    }
-    const saved = await api.saveMap(nextDocument)
-    await this.refreshMaps()
-    this.openLoadedDocument(saved, 'status.loaded')
-  }
-
-  private openLoadedDocument(document: MindMapDocument, statusKey: TranslationKey): void {
-    this.state.document = document
-    this.state.currentMapId = document.id
-    this.state.snapshotDraftName = ''
-    this.state.view = 'map'
-    this.state.ai.open = false
-    this.state.graph.open = false
-    this.stopGraphAnimation()
-    this.setSelection([findRoot(document).id], findRoot(document).id)
-    this.state.connectSourceNodeId = null
-    this.state.resize = null
-    this.state.regionResize = null
-    this.didInitializeViewport = false
-    this.refs = null
-    this.resetHistory()
-    this.setStatus(statusKey)
-    this.startPolling()
   }
 
   private focusNodeFromGraph(nodeId: string): void {
@@ -6543,7 +5345,7 @@ export class MindMapApp {
           touchDocument(this.state.document)
           this.setStatus('status.layoutUpdated', { count: movedNodes })
           this.render()
-          this.scheduleAutosave('status.layoutSaveScheduled')
+          scheduleAutosave(this, 'status.layoutSaveScheduled')
           return
         }
         this.setStatus('status.appearanceUpdated')
@@ -6565,7 +5367,7 @@ export class MindMapApp {
           touchDocument(this.state.document)
           this.setStatus('status.layoutUpdated', { count: movedNodes })
           this.render()
-          this.scheduleAutosave('status.layoutSaveScheduled')
+          scheduleAutosave(this, 'status.layoutSaveScheduled')
           return
         }
         this.setStatus('status.appearanceUpdated')
@@ -6748,7 +5550,7 @@ export class MindMapApp {
         this.updatePreferences((preferences) => {
           preferences.ai.provider = value === 'openai-compatible' ? 'openai-compatible' : 'lmstudio'
         })
-        this.resetAIConnectionFeedback()
+        resetAIConnectionFeedback(this)
         this.setStatus('status.aiSettingsSaved')
         this.render()
         return
@@ -6756,7 +5558,7 @@ export class MindMapApp {
         this.updatePreferences((preferences) => {
           preferences.ai.baseUrl = value.trim() || DEFAULT_LM_STUDIO_URL
         })
-        this.resetAIConnectionFeedback()
+        resetAIConnectionFeedback(this)
         this.setStatus('status.aiSettingsSaved')
         this.render()
         return
@@ -6764,7 +5566,7 @@ export class MindMapApp {
         this.updatePreferences((preferences) => {
           preferences.ai.apiKey = value.trim()
         })
-        this.resetAIConnectionFeedback()
+        resetAIConnectionFeedback(this)
         this.setStatus('status.aiSettingsSaved')
         this.render()
         return
@@ -6772,7 +5574,7 @@ export class MindMapApp {
         this.updatePreferences((preferences) => {
           preferences.ai.model = value.trim()
         })
-        this.resetAIConnectionFeedback()
+        resetAIConnectionFeedback(this)
         this.setStatus('status.aiSettingsSaved')
         this.render()
         return
@@ -6787,7 +5589,7 @@ export class MindMapApp {
         this.updatePreferences((preferences) => {
           preferences.ai.timeoutSeconds = normalizeAITimeoutSeconds(value)
         })
-        this.resetAIConnectionFeedback()
+        resetAIConnectionFeedback(this)
         this.setStatus('status.aiSettingsSaved')
         this.render()
         return
@@ -6830,7 +5632,7 @@ export class MindMapApp {
     const mapId = this.state.currentMapId || this.state.document.id
     if (!this.collabApiKey) {
       this.generateCollabApiKey()
-      await this.saveCollabApiKey()
+      await saveCollabApiKey(this)
     }
     const token = await api.createShareToken({
       mapId,
@@ -6889,17 +5691,6 @@ export class MindMapApp {
     renderSettings(this)
   }
 
-  private async saveCollabApiKey(): Promise<void> {
-    try {
-      api.setOwnerApiKey(this.collabApiKey)
-      await api.saveSettings({ collabApiKey: this.collabApiKey })
-      this.setStatus('settings.collabApiKeySaved')
-    } catch (error) {
-      this.setStatus('settings.collabApiKeySaveFailed', { reason: getErrorMessage(error) })
-    }
-    this.render()
-  }
-
   private async loadCollabApiKey(): Promise<void> {
     try {
       const settings = await api.getSettings()
@@ -6910,110 +5701,7 @@ export class MindMapApp {
     }
   }
 
-  private startPolling(): void {
-    this.stopPolling()
-    if (!this.state.currentMapId) {
-      return
-    }
-    this.lastKnownEditTime = this.state.document.meta.lastEditedAt || new Date().toISOString()
-    this.lastFrontendSaveTime = this.lastKnownEditTime
-    this.pollHandle = window.setInterval(() => {
-      void this.pollForAPIChanges()
-    }, 2000)
-  }
-
-  private stopPolling(): void {
-    if (this.pollHandle !== null) {
-      window.clearInterval(this.pollHandle)
-      this.pollHandle = null
-    }
-  }
-
-  private async pollForAPIChanges(): Promise<void> {
-    const mapId = this.state.currentMapId
-    if (!mapId || this.state.view !== 'map') {
-      return
-    }
-
-    try {
-      const result = await api.pollMap(mapId, this.lastKnownEditTime)
-      if (!result.modifiedViaAPI) {
-        return
-      }
-
-      // Check if the modification is newer than our last frontend save to avoid loops
-      const modifiedAt = new Date(result.lastEditedAt).getTime()
-      const lastSave = new Date(this.lastFrontendSaveTime).getTime()
-      if (modifiedAt <= lastSave) {
-        return
-      }
-
-      // Store current node IDs before reload
-      const previousNodeIds = new Set(this.state.document.nodes.map((n) => n.id))
-
-      // Reload the document from the server
-      const doc = await api.loadMap(mapId)
-
-      // Find newly added nodes
-      const newNodeIds = new Set<string>()
-      for (const node of doc.nodes) {
-        if (!previousNodeIds.has(node.id)) {
-          newNodeIds.add(node.id)
-        }
-      }
-
-      // Update the document
-      this.state.document = doc
-      this.state.currentMapId = doc.id
-      this.lastKnownEditTime = doc.meta.lastEditedAt || new Date().toISOString()
-      this.lastFrontendSaveTime = this.lastKnownEditTime
-
-      // Auto-tidy subtrees that received new children
-      if (newNodeIds.size > 0) {
-        const parentIdsToTidy = new Set<string>()
-        for (const node of doc.nodes) {
-          if (newNodeIds.has(node.id) && node.parentId) {
-            parentIdsToTidy.add(node.parentId)
-          }
-        }
-        for (const parentId of parentIdsToTidy) {
-          tidySubtree(doc, parentId, this.state.preferences.appearance.childGapX)
-        }
-        if (parentIdsToTidy.size > 0) {
-          touchDocument(this.state.document)
-        }
-      }
-
-      // Show toast notification
-      this.showAPIToast('🤖 AI 已更新脑图')
-
-      // Re-render
-      this.render()
-
-      // Apply animation classes to new nodes after render
-      if (newNodeIds.size > 0) {
-        requestAnimationFrame(() => {
-          for (const nodeId of newNodeIds) {
-            const el = this.rootEl.querySelector<HTMLElement>(`[data-node-id="${nodeId}"]`)
-            if (el) {
-              el.classList.add('node-api-new')
-              el.addEventListener(
-                'animationend',
-                () => {
-                  el.classList.remove('node-api-new')
-                },
-                { once: true },
-              )
-            }
-          }
-        })
-      }
-    } catch {
-      // Silently ignore polling errors to avoid spamming the user
-    }
-  }
-
-  private showAPIToast(message: string): void {
+  showAPIToast(message: string): void {
     // Remove existing toast if any
     const existing = document.querySelector('.api-toast')
     if (existing) {
@@ -7032,7 +5720,7 @@ export class MindMapApp {
 
   // === Toast Queue Manager ===
 
-  private ensureToastContainer(): HTMLElement {
+  ensureToastContainer(): HTMLElement {
     if (this.toastContainer && document.body.contains(this.toastContainer)) {
       return this.toastContainer
     }
@@ -7053,10 +5741,10 @@ export class MindMapApp {
     }
 
     this.state.toastQueue.push(item)
-    this.renderToasts()
+    renderToasts(this)
   }
 
-  private dismissToast(id: string): void {
+  dismissToast(id: string): void {
     const item = this.state.toastQueue.find((t) => t.id === id)
     if (!item || !item.element) return
 
@@ -7076,54 +5764,11 @@ export class MindMapApp {
     const onAnimEnd = (): void => {
       el.remove()
       this.state.toastQueue = this.state.toastQueue.filter((t) => t.id !== id)
-      this.renderToasts()
+      renderToasts(this)
     }
     el.addEventListener('animationend', onAnimEnd, { once: true })
     // Safety timeout in case animationend doesn't fire
     window.setTimeout(onAnimEnd, 250)
-  }
-
-  private renderToasts(): void {
-    const container = this.ensureToastContainer()
-    const maxVisible = 3
-    const autoDismissMs = 2500
-
-    // If more than maxVisible, dismiss oldest immediately
-    while (this.state.toastQueue.length > maxVisible) {
-      const oldest = this.state.toastQueue[0]
-      if (oldest) {
-        // Remove timer
-        const timer = this.toastTimers.get(oldest.id)
-        if (timer != null) {
-          window.clearTimeout(timer)
-          this.toastTimers.delete(oldest.id)
-        }
-        // Remove element immediately
-        if (oldest.element) {
-          oldest.element.remove()
-        }
-        this.state.toastQueue.shift()
-      }
-    }
-
-    // Render each toast that doesn't have an element yet
-    for (const item of this.state.toastQueue) {
-      if (item.element && container.contains(item.element)) continue
-
-      const el = document.createElement('div')
-      el.className = 'toast-item toast-entering'
-      el.textContent = item.message
-      el.dataset.toastId = item.id
-      container.appendChild(el)
-      item.element = el
-
-      // Schedule auto-dismiss after 2500ms
-      const timer = window.setTimeout(() => {
-        this.toastTimers.delete(item.id)
-        this.dismissToast(item.id)
-      }, autoDismissMs)
-      this.toastTimers.set(item.id, timer)
-    }
   }
 
   private setLocale(locale: Locale, announce: boolean): void {
@@ -7159,13 +5804,6 @@ export class MindMapApp {
     this.state.topPanelCollapsed = !this.state.topPanelCollapsed
     this.setStatus(this.state.topPanelCollapsed ? 'status.topPanelClosed' : 'status.topPanelOpened')
     this.render()
-  }
-
-  private resetAIConnectionFeedback(): void {
-    this.state.ai.testing = false
-    this.state.ai.connectionOK = null
-    this.state.ai.connectionMessage = ''
-    this.state.ai.connectionModel = ''
   }
 
   private toggleInspector(): void {
@@ -7213,7 +5851,7 @@ export class MindMapApp {
     })
   }
 
-  private animatePanelIn(panelId: string, element: HTMLElement | null): void {
+  animatePanelIn(panelId: string, element: HTMLElement | null): void {
     if (!element) {
       return
     }
@@ -7236,7 +5874,7 @@ export class MindMapApp {
     }, safetyTimeout)
   }
 
-  private animatePanelOut(panelId: string, element: HTMLElement | null, onComplete: () => void): void {
+  animatePanelOut(panelId: string, element: HTMLElement | null, onComplete: () => void): void {
     if (!element) {
       onComplete()
       return
@@ -7270,20 +5908,6 @@ export class MindMapApp {
 
   // === Guide Overlay ===
 
-  private updateCanvasGuide(): void {
-    if (this.state.guideOverlay.canvasGuideDismissed) {
-      this.state.guideOverlay.canvasGuideVisible = false
-      return
-    }
-    const root = this.state.document.nodes.find((n) => n.kind === 'root')
-    if (!root) {
-      this.state.guideOverlay.canvasGuideVisible = false
-      return
-    }
-    const hasChildren = this.state.document.nodes.some((n) => n.parentId === root.id)
-    this.state.guideOverlay.canvasGuideVisible = !hasChildren
-  }
-
   private dismissCanvasGuide(): void {
     if (!this.state.guideOverlay.canvasGuideVisible) {
       return
@@ -7295,28 +5919,11 @@ export class MindMapApp {
       window.setTimeout(() => {
         this.state.guideOverlay.canvasGuideVisible = false
         this.state.guideOverlay.canvasGuideDismissed = true
-        this.renderCanvasGuide()
+        renderCanvasGuide(this)
       }, 300)
     } else {
       this.state.guideOverlay.canvasGuideVisible = false
       this.state.guideOverlay.canvasGuideDismissed = true
-    }
-  }
-
-  private renderCanvasGuide(): void {
-    if (!this.refs) {
-      return
-    }
-    const existing = this.refs.scroll.querySelector('.canvas-guide')
-    if (this.state.guideOverlay.canvasGuideVisible) {
-      if (!existing) {
-        const guide = document.createElement('div')
-        guide.className = 'canvas-guide'
-        guide.textContent = this.t('guide.canvasHint')
-        this.refs.scroll.appendChild(guide)
-      }
-    } else {
-      existing?.remove()
     }
   }
 
@@ -7390,11 +5997,11 @@ export class MindMapApp {
     return findNode(this.state.document, nodeId)
   }
 
-  private findMapSummary(mapId: string): MindMapSummary | undefined {
+  findMapSummary(mapId: string): MindMapSummary | undefined {
     return this.state.maps.find((item) => item.id === mapId)
   }
 
-  private applyCanvasMetrics(
+  applyCanvasMetrics(
     bounds = getWorkspaceBounds(this.state.document),
     preserveViewportPosition = this.didInitializeViewport,
   ): void {
@@ -7452,11 +6059,11 @@ export class MindMapApp {
     this.historyFuture = []
   }
 
-  private captureHistory(): void {
+  captureHistory(): void {
     this.pushHistorySnapshot(this.createHistorySnapshot())
   }
 
-  private resetHistory(): void {
+  resetHistory(): void {
     this.historyPast = []
     this.historyFuture = []
   }
@@ -7494,7 +6101,7 @@ export class MindMapApp {
     this.applyHistorySnapshot(snapshot)
     this.setStatus('status.undoApplied')
     this.render()
-    this.scheduleAutosave('status.saved')
+    scheduleAutosave(this, 'status.saved')
   }
 
   private redo(): void {
@@ -7511,7 +6118,7 @@ export class MindMapApp {
     this.applyHistorySnapshot(snapshot)
     this.setStatus('status.redoApplied')
     this.render()
-    this.scheduleAutosave('status.saved')
+    scheduleAutosave(this, 'status.saved')
   }
 
   private scheduleLiveNodeUpdate(nodeId: string, includeDimensions = false): void {
@@ -7562,7 +6169,7 @@ export class MindMapApp {
     const originChanged =
       bounds.originX !== this.workspaceBounds.originX || bounds.originY !== this.workspaceBounds.originY
     if (originChanged) {
-      this.renderWorkspace()
+      renderWorkspace(this)
       return
     }
 
@@ -7622,19 +6229,7 @@ export class MindMapApp {
     this.render()
   }
 
-  private scheduleAutosave(statusKey: TranslationKey, values?: Record<string, string | number>): void {
-    if (this.autosaveHandle !== null) {
-      window.clearTimeout(this.autosaveHandle)
-    }
-
-    this.state.dirty = true
-
-    this.autosaveHandle = window.setTimeout(() => {
-      void this.saveDocument(statusKey, values)
-    }, 700)
-  }
-
-  private setStatus(key: TranslationKey, values?: Record<string, string | number>): void {
+  setStatus(key: TranslationKey, values?: Record<string, string | number>): void {
     this.state.status = { key, values }
   }
 
@@ -7642,7 +6237,7 @@ export class MindMapApp {
     this.refs?.scroll.classList.toggle('is-panning', active)
   }
 
-  private updateZoomControlTitles(): void {
+  updateZoomControlTitles(): void {
     if (!this.refs) {
       return
     }
@@ -7773,7 +6368,7 @@ export class MindMapApp {
     }
   }
 
-  private updateCanvasViewportView(): void {
+  updateCanvasViewportView(): void {
     if (!this.refs) {
       return
     }
@@ -7784,61 +6379,10 @@ export class MindMapApp {
     this.updateContextToolbar()
   }
 
-  private renderGraphResultsList(): string {
-    const matches = this.findGraphMatches(this.state.graph.search).slice(0, 8)
-    if (matches.length === 0) {
-      return `<p class="empty-state">${this.t('graph.emptySearch')}</p>`
-    }
-
-    return matches
-      .map((node) => {
-        const active = node.id === this.state.graph.selectedNodeId
-        return `<button type="button" class="graph-result-item ${active ? 'is-active' : ''}" data-graph-node-result="${escapeAttribute(node.id)}">${escapeHtml(shorten(node.title, 36))}</button>`
-      })
-      .join('')
-  }
-
-  private renderGraphSummaryContent(): string {
-    const selectedNode = this.findNode(this.state.graph.selectedNodeId ?? '')
-    if (!selectedNode) {
-      return `
-        <p class="section-label">${this.t('graph.selection')}</p>
-        <h3>${this.t('common.unknownNode')}</h3>
-        <p class="inspector-copy">${this.t('graph.selectionHint')}</p>
-      `
-    }
-
-    const relatedRelations = connectedRelations(this.state.document, selectedNode.id)
-    const descendants = descendantIds(this.state.document, selectedNode.id)
-    return `
-      <p class="section-label">${this.t('graph.selection')}</p>
-      <h3>${escapeHtml(selectedNode.title)}</h3>
-      <div class="metric-row">
-        <span class="metric-chip">${kindLabel(this.state.preferences.locale, selectedNode.kind)}</span>
-        <span class="metric-chip">${this.t('inspector.children', { value: childrenOf(this.state.document, selectedNode.id).length })}</span>
-        <span class="metric-chip">${this.t('inspector.relationsCount', { value: relatedRelations.length })}</span>
-      </div>
-      <p class="inspector-copy">${this.t('graph.summaryCopy', { value: descendants.length })}</p>
-      <p class="inspector-copy">${this.t('graph.doubleClickHint')}</p>
-    `
-  }
-
-  private updateGraphSummaryPanel(): void {
-    const summary = this.rootEl.querySelector<HTMLElement>('[data-graph-summary]')
-    if (summary) {
-      summary.innerHTML = this.renderGraphSummaryContent()
-    }
-
-    const resultList = this.rootEl.querySelector<HTMLElement>('[data-graph-result-list]')
-    if (resultList) {
-      resultList.innerHTML = this.renderGraphResultsList()
-    }
-  }
-
-  private syncGraphAnimation(): void {
+  syncGraphAnimation(): void {
     if (!this.state.graph.open || !this.state.graph.autoRotate) {
       this.stopGraphAnimation()
-      this.drawGraphScene()
+      drawGraphScene(this)
       return
     }
 
@@ -7853,204 +6397,19 @@ export class MindMapApp {
       }
 
       this.state.graph.rotation = (this.state.graph.rotation + 0.006) % (Math.PI * 2)
-      this.drawGraphScene()
+      drawGraphScene(this)
       this.graphAnimationHandle = window.requestAnimationFrame(animate)
     }
 
     this.graphAnimationHandle = window.requestAnimationFrame(animate)
   }
 
-  private stopGraphAnimation(): void {
+  stopGraphAnimation(): void {
     if (this.graphAnimationHandle !== null) {
       window.cancelAnimationFrame(this.graphAnimationHandle)
       this.graphAnimationHandle = null
     }
     this.graphHitNodes = []
-  }
-
-  private drawGraphScene(): void {
-    if (!this.state.graph.open) {
-      return
-    }
-
-    this.updateGraphZoomIndicator()
-    const canvas = this.rootEl.querySelector<HTMLCanvasElement>('[data-graph-canvas]')
-    if (!canvas) {
-      return
-    }
-
-    const context = canvas.getContext('2d')
-    if (!context) {
-      return
-    }
-
-    const width = Math.max(canvas.clientWidth, 320)
-    const height = Math.max(canvas.clientHeight, 240)
-    const dpr = Math.max(window.devicePixelRatio || 1, 1)
-    if (canvas.width !== Math.round(width * dpr) || canvas.height !== Math.round(height * dpr)) {
-      canvas.width = Math.round(width * dpr)
-      canvas.height = Math.round(height * dpr)
-    }
-    context.setTransform(dpr, 0, 0, dpr, 0, 0)
-    context.clearRect(0, 0, width, height)
-
-    const frame = buildGraphFrame(
-      this.state.document,
-      width,
-      height,
-      this.state.graph.rotation,
-      this.state.graph.tilt,
-      this.state.graph.zoom,
-      this.state.graph.search,
-      this.state.graph.selectedNodeId,
-    )
-    this.graphHitNodes = frame.hitNodes
-
-    const background = context.createLinearGradient(0, 0, width, height)
-    background.addColorStop(0, 'rgba(15, 23, 42, 0.96)')
-    background.addColorStop(1, 'rgba(12, 18, 32, 0.96)')
-    context.fillStyle = background
-    context.fillRect(0, 0, width, height)
-
-    const atmosphere = context.createRadialGradient(
-      width / 2,
-      height * 0.56,
-      0,
-      width / 2,
-      height * 0.56,
-      Math.max(width, height) * 0.58,
-    )
-    atmosphere.addColorStop(0, 'rgba(99, 102, 241, 0.12)')
-    atmosphere.addColorStop(0.52, 'rgba(56, 189, 248, 0.05)')
-    atmosphere.addColorStop(1, 'rgba(15, 23, 42, 0)')
-    context.fillStyle = atmosphere
-    context.fillRect(0, 0, width, height)
-
-    context.strokeStyle = 'rgba(148, 163, 184, 0.08)'
-    for (let index = 0; index < width; index += 48) {
-      context.beginPath()
-      context.moveTo(index, 0)
-      context.lineTo(index, height)
-      context.stroke()
-    }
-    for (let index = 0; index < height; index += 48) {
-      context.beginPath()
-      context.moveTo(0, index)
-      context.lineTo(width, index)
-      context.stroke()
-    }
-
-    context.lineCap = 'round'
-    context.lineJoin = 'round'
-    for (const edge of frame.edges) {
-      context.beginPath()
-      context.strokeStyle =
-        edge.type === 'relation' ? `rgba(253, 186, 116, ${edge.opacity})` : `rgba(147, 197, 253, ${edge.opacity})`
-      context.lineWidth = edge.lineWidth
-      context.moveTo(edge.x1, edge.y1)
-      context.lineTo(edge.x2, edge.y2)
-      context.stroke()
-    }
-
-    context.textAlign = 'center'
-    context.textBaseline = 'middle'
-    for (const node of frame.nodes) {
-      const nodePalette = resolveNodeColorPalette(node.color)
-      const occlusionRadius = node.radius + Math.max(3.2, node.lineWidth * 1.25)
-
-      // Draw region ring if node is inside a region
-      const regions = this.state.document.regions ?? []
-      for (const region of regions) {
-        const docNode = this.findNode(node.id)
-        if (!docNode) continue
-        if (this.nodeOverlapsRegion(docNode, region)) {
-          const regionPalette = resolveNodeColorPalette(region.color)
-          if (regionPalette) {
-            context.save()
-            context.beginPath()
-            context.strokeStyle = rgbaFromRgb(regionPalette.accentRgb, 0.55)
-            context.lineWidth = Math.max(2.5, node.lineWidth * 1.1)
-            context.arc(node.x, node.y, occlusionRadius + 4, 0, Math.PI * 2)
-            context.stroke()
-            context.restore()
-          }
-          break
-        }
-      }
-
-      context.save()
-      context.beginPath()
-      context.fillStyle = nodePalette
-        ? rgbaFromRgb(nodePalette.plateRgb, node.occlusionOpacity)
-        : `rgba(9, 14, 24, ${node.occlusionOpacity})`
-      context.arc(node.x, node.y, occlusionRadius, 0, Math.PI * 2)
-      context.fill()
-      context.restore()
-
-      context.save()
-      context.beginPath()
-      context.shadowColor = node.selected
-        ? 'rgba(129, 140, 248, 0.48)'
-        : node.highlighted
-          ? 'rgba(96, 165, 250, 0.34)'
-          : nodePalette
-            ? rgbaFromRgb(nodePalette.glowRgb, Math.min(0.34, node.opacity * 0.3))
-            : `rgba(56, 189, 248, ${Math.min(0.22, node.opacity * 0.22)})`
-      context.shadowBlur = node.glow
-      context.fillStyle = node.selected
-        ? 'rgba(129, 140, 248, 0.95)'
-        : node.highlighted
-          ? 'rgba(96, 165, 250, 0.92)'
-          : nodePalette
-            ? rgbaFromRgb(nodePalette.surfaceRgb, node.surfaceOpacity)
-            : `rgba(30, 41, 59, ${node.surfaceOpacity})`
-      context.strokeStyle = node.selected
-        ? 'rgba(199, 210, 254, 0.95)'
-        : nodePalette
-          ? rgbaFromRgb(nodePalette.accentRgb, Math.max(0.42, node.strokeOpacity))
-          : `rgba(148, 163, 184, ${node.strokeOpacity})`
-      context.lineWidth = node.lineWidth
-      context.arc(node.x, node.y, node.radius, 0, Math.PI * 2)
-      context.fill()
-      context.stroke()
-      context.restore()
-
-      context.font = `${node.fontSize}px "Segoe UI", sans-serif`
-      const labelWidth = context.measureText(node.label).width
-      const labelPlateWidth = Math.max(node.radius * 1.8, labelWidth + 24)
-      const labelPlateHeight = Math.max(node.radius * 0.96, node.fontSize + 12)
-      context.save()
-      context.beginPath()
-      traceRoundedRectPath(
-        context,
-        node.x - labelPlateWidth / 2,
-        node.y - labelPlateHeight / 2,
-        labelPlateWidth,
-        labelPlateHeight,
-        Math.min(labelPlateHeight / 2, 14),
-      )
-      context.fillStyle = node.selected
-        ? 'rgba(79, 70, 229, 0.92)'
-        : node.highlighted
-          ? 'rgba(37, 99, 235, 0.86)'
-          : nodePalette
-            ? rgbaFromRgb(nodePalette.plateRgb, Math.max(0.9, node.surfaceOpacity))
-            : `rgba(15, 23, 42, ${Math.max(0.84, node.surfaceOpacity)})`
-      context.strokeStyle = node.selected
-        ? 'rgba(199, 210, 254, 0.94)'
-        : nodePalette
-          ? rgbaFromRgb(nodePalette.accentRgb, Math.max(0.52, node.strokeOpacity * 0.88))
-          : `rgba(148, 163, 184, ${Math.max(0.42, node.strokeOpacity * 0.84)})`
-      context.lineWidth = Math.max(1, node.lineWidth * 0.88)
-      context.fill()
-      context.stroke()
-      context.restore()
-
-      context.fillStyle = nodePalette
-        ? applyAlphaToHex(nodePalette.text, node.textOpacity)
-        : `rgba(241, 245, 249, ${node.textOpacity})`
-      context.fillText(node.label, node.x, node.y)
-    }
   }
 
   private selectGraphNodeAtPoint(clientX: number, clientY: number): string | null {
@@ -8076,12 +6435,12 @@ export class MindMapApp {
     }
 
     this.state.graph.selectedNodeId = matched.id
-    this.updateGraphSummaryPanel()
-    this.drawGraphScene()
+    updateGraphSummaryPanel(this)
+    drawGraphScene(this)
     return matched.id
   }
 
-  private findGraphMatches(query: string): MindNode[] {
+  findGraphMatches(query: string): MindNode[] {
     const normalized = query.trim().toLowerCase()
     if (!normalized) {
       return this.state.document.nodes.slice(0, 8)
@@ -8094,22 +6453,13 @@ export class MindMapApp {
     return translate(this.state.preferences.locale, key, values)
   }
 
-  private onboardingOpen(): boolean {
+  onboardingOpen(): boolean {
     return !this.state.preferences.onboardingCompleted
   }
 
-  private overlayBlocksCanvas(): boolean {
+  overlayBlocksCanvas(): boolean {
     return this.onboardingOpen() || this.state.settingsOpen || this.state.ai.open || this.state.graph.open
   }
-
-  private updateGraphZoomIndicator(): void {
-    const indicator = this.rootEl.querySelector<HTMLElement>('[data-graph-zoom-value]')
-    if (indicator) {
-      indicator.textContent = this.t('graph.zoomValue', { value: Math.round(this.state.graph.zoom * 100) })
-    }
-  }
-
-  // --- Minimap ---
 
   private initMinimap(): void {
     if (this.minimapRenderer) return
@@ -8175,7 +6525,7 @@ export class MindMapApp {
     })
   }
 
-  private destroyMinimap(): void {
+  destroyMinimap(): void {
     if (this.minimapRenderer) {
       this.minimapRenderer.destroy()
       this.minimapRenderer = null
@@ -8376,7 +6726,7 @@ export class MindMapApp {
     }
   }
 
-  private applyTheme(): void {
+  applyTheme(): void {
     const theme = this.state.view === 'home' ? 'dark' : this.state.document.theme
     document.documentElement.dataset.theme = theme
     document.documentElement.style.colorScheme = theme

@@ -1,4 +1,5 @@
 import type { MindMapApp } from '../app'
+import { aiDebugActionLabel, aiNoteChildActionLabel, aiStatusTone, resolveAINoteTargets } from '../ai/actions'
 import { AI_TEMPLATES, promptTemplateCopy, templateLabel } from '../templates'
 import { escapeAttribute, escapeHtml } from '../utils'
 
@@ -15,7 +16,7 @@ export function renderAIWorkspace(app: MindMapApp): void {
 
   const examplePrompt = promptTemplateCopy(app.state.ai.template, app.state.preferences.locale)
   const aiStatusNotice = renderAIStatusNotice(app)
-  const noteTargets = app.resolveAINoteTargets()
+  const noteTargets = resolveAINoteTargets(app)
   const rawModeLabel = `${aiDebugText(app, 'rawMode')}: ${app.t(app.state.ai.rawMode ? 'common.on' : 'common.off')}`
   app.refs.aiLayer.className = 'ai-layer is-visible'
   app.refs.aiLayer.innerHTML = `
@@ -103,7 +104,7 @@ export function renderAIWorkspace(app: MindMapApp): void {
           </label>
           <div class="ai-action-row">
             <button type="button" class="action-button" data-command="ai-complete-node-notes" ${app.state.ai.busy ? 'disabled' : ''}>${app.t('ai.notesAction')}</button>
-            <button type="button" class="chip-button" data-command="ai-complete-node-notes-as-children" ${app.state.ai.busy ? 'disabled' : ''}>${app.aiNoteChildActionLabel()}</button>
+            <button type="button" class="chip-button" data-command="ai-complete-node-notes-as-children" ${app.state.ai.busy ? 'disabled' : ''}>${aiNoteChildActionLabel(app)}</button>
           </div>
           ${renderAIRawEditor(app, 'noteRawRequest', app.state.ai.noteRawRequest)}
         </section>
@@ -171,7 +172,7 @@ export function renderAIDebugPanel(app: MindMapApp): string {
   }
 
   const debug = app.state.ai.lastDebugInfo
-  const actionLabel = app.aiDebugActionLabel(app.state.ai.lastDebugAction)
+  const actionLabel = aiDebugActionLabel(app, app.state.ai.lastDebugAction)
   return `
     <section class="settings-card">
       <p class="section-label">${aiDebugText(app, 'title')}</p>
@@ -227,7 +228,7 @@ export function renderAIRawEditor(
 }
 
 export function renderAIStatusNotice(app: MindMapApp): string {
-  const tone = app.aiStatusTone()
+  const tone = aiStatusTone(app)
   if (!tone) {
     return ''
   }
