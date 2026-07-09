@@ -1,8 +1,8 @@
 import type { MindMapApp } from '../app'
 import { childrenOf, hiddenDescendantCount, visibleNodeIds } from '../document'
 import { buildNodeColorStyle, normalizeNodeColor } from '../color-palette'
-import { buildNodeDimensionStyle, nodeVisibleTitle } from '../node-render'
-import { escapeAttribute, escapeHtml } from '../utils'
+import { buildNodeDimensionStyle, nodeVisibleTitle, normalizeNodeNote } from '../node-render'
+import { escapeAttribute, escapeHtml, shorten } from '../utils'
 import {
   buildHierarchyPath,
   buildRelationSegmentPath,
@@ -26,6 +26,9 @@ export function renderNodes(app: MindMapApp): string {
       const preview = app.activeEditorPreview?.nodeId === node.id ? app.activeEditorPreview : null
       const autoWidthAnchorLeft = preview?.anchorLeft ?? app.activeEditorAnchorLeft
       const isAutoWidthEditingNode = isEditingNode && !node.width && autoWidthAnchorLeft !== null
+      // Collapse takes precedence when a node is (transiently) in both
+      // lifecycle maps — it is about to disappear.
+      const isCollapsingNode = app.collapsingNodeIds.has(node.id)
       const classes = [
         'node-card',
         `node-${node.kind}`,
@@ -36,7 +39,8 @@ export function renderNodes(app: MindMapApp): string {
         node.id === app.state.connectSourceNodeId ? 'is-connect-source' : '',
         node.collapsed ? 'is-collapsed' : '',
         app.creatingNodeIds.has(node.id) ? 'node-creating' : '',
-        app.expandingNodeIds.has(node.id) ? 'node-expanding' : '',
+        isCollapsingNode ? 'node-collapsing' : '',
+        !isCollapsingNode && app.expandingNodeIds.has(node.id) ? 'node-expanding' : '',
         app.state.cutting?.warningNodeIds.has(node.id) ? 'cutting-warning' : '',
       ]
         .filter(Boolean)
@@ -44,6 +48,13 @@ export function renderNodes(app: MindMapApp): string {
 
       const priorityBadge = node.priority
         ? `<span class="priority-badge priority-${node.priority.toLowerCase()}">${node.priority}</span>`
+        : ''
+
+      const note = normalizeNodeNote(node.note)
+      const noteBadge = note
+        ? `<span class="node-note-badge" data-command="open-node-note:${escapeAttribute(node.id)}" data-node-note-badge="${escapeAttribute(node.id)}" role="button" title="${escapeAttribute(shorten(note, 120))}" aria-label="${escapeAttribute(app.t('node.noteBadge'))}">
+             <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 3h8a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2H8.5l-3 2.6a.55.55 0 0 1-.91-.42V11H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Z" /></svg>
+           </span>`
         : ''
 
       const childCount = childrenOf(app.state.document, node.id).length
@@ -59,9 +70,9 @@ export function renderNodes(app: MindMapApp): string {
       )
       const nodePresentationStyle = buildNodeColorStyle(nodeColor)
       const anchorX = isAutoWidthEditingNode ? (autoWidthAnchorLeft ?? node.position.x) : node.position.x
-      const expandDelay = app.expandingNodeIds.get(node.id)
-      const expandDelayStyle = expandDelay !== undefined ? ` animation-delay: ${expandDelay}ms;` : ''
-      const articleStyle = `left: ${anchorX + originX}px; top: ${node.position.y + originY}px;${expandDelayStyle} ${nodePresentationStyle}`
+      const lifecycleDelay = app.collapsingNodeIds.get(node.id) ?? app.expandingNodeIds.get(node.id)
+      const lifecycleDelayStyle = lifecycleDelay !== undefined ? ` animation-delay: ${lifecycleDelay}ms;` : ''
+      const articleStyle = `left: ${anchorX + originX}px; top: ${node.position.y + originY}px;${lifecycleDelayStyle} ${nodePresentationStyle}`
       const nodeId = escapeAttribute(node.id)
 
       const content = isEditingNode
@@ -71,6 +82,7 @@ export function renderNodes(app: MindMapApp): string {
         : `<button type="button" class="node-shell" style="${nodeDimensions}" data-node-button="${nodeId}">
              ${priorityBadge}
              <span class="node-title" data-node-title="${nodeId}">${escapeHtml(nodeVisibleTitle(node))}</span>
+             ${noteBadge}
              ${branchBadge}
            </button>`
 
@@ -151,9 +163,13 @@ export function renderEdges(app: MindMapApp): string {
             const warningClass = app.state.cutting?.warningHierarchyEdgeKeys.has(`${parent.id}::${node.id}`)
               ? ' cutting-warning'
               : ''
-            const expandingClass =
-              app.expandingNodeIds.has(node.id) || app.expandingNodeIds.has(parent.id) ? ' edge-expanding' : ''
-            return `<path class="edge edge-hierarchy${warningClass}${expandingClass}" data-source-id="${escapeAttribute(parent.id)}" data-target-id="${escapeAttribute(node.id)}" d="${buildHierarchyPath(projectPosition(edgePoints.source), projectPosition(edgePoints.target), drawEdgeStyle)}" />`
+            const isCollapsingEdge = app.collapsingNodeIds.has(node.id) || app.collapsingNodeIds.has(parent.id)
+            const lifecycleClass = isCollapsingEdge
+              ? ' edge-collapsing'
+              : app.expandingNodeIds.has(node.id) || app.expandingNodeIds.has(parent.id)
+                ? ' edge-expanding'
+                : ''
+            return `<path class="edge edge-hierarchy${warningClass}${lifecycleClass}" data-source-id="${escapeAttribute(parent.id)}" data-target-id="${escapeAttribute(node.id)}" d="${buildHierarchyPath(projectPosition(edgePoints.source), projectPosition(edgePoints.target), drawEdgeStyle)}" />`
           })
           .join('')
 

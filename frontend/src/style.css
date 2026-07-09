@@ -2013,6 +2013,33 @@ kbd {
   font-family: var(--font-mono);
 }
 
+/* Yellow note marker between title and branch badge; click pops the
+   Inspector note card open (open-node-note command). --p2 is the yellow
+   priority tone in both themes. */
+.node-note-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  margin-top: 1px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--p2) 20%, transparent);
+  color: var(--p2);
+  cursor: pointer;
+}
+
+.node-note-badge:hover {
+  background: color-mix(in srgb, var(--p2) 36%, transparent);
+}
+
+.node-note-badge svg {
+  width: 13px;
+  height: 13px;
+  fill: currentColor;
+}
+
 .empty-state {
   margin: 18px 0 0;
   color: var(--muted);

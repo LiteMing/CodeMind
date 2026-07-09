@@ -223,4 +223,101 @@ describe('app interaction smoke', () => {
     // The Tab-created child must be part of the saved payload.
     expect(doc.nodes.length).toBeGreaterThanOrEqual(2)
   })
+
+  it('keeps rapid collapse/expand toggles consistent without flicker-prone timer double-fires', async () => {
+    const { createApp } = await import('./app')
+    await createApp(root)
+    await flush()
+
+    root.querySelector<HTMLElement>('[data-command="create-map"]')!.click()
+    await flush()
+    pressKey('Tab')
+    await flush()
+    pressKey('Escape')
+    await flush()
+
+    const childId = nodeElements(root).find((el) => el.dataset.nodeId !== 'root')?.dataset.nodeId
+    expect(childId, 'a child node should exist').toBeTruthy()
+    const childEl = () => root.querySelector<HTMLElement>(`[data-node-id="${childId}"]`)
+    const clickCollapse = (): void => {
+      const button = root.querySelector<HTMLElement>('[data-node-collapse-button="root"]')
+      expect(button, 'root collapse button should be rendered').toBeTruthy()
+      button!.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    }
+
+    vi.useFakeTimers()
+    try {
+      // 1st click: collapse starts — the child fades out via a state-driven
+      // class while the actual state flip is deferred past the animation.
+      clickCollapse()
+      expect(childEl(), 'child stays in DOM during collapse animation').toBeTruthy()
+      expect(childEl()!.classList.contains('node-collapsing')).toBe(true)
+
+      // 2nd click 120ms later, inside the old double-fire window: must settle
+      // the collapse and start one clean expand.
+      await vi.advanceTimersByTimeAsync(120)
+      clickCollapse()
+      expect(childEl(), 'child is visible again right after the re-toggle').toBeTruthy()
+      expect(childEl()!.classList.contains('node-expanding')).toBe(true)
+      expect(childEl()!.classList.contains('node-collapsing')).toBe(false)
+
+      // t≈420ms: the old code's first deferred toggle fired around here and
+      // hid the child (before the second toggle popped it back at full
+      // opacity — the reported flicker). It must stay visible now.
+      await vi.advanceTimersByTimeAsync(300)
+      expect(childEl(), 'child must not blink out after the re-toggle').toBeTruthy()
+      expect(childEl()!.classList.contains('node-collapsing')).toBe(false)
+
+      // All timers drained: still expanded and every animation class cleaned.
+      await vi.advanceTimersByTimeAsync(2000)
+      expect(childEl()).toBeTruthy()
+      expect(root.querySelector('.node-collapsing, .node-expanding')).toBeNull()
+
+      // A further single click still performs a normal, clean collapse.
+      clickCollapse()
+      await vi.advanceTimersByTimeAsync(2000)
+      expect(childEl(), 'child hidden after the final collapse').toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('renders a yellow note badge and pops the Inspector note card open on click', async () => {
+    const { createApp } = await import('./app')
+    await createApp(root)
+    await flush()
+
+    root.querySelector<HTMLElement>('[data-command="create-map"]')!.click()
+    await flush()
+
+    // No badge until the node has a note.
+    expect(root.querySelector('[data-node-note-badge="root"]')).toBeNull()
+
+    // Open the (default-collapsed) inspector and write a note for root.
+    root.querySelector<HTMLElement>('[data-command="toggle-inspector"]')!.click()
+    await flush()
+    const noteInput = root.querySelector<HTMLTextAreaElement>('[data-node-note="root"]')
+    expect(noteInput, 'inspector note input should be rendered').toBeTruthy()
+    noteInput!.value = '这是根节点的注释'
+    noteInput!.dispatchEvent(new Event('change', { bubbles: true }))
+    await flush()
+
+    const badge = root.querySelector<HTMLElement>('[data-node-note-badge="root"]')
+    expect(badge, 'note badge should render for a node with a note').toBeTruthy()
+
+    // Collapse the "current node" section so the badge click has a card to pop open.
+    root.querySelector<HTMLElement>('[data-command="toggle-inspector-section:node"]')!.click()
+    await flush()
+    expect(root.querySelector('[data-node-note="root"]')!.closest('.section-collapsed')).toBeTruthy()
+
+    badge!.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    // openNodeNoteEditor focuses on the next animation frame.
+    await new Promise((resolve) => setTimeout(resolve, 60))
+    await flush()
+
+    const reopenedInput = root.querySelector<HTMLTextAreaElement>('[data-node-note="root"]')
+    expect(reopenedInput, 'note input should be rendered after the badge click').toBeTruthy()
+    expect(reopenedInput!.closest('.section-expanded'), 'note card should be expanded').toBeTruthy()
+    expect(document.activeElement, 'note input should be focused').toBe(reopenedInput)
+  })
 })

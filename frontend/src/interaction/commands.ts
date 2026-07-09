@@ -309,6 +309,11 @@ export async function runCommand(app: MindMapApp, rawCommand: string): Promise<v
           app.selectNode(argument)
         }
         return
+      case 'open-node-note':
+        if (argument) {
+          app.openNodeNoteEditor(argument)
+        }
+        return
       case 'delete-relation':
         if (argument) {
           ops.removeRelation(app, argument)

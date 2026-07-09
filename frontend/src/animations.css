@@ -516,10 +516,20 @@
     opacity var(--duration-slow, 350ms) var(--ease-out);
 }
 
-/* Edge fading out during collapse */
+/* Edge fading out during collapse. Keyframes (not a transition): the class is
+   present from the first paint (state-driven render), so there is no earlier
+   opacity value for a transition to animate from. */
 .edge-collapsing {
-  opacity: 0;
-  transition: opacity var(--duration-slow, 350ms) var(--ease-out);
+  animation: edge-collapse-fade var(--duration-slow, 350ms) var(--ease-out) both;
+}
+
+@keyframes edge-collapse-fade {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
 }
 
 /* Edge fading in during expand */

@@ -18,6 +18,7 @@ const ROOT_LINE_HEIGHT = 28
 const TOPIC_LINE_HEIGHT = 22
 const MIN_CONTENT_WIDTH = 72
 const INLINE_GAP = 10
+const NOTE_BADGE_WIDTH = 22
 
 let measureCanvas: HTMLCanvasElement | null = null
 
@@ -37,7 +38,11 @@ export function estimateNodeWidth(node: MindNode, childCount = 0): number {
   return clamp(Math.round(baseWidth), minWidth, maxWidth)
 }
 
-export function estimateNodeHeight(node: MindNode, childCount = 0, width = estimateNodeWidth(node, childCount)): number {
+export function estimateNodeHeight(
+  node: MindNode,
+  childCount = 0,
+  width = estimateNodeWidth(node, childCount),
+): number {
   const minHeight = resolveNodeMinHeight(node.kind)
   if (node.height) {
     return Math.max(node.height, minHeight)
@@ -76,12 +81,23 @@ function resolveAccessoryWidth(node: MindNode, childCount: number): number {
   if (childCount > 0) {
     badges.push(String(childCount))
   }
-  if (badges.length === 0) {
+
+  let totalBadgeWidth = badges.reduce(
+    (sum, badge) => sum + Math.max(34, Math.ceil(measureText(badge, BADGE_TEXT_FONT) + 20)),
+    0,
+  )
+  let badgeCount = badges.length
+  // Yellow note marker (fixed-size chip, no text). Inline trim check instead
+  // of normalizeNodeNote to avoid an import cycle with node-render.
+  if (typeof node.note === 'string' && node.note.trim() !== '') {
+    totalBadgeWidth += NOTE_BADGE_WIDTH
+    badgeCount += 1
+  }
+  if (badgeCount === 0) {
     return 0
   }
 
-  const totalBadgeWidth = badges.reduce((sum, badge) => sum + Math.max(34, Math.ceil(measureText(badge, BADGE_TEXT_FONT) + 20)), 0)
-  return totalBadgeWidth + badges.length * INLINE_GAP
+  return totalBadgeWidth + badgeCount * INLINE_GAP
 }
 
 function resolveNodeFont(kind: NodeKind): string {

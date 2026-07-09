@@ -375,44 +375,50 @@ export function toggleNodeCollapse(app: MindMapApp, nodeId: string): void {
     return
   }
 
+  // Rapid re-toggle: settle the in-flight animation to its end state first
+  // (collapse commits its deferred state flip, expand strips its animation
+  // classes) so this click is exactly one clean toggle and the previous
+  // timer can never double-fire.
+  const pendingToggle = app.collapseToggleAnimations.get(nodeId)
+  if (pendingToggle) {
+    window.clearTimeout(pendingToggle.timer)
+    app.collapseToggleAnimations.delete(nodeId)
+    pendingToggle.settle()
+  }
+
   const isCollapsing = !node.collapsed
-  // Collect descendant IDs before toggling (depth-first order via BFS from descendantIds)
+  // Collect descendant IDs after settling (depth-first order via BFS from descendantIds)
   const childNodeIds = descendantIds(app.state.document, nodeId)
 
   if (isCollapsing) {
     // --- Collapse: animate children out with stagger, then toggle state ---
+    // State-driven like expand: collapsingNodeIds is filled BEFORE render so
+    // renderNodes/renderEdges output the classes and stagger delays in every
+    // paint of the window — intervening renders no longer wipe the animation
+    // (nodeLayer.innerHTML is rebuilt wholesale on each render).
     const staggerDelays = app.uxEngine.computeStaggerDelays(childNodeIds, 40)
-
-    // Apply stagger animation to each visible child node element
-    requestAnimationFrame(() => {
-      for (const childId of childNodeIds) {
-        const el = app.rootEl.querySelector<HTMLElement>(`[data-node-id="${childId}"]`)
-        if (el) {
-          const delay = staggerDelays.get(childId) ?? 0
-          el.style.animationDelay = `${delay}ms`
-          el.classList.add('node-collapsing')
-        }
-      }
-
-      // Also mark hierarchy edges as collapsing for smooth fade (only subtree edges)
-      const childNodeIdSet = new Set(childNodeIds)
-      const edgeLayer = app.rootEl.querySelector<SVGElement>('[data-edge-layer]')
-      if (edgeLayer) {
-        const edges = edgeLayer.querySelectorAll<SVGElement>('.edge-hierarchy')
-        edges.forEach((edge) => {
-          const sourceId = edge.getAttribute('data-source-id')
-          const targetId = edge.getAttribute('data-target-id')
-          if ((sourceId && childNodeIdSet.has(sourceId)) || (targetId && childNodeIdSet.has(targetId))) {
-            edge.classList.add('edge-collapsing')
-          }
-        })
-      }
-    })
+    for (const childId of childNodeIds) {
+      // Collapse takes over any still-running expand on the same subtree.
+      app.expandingNodeIds.delete(childId)
+      app.collapsingNodeIds.set(childId, staggerDelays.get(childId) ?? 0)
+    }
+    app.render()
 
     // After the longest animation completes, toggle state and re-render
     const maxDelay = app.uxEngine.staggerWindow(childNodeIds.length, 40)
     const animDuration = 350 // --duration-slow
-    setTimeout(() => {
+    const finalize = (): void => {
+      app.collapseToggleAnimations.delete(nodeId)
+      for (const childId of childNodeIds) {
+        app.collapsingNodeIds.delete(childId)
+      }
+      if (!app.findNode(nodeId)) {
+        // Node vanished mid-animation (deleted / map switched): just drop the
+        // animation state instead of toggling a stale id.
+        app.render()
+        return
+      }
+
       const snapshot = app.createHistorySnapshot()
       app.setSelection([nodeId], nodeId)
       const changed = toggleCollapse(app.state.document, nodeId)
@@ -435,7 +441,9 @@ export function toggleNodeCollapse(app: MindMapApp, nodeId: string): void {
       app.setStatus('status.branchCollapsed')
       app.render()
       scheduleAutosave(app, 'status.layoutSaveScheduled')
-    }, maxDelay + animDuration)
+    }
+    const timer = window.setTimeout(finalize, maxDelay + animDuration)
+    app.collapseToggleAnimations.set(nodeId, { timer, settle: finalize })
   } else {
     // --- Expand: toggle state first, then animate children in with reverse stagger ---
     const snapshot = app.createHistorySnapshot()
@@ -466,6 +474,7 @@ export function toggleNodeCollapse(app: MindMapApp, nodeId: string): void {
     const expandNodeIds = descendantIds(app.state.document, nodeId)
     const staggerDelays = app.uxEngine.computeStaggerDelays(expandNodeIds, 40)
     for (const childId of expandNodeIds) {
+      app.collapsingNodeIds.delete(childId)
       app.expandingNodeIds.set(childId, staggerDelays.get(childId) ?? 0)
     }
 
@@ -473,17 +482,34 @@ export function toggleNodeCollapse(app: MindMapApp, nodeId: string): void {
     scheduleAutosave(app, 'status.layoutSaveScheduled')
 
     const totalWindow = app.uxEngine.staggerWindow(expandNodeIds.length, 40) + 350 + 50
-    window.setTimeout(() => {
+    const expandIdSet = new Set(expandNodeIds)
+    const cleanup = (): void => {
+      app.collapseToggleAnimations.delete(nodeId)
       for (const childId of expandNodeIds) {
         app.expandingNodeIds.delete(childId)
+        if (app.collapsingNodeIds.has(childId)) {
+          // A newer collapse owns this node's animation now — leave its
+          // classes and inline delay alone.
+          continue
+        }
         const el = app.rootEl.querySelector<HTMLElement>(`[data-node-id="${childId}"]`)
         if (el) {
           el.classList.remove('node-expanding')
           el.style.animationDelay = ''
         }
       }
-      app.rootEl.querySelectorAll('.edge-expanding').forEach((edge) => edge.classList.remove('edge-expanding'))
-    }, totalWindow)
+      // Only strip edge classes belonging to this subtree; another expand may
+      // still be animating elsewhere.
+      app.rootEl.querySelectorAll<SVGElement>('.edge-expanding').forEach((edge) => {
+        const sourceId = edge.getAttribute('data-source-id')
+        const targetId = edge.getAttribute('data-target-id')
+        if ((sourceId && expandIdSet.has(sourceId)) || (targetId && expandIdSet.has(targetId))) {
+          edge.classList.remove('edge-expanding')
+        }
+      })
+    }
+    const timer = window.setTimeout(cleanup, totalWindow)
+    app.collapseToggleAnimations.set(nodeId, { timer, settle: cleanup })
   }
 }
 

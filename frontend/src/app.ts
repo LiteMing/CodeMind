@@ -114,6 +114,14 @@ export class MindMapApp {
   // Node id → stagger delay(ms) for the expand animation in flight (read by
   // renderNodes/renderEdges so the classes are present from the first paint)
   expandingNodeIds = new Map<string, number>()
+  // Node id → stagger delay(ms) for the collapse animation in flight — same
+  // state-driven contract as expandingNodeIds so intervening renders keep the
+  // animation classes instead of wiping them (innerHTML rebuild)
+  collapsingNodeIds = new Map<string, number>()
+  // Toggled node id → in-flight collapse/expand finisher. toggleNodeCollapse
+  // settles (clearTimeout + run) the previous animation before starting the
+  // next one, so rapid re-toggles never double-fire deferred state flips.
+  collapseToggleAnimations = new Map<string, { timer: number; settle: () => void }>()
   copiedSubtree: CopiedSubtree | null = null
   suppressContextMenuOnce = false
   suppressClickOnce = false
@@ -1373,6 +1381,37 @@ export class MindMapApp {
       this.inspectorSectionsCollapsed.add(sectionId)
     }
     renderInspector(this)
+  }
+
+  /** Node note badge click: select the node, pop the Inspector note card open
+   * and put the caret at the end of the note input. */
+  openNodeNoteEditor(nodeId: string): void {
+    if (!this.findNode(nodeId)) {
+      return
+    }
+
+    this.state.selectedRelationId = null
+    this.setSelection([nodeId], nodeId)
+    this.inspectorSectionsCollapsed.delete('node')
+    const opening = this.state.inspectorCollapsed && !this.state.panelAnimating.has('inspector')
+    if (opening) {
+      this.state.inspectorCollapsed = false
+    }
+    this.render()
+    if (opening) {
+      this.animatePanelIn('inspector', this.refs?.inspector ?? null)
+    }
+
+    requestAnimationFrame(() => {
+      const input = this.refs?.inspector.querySelector<HTMLTextAreaElement>('[data-node-note]')
+      if (!input || input.dataset.nodeNote !== nodeId) {
+        return
+      }
+      input.focus()
+      const caret = input.value.length
+      input.setSelectionRange(caret, caret)
+      input.scrollIntoView({ block: 'nearest' })
+    })
   }
 
   closeSettings(): void {
