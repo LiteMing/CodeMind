@@ -27,7 +27,7 @@ function addChild(doc: MindMapDocument, parentId: string, title: string): MindNo
     title,
     kind: 'topic',
     parentId,
-    position: nextChildPosition(doc, parent),
+    position: nextChildPosition(doc, parentId),
   })
   doc.nodes.push(node)
   touchDocument(doc)
