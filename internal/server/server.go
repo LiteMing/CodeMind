@@ -3406,6 +3406,10 @@ func isTrustedBrowserOrigin(origin string) bool {
 	switch host {
 	case "localhost", "127.0.0.1", "::1":
 		return true
+	// Windows WebView2 serves the Wails frontend from http://wails.localhost,
+	// not from a wails:// scheme.
+	case "wails.localhost":
+		return true
 	default:
 		return false
 	}

@@ -34,3 +34,23 @@ func TestCORSMiddlewareAllowsLoopbackOrigin(t *testing.T) {
 		t.Fatalf("unexpected Access-Control-Allow-Origin: %q", got)
 	}
 }
+
+// The desktop GUI's WebView2 frontend runs at http://wails.localhost; blocking
+// it makes every API call in the packaged app fail ("Failed to fetch").
+func TestCORSMiddlewareAllowsWailsWebviewOrigin(t *testing.T) {
+	handler := corsMiddleware(dummyHandler)
+
+	for _, origin := range []string{"http://wails.localhost", "http://wails.localhost:34115", "wails://wails.localhost"} {
+		req := httptest.NewRequest(http.MethodGet, "/api/settings", nil)
+		req.Header.Set("Origin", origin)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("origin %q: expected 200, got %d", origin, rec.Code)
+		}
+		if got := rec.Header().Get("Access-Control-Allow-Origin"); got != origin {
+			t.Fatalf("origin %q: unexpected Access-Control-Allow-Origin %q", origin, got)
+		}
+	}
+}
