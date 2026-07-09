@@ -260,7 +260,7 @@ export function handlePointerDown(app: MindMapApp, event: PointerEvent): void {
     return
   }
 
-  if (element.closest('[data-node-collapse-button]')) {
+  if (element.closest('[data-node-collapse-button]') || element.closest('[data-node-note-badge]')) {
     event.preventDefault()
     return
   }

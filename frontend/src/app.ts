@@ -1385,15 +1385,26 @@ export class MindMapApp {
 
   /** Node note badge click: select the node, pop the Inspector note card open
    * and put the caret at the end of the note input. */
-  openNodeNoteEditor(nodeId: string): void {
+  openNodeNoteEditor(nodeId: string, attempt = 0): void {
     if (!this.findNode(nodeId)) {
+      return
+    }
+
+    if (this.state.panelAnimating.has('inspector')) {
+      // Panel open/close animation in flight (≤300ms incl. safety timeout).
+      // Acting now would either race the close (focus lands, then the panel
+      // unmounts) or double-animate. Retry until it settles, then take the
+      // normal path below — the click never silently dies.
+      if (attempt < 8) {
+        window.setTimeout(() => this.openNodeNoteEditor(nodeId, attempt + 1), 60)
+      }
       return
     }
 
     this.state.selectedRelationId = null
     this.setSelection([nodeId], nodeId)
     this.inspectorSectionsCollapsed.delete('node')
-    const opening = this.state.inspectorCollapsed && !this.state.panelAnimating.has('inspector')
+    const opening = this.state.inspectorCollapsed
     if (opening) {
       this.state.inspectorCollapsed = false
     }
