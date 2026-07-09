@@ -3,6 +3,7 @@ import type {
   AIDebugInfo,
   AITemplateId,
   AppPreferences,
+  ArrowDirection,
   MindMapDocument,
   MindMapSummary,
   MindNode,
@@ -376,9 +377,20 @@ export interface CopiedSubtreeNode {
   offset: Position
 }
 
+/** Relation captured with a copied subtree; endpoints refer to the ORIGINAL
+ * node ids and are remapped through the paste idMap on insertion. */
+export interface CopiedRelation {
+  sourceId: string
+  targetId: string
+  label?: string
+  arrowDirection?: ArrowDirection
+  branchTargetIds?: string[]
+}
+
 export interface CopiedSubtree {
   rootId: string
   nodes: CopiedSubtreeNode[]
+  relations?: CopiedRelation[]
 }
 
 export const PRIORITY_VALUES: Priority[] = ['', 'P0', 'P1', 'P2', 'P3']

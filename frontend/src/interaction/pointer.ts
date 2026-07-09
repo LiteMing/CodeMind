@@ -62,6 +62,12 @@ export function handlePointerDown(app: MindMapApp, event: PointerEvent): void {
     return
   }
 
+  // Context toolbar clicks must not start a canvas pan (which would set
+  // suppressClickOnce and swallow the button's click event).
+  if (element.closest('[data-context-toolbar]')) {
+    return
+  }
+
   // Handle connector dot long-press drag to create connection
   const connectorDot = element.closest<HTMLElement>('[data-node-connector]')
   if (connectorDot && event.button === 0) {

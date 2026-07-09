@@ -348,10 +348,14 @@ export async function runCommand(app: MindMapApp, rawCommand: string): Promise<v
 }
 
 export function handleClick(app: MindMapApp, event: MouseEvent): void {
-  const target = event.target
-  if (!(target instanceof HTMLElement)) {
+  // Element, not HTMLElement: clicks on inline SVG icons (context toolbar
+  // buttons) surface an SVGElement target and must still reach the
+  // data-command dispatch below.
+  const rawTarget = event.target
+  if (!(rawTarget instanceof Element)) {
     return
   }
+  const target = rawTarget as HTMLElement
 
   if (app.suppressClickOnce) {
     app.suppressClickOnce = false

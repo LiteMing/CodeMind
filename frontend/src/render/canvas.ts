@@ -35,6 +35,7 @@ export function renderNodes(app: MindMapApp): string {
         selectedIds.has(node.id) && node.id !== app.state.selectedNodeId ? 'is-selected-secondary' : '',
         node.id === app.state.connectSourceNodeId ? 'is-connect-source' : '',
         node.collapsed ? 'is-collapsed' : '',
+        app.creatingNodeIds.has(node.id) ? 'node-creating' : '',
         app.state.cutting?.warningNodeIds.has(node.id) ? 'cutting-warning' : '',
       ]
         .filter(Boolean)
@@ -245,7 +246,8 @@ export function renderEdges(app: MindMapApp): string {
             })()
           : ''
 
-      return `<g>
+      const branchTargetIds = (edge.branches ?? []).map((b) => b.targetId).join(' ')
+      return `<g data-relation-id="${edgeId}" data-source-id="${escapeAttribute(edge.sourceId)}" data-target-id="${escapeAttribute(edge.targetId)}" data-branch-targets="${escapeAttribute(branchTargetIds)}">
         ${hitPath}
         ${mainPaths.join('')}
         ${branchPaths.join('')}

@@ -109,6 +109,8 @@ export class MindMapApp {
   private liveNodeDimensionIds = new Set<string>()
   private graphAnimationHandle: number | null = null
   graphHitNodes: GraphHitNode[] = []
+  // Node ids whose creation animation is still in flight (read by renderNodes)
+  creatingNodeIds = new Set<string>()
   copiedSubtree: CopiedSubtree | null = null
   suppressContextMenuOnce = false
   suppressClickOnce = false
@@ -829,19 +831,14 @@ export class MindMapApp {
   }
 
   applyNodeCreateAnimation(nodeId: string): void {
-    requestAnimationFrame(() => {
-      const el = this.rootEl.querySelector<HTMLElement>(`[data-node-id="${nodeId}"]`)
-      if (el) {
-        el.classList.add('node-creating')
-        el.addEventListener(
-          'animationend',
-          () => {
-            el.classList.remove('node-creating')
-          },
-          { once: true },
-        )
-      }
-    })
+    // State-driven: renderNodes outputs .node-creating for ids in this set, so
+    // the class survives the full innerHTML rebuilds that happen when nodes
+    // are created in rapid succession. Must be called before render().
+    this.creatingNodeIds.add(nodeId)
+    window.setTimeout(() => {
+      this.creatingNodeIds.delete(nodeId)
+      this.rootEl.querySelector(`[data-node-id="${nodeId}"]`)?.classList.remove('node-creating')
+    }, 320)
   }
 
   cycleSelectedNodePriority(): void {
@@ -1438,21 +1435,24 @@ export class MindMapApp {
   // === Guide Overlay ===
 
   dismissCanvasGuide(): void {
+    // Always latch the session flag first: callers may run after a render
+    // that already flipped canvasGuideVisible off (first child exists), and
+    // without the latch the guide would reappear once all children are
+    // deleted again.
+    this.state.guideOverlay.canvasGuideDismissed = true
     if (!this.state.guideOverlay.canvasGuideVisible) {
       return
     }
-    // Fade out over 300ms, then set session flag
+    // Fade out over 300ms, then hide
     const guideEl = this.refs?.scroll?.querySelector('.canvas-guide') as HTMLElement | null
     if (guideEl) {
       guideEl.classList.add('is-fading')
       window.setTimeout(() => {
         this.state.guideOverlay.canvasGuideVisible = false
-        this.state.guideOverlay.canvasGuideDismissed = true
         renderCanvasGuide(this)
       }, 300)
     } else {
       this.state.guideOverlay.canvasGuideVisible = false
-      this.state.guideOverlay.canvasGuideDismissed = true
     }
   }
 
@@ -2002,6 +2002,7 @@ export class MindMapApp {
       event.preventDefault()
       event.stopPropagation()
       this.minimapDragging = true
+      this.minimapRenderer?.beginNavigation()
       panToMinimapPosition(event)
     }
 
@@ -2015,6 +2016,7 @@ export class MindMapApp {
       if (!this.minimapDragging) return
       event.preventDefault()
       this.minimapDragging = false
+      this.minimapRenderer?.endNavigation()
     }
 
     canvas.addEventListener('mousedown', handleMouseDown)
@@ -2119,10 +2121,21 @@ export class MindMapApp {
     // Toolbar dimensions (approximate, will be refined after first render)
     const toolbarHeight = 32
     const toolbarGap = 8
+    const toolbarWidth = toolbar.offsetWidth || 140
 
-    // Position toolbar above the node: toolbar.bottom <= node.top
-    const toolbarTop = screenNodeTopY - toolbarHeight - toolbarGap
-    const toolbarLeft = screenNodeTopX + screenNodeWidth / 2
+    // Position toolbar above the node: toolbar.bottom <= node.top.
+    // Clamp within the scroll container so it never pokes off-screen; if
+    // there is no room above, place it below the node instead.
+    let toolbarTop = screenNodeTopY - toolbarHeight - toolbarGap
+    if (toolbarTop < 4) {
+      toolbarTop = screenNodeTopY + nodeHeight * this.viewport.scale + toolbarGap
+    }
+    toolbarTop = Math.min(toolbarTop, scroll.clientHeight - toolbarHeight - 4)
+    const halfWidth = toolbarWidth / 2
+    const toolbarLeft = Math.min(
+      Math.max(screenNodeTopX + screenNodeWidth / 2, halfWidth + 4),
+      Math.max(scroll.clientWidth - halfWidth - 4, halfWidth + 4),
+    )
 
     // Update position
     this.state.contextToolbar.position = { x: toolbarLeft, y: toolbarTop }

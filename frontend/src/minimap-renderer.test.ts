@@ -288,4 +288,59 @@ describe('MinimapRenderer', () => {
       expect(result!.worldY).toBeCloseTo(50, 0)
     })
   })
+
+  describe('minimapToWorld safety (UX-04)', () => {
+    it('clamps far-edge clicks to the node bounding box plus margin', () => {
+      renderer.setNodes([{ x: 0, y: 0, width: 400, height: 300 }])
+      renderer.render()
+
+      // Click the extreme minimap corners — the mapped point must stay near
+      // the content, never fly off to the far canvas.
+      for (const [mx, my] of [
+        [0, 0],
+        [180, 120],
+        [180, 0],
+        [0, 120],
+      ]) {
+        const result = renderer.minimapToWorld(mx, my)
+        expect(result).not.toBeNull()
+        expect(result!.worldX).toBeGreaterThanOrEqual(-80)
+        expect(result!.worldX).toBeLessThanOrEqual(400 + 80)
+        expect(result!.worldY).toBeGreaterThanOrEqual(-80)
+        expect(result!.worldY).toBeLessThanOrEqual(300 + 80)
+      }
+    })
+
+    it('viewport position does not affect the mapping scale', () => {
+      renderer.setNodes([{ x: 0, y: 0, width: 400, height: 300 }])
+      renderer.setViewport({ x: 0, y: 0, scale: 1, screenWidth: 200, screenHeight: 100 })
+      renderer.render()
+      const before = renderer.minimapToWorld(90, 60)
+
+      // Move the viewport far away — bounds are node-only, so the same
+      // minimap pixel must map to the same world point (no feedback loop).
+      renderer.setViewport({ x: -5000, y: -5000, scale: 1, screenWidth: 200, screenHeight: 100 })
+      renderer.render()
+      const after = renderer.minimapToWorld(90, 60)
+
+      expect(after!.worldX).toBeCloseTo(before!.worldX, 5)
+      expect(after!.worldY).toBeCloseTo(before!.worldY, 5)
+    })
+
+    it('beginNavigation snapshots bounds for the whole drag', () => {
+      renderer.setNodes([{ x: 0, y: 0, width: 400, height: 300 }])
+      renderer.render()
+      renderer.beginNavigation()
+      const before = renderer.minimapToWorld(90, 60)
+
+      // Node changes mid-drag must not shift the mapping until endNavigation.
+      renderer.setNodes([{ x: -1000, y: -1000, width: 3000, height: 2000 }])
+      const during = renderer.minimapToWorld(90, 60)
+      expect(during!.worldX).toBeCloseTo(before!.worldX, 5)
+
+      renderer.endNavigation()
+      const after = renderer.minimapToWorld(90, 60)
+      expect(after!.worldX).not.toBeCloseTo(before!.worldX, 0)
+    })
+  })
 })

@@ -787,6 +787,24 @@ describe('UxEngine - computeStaggerDelays', () => {
     const result = engine.computeStaggerDelays(nodeIds, baseDelay)
     expect(result.get('d')).toBe(3 * 35) // (4-1) * 35 = 105
   })
+
+  it('caps the total cascade window for large subtrees (UX-07)', () => {
+    for (const n of [5, 50, 200]) {
+      const nodeIds = Array.from({ length: n }, (_, i) => `n${i}`)
+      const result = engine.computeStaggerDelays(nodeIds, 40)
+      const maxDelay = Math.max(...result.values())
+      expect(maxDelay).toBeLessThanOrEqual(UxEngine.STAGGER_MAX_WINDOW_MS)
+      expect(engine.staggerWindow(n, 40)).toBe(maxDelay)
+    }
+  })
+
+  it('small groups keep the full baseDelay spacing under the cap', () => {
+    // 10 steps x 40ms = 400ms sits exactly at the cap, so spacing is intact
+    const nodeIds = Array.from({ length: 11 }, (_, i) => `n${i}`)
+    const result = engine.computeStaggerDelays(nodeIds, 40)
+    expect(result.get('n1')).toBe(40)
+    expect(result.get('n10')).toBe(400)
+  })
 })
 
 // === UxEngine detectAlignment unit tests ===

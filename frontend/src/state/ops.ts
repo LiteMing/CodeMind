@@ -155,8 +155,8 @@ export function createChildNode(app: MindMapApp, parentId: string): void {
     height: estimateNodeHeight(newNode, 0, initWidth),
   }
   touchDocument(app.state.document)
-  app.render()
   app.applyNodeCreateAnimation(newNode.id)
+  app.render()
   app.dismissCanvasGuide()
   scheduleAutosave(app, 'status.childSaveScheduled')
 }
@@ -213,8 +213,8 @@ export function createSiblingNode(app: MindMapApp, nodeId: string): void {
     height: estimateNodeHeight(newNode, 0, sibInitWidth),
   }
   touchDocument(app.state.document)
-  app.render()
   app.applyNodeCreateAnimation(newNode.id)
+  app.render()
   scheduleAutosave(app, 'status.siblingSaveScheduled')
 }
 
@@ -288,6 +288,22 @@ export function deleteSelectedNode(app: MindMapApp): void {
       ? primaryNode.parentId
       : findRoot(app.state.document).id
 
+  // Fade out edges attached to the deleted subtree in sync with the node
+  // fade-out (mirrors what the collapse path does for its subtree edges).
+  const edgeLayer = app.rootEl.querySelector<SVGElement>('[data-edge-layer]')
+  if (edgeLayer) {
+    for (const edge of edgeLayer.querySelectorAll<SVGElement>('.edge-hierarchy, g[data-relation-id]')) {
+      const ids = [
+        edge.getAttribute('data-source-id'),
+        edge.getAttribute('data-target-id'),
+        ...(edge.getAttribute('data-branch-targets') ?? '').split(' '),
+      ]
+      if (ids.some((id) => id && removeIds.has(id))) {
+        edge.classList.add('edge-collapsing')
+      }
+    }
+  }
+
   // Perform actual deletion after animation completes (or immediately if no elements to animate)
   const performDeletion = (): void => {
     const relationCountBefore = app.state.document.relations.length
@@ -328,7 +344,7 @@ export function deleteSelectedNode(app: MindMapApp): void {
 
   if (animatingElements.length > 0) {
     // Wait for the last element's animation to end (accounting for stagger), then remove all
-    const maxStaggerDelay = (orderedRemoveIds.length - 1) * 40
+    const maxStaggerDelay = app.uxEngine.staggerWindow(orderedRemoveIds.length, 40)
     let completed = false
     const onComplete = (): void => {
       if (completed) return
@@ -394,7 +410,7 @@ export function toggleNodeCollapse(app: MindMapApp, nodeId: string): void {
     })
 
     // After the longest animation completes, toggle state and re-render
-    const maxDelay = (childNodeIds.length - 1) * 40
+    const maxDelay = app.uxEngine.staggerWindow(childNodeIds.length, 40)
     const animDuration = 350 // --duration-slow
     setTimeout(() => {
       const snapshot = app.createHistorySnapshot()
@@ -545,9 +561,22 @@ export function copySelectedSubtree(app: MindMapApp): void {
     return
   }
 
+  // Capture relations fully contained in the copied set so paste can rebuild
+  // them (branch targets outside the set are dropped per-branch).
+  const relations = app.state.document.relations
+    .filter((r) => allSubtreeIds.has(r.sourceId) && allSubtreeIds.has(r.targetId))
+    .map((r) => ({
+      sourceId: r.sourceId,
+      targetId: r.targetId,
+      label: r.label,
+      arrowDirection: r.arrowDirection,
+      branchTargetIds: (r.branches ?? []).map((b) => b.targetId).filter((id) => allSubtreeIds.has(id)),
+    }))
+
   app.copiedSubtree = {
     rootId: primaryNode.id,
     nodes,
+    relations,
   }
   app.setStatus('status.subtreeCopied', { count: nodes.length })
   renderHeader(app)
@@ -676,6 +705,36 @@ export function pasteCopiedSubtree(app: MindMapApp): void {
   }
 
   app.state.document.nodes.push(...insertedNodes)
+
+  // Rebuild copied relations with endpoints remapped to the new node ids;
+  // drop any relation whose endpoints did not survive the paste.
+  let pastedRelationCount = 0
+  for (const copied of app.copiedSubtree.relations ?? []) {
+    const sourceId = idMap.get(copied.sourceId)
+    const targetId = idMap.get(copied.targetId)
+    if (!sourceId || !targetId || sourceId === targetId) {
+      continue
+    }
+    const branches = (copied.branchTargetIds ?? [])
+      .map((id) => idMap.get(id))
+      .filter((id): id is string => Boolean(id) && id !== sourceId && id !== targetId)
+      .map((targetId) => ({ targetId }))
+    app.state.document.relations.push({
+      id: createId('rel'),
+      sourceId,
+      targetId,
+      label: copied.label,
+      arrowDirection: copied.arrowDirection,
+      branches,
+      createdAt: now,
+      updatedAt: now,
+    })
+    pastedRelationCount++
+  }
+  if (pastedRelationCount > 0) {
+    touchDocument(app.state.document)
+  }
+
   const pastedRootId = idMap.get(app.copiedSubtree.rootId) ?? insertedNodes[0]?.id
   if (!pastedRootId) {
     return

@@ -486,11 +486,27 @@ export class UxEngine {
    */
   computeStaggerDelays(nodeIds: string[], baseDelay: number): Map<string, number> {
     const delays = new Map<string, number>()
+    const steps = Math.max(nodeIds.length - 1, 1)
+    // Cap the total cascade window: with many nodes the per-node delay
+    // shrinks so a 50+ child collapse doesn't stretch to multiple seconds.
+    const step = Math.min(baseDelay, UxEngine.STAGGER_MAX_WINDOW_MS / steps)
     for (let i = 0; i < nodeIds.length; i++) {
-      delays.set(nodeIds[i], i * baseDelay)
+      delays.set(nodeIds[i], Math.round(i * step))
     }
     return delays
   }
+
+  /** Longest delay computeStaggerDelays will produce for `count` items —
+   * callers use this to size their completion timeouts. */
+  staggerWindow(count: number, baseDelay: number): number {
+    const steps = Math.max(count - 1, 0)
+    if (steps === 0) {
+      return 0
+    }
+    return Math.round(steps * Math.min(baseDelay, UxEngine.STAGGER_MAX_WINDOW_MS / steps))
+  }
+
+  static readonly STAGGER_MAX_WINDOW_MS = 400
 
   // --- Alignment detection ---
 
@@ -898,9 +914,16 @@ export class MinimapRenderer {
   /**
    * Convert a minimap pixel coordinate to a world coordinate.
    * Returns null if the minimap has no content to map against.
+   *
+   * The result is clamped to the node bounding box (plus a small margin):
+   * clicks on the empty minimap border must not fling the camera to a far
+   * region the user cannot easily navigate back from.
    */
   minimapToWorld(mx: number, my: number): { worldX: number; worldY: number } | null {
-    const bounds = this.computeWorldBounds()
+    // During a drag, reuse the bounds snapshot taken at beginNavigation():
+    // recomputing per mousemove would let the moving viewport change the
+    // scale mid-drag and make the same pixel map to a drifting world point.
+    const bounds = this.navBoundsSnapshot ?? this.computeWorldBounds()
     if (!bounds) return null
 
     const { minX, minY, worldWidth, worldHeight } = bounds
@@ -917,14 +940,26 @@ export class MinimapRenderer {
     const offsetX = padding + (availW - contentW) / 2
     const offsetY = padding + (availH - contentH) / 2
 
-    const worldX = (mx - offsetX) / mapScale + minX
-    const worldY = (my - offsetY) / mapScale + minY
+    const margin = 80
+    const worldX = clamp((mx - offsetX) / mapScale + minX, minX - margin, minX + worldWidth + margin)
+    const worldY = clamp((my - offsetY) / mapScale + minY, minY - margin, minY + worldHeight + margin)
 
     return { worldX, worldY }
   }
 
+  /** Snapshot world bounds for the duration of a minimap drag. */
+  beginNavigation(): void {
+    this.navBoundsSnapshot = this.computeWorldBounds()
+  }
+
+  endNavigation(): void {
+    this.navBoundsSnapshot = null
+  }
+
+  private navBoundsSnapshot: { minX: number; minY: number; worldWidth: number; worldHeight: number } | null = null
+
   private computeWorldBounds(): { minX: number; minY: number; worldWidth: number; worldHeight: number } | null {
-    if (this.nodes.length === 0 && !this.viewportData) return null
+    if (this.nodes.length === 0) return null
 
     let minX = Infinity
     let minY = Infinity
@@ -938,21 +973,11 @@ export class MinimapRenderer {
       maxY = Math.max(maxY, node.y + node.height)
     }
 
-    // Also include viewport bounds to ensure the viewport rect is always visible
-    if (this.viewportData) {
-      const vp = this.viewportData
-      const originX = vp.originX ?? 0
-      const originY = vp.originY ?? 0
-      const worldLeft = -vp.x / vp.scale - originX
-      const worldTop = -vp.y / vp.scale - originY
-      const worldRight = worldLeft + vp.screenWidth / vp.scale
-      const worldBottom = worldTop + vp.screenHeight / vp.scale
-
-      minX = Math.min(minX, worldLeft)
-      minY = Math.min(minY, worldTop)
-      maxX = Math.max(maxX, worldRight)
-      maxY = Math.max(maxY, worldBottom)
-    }
+    // Bounds are node-content only. Folding the viewport rect in here made
+    // the map scale depend on the camera: dragging the viewport grew the
+    // bounds, changed the scale, and the same minimap pixel mapped to a
+    // drifting world point (positive feedback that flung the camera). The
+    // viewport rect is simply drawn clipped when it extends past the content.
 
     // Handle edge case where bounds are invalid
     if (!isFinite(minX) || !isFinite(minY) || !isFinite(maxX) || !isFinite(maxY)) {
@@ -964,4 +989,8 @@ export class MinimapRenderer {
 
     return { minX, minY, worldWidth, worldHeight }
   }
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), max)
 }
