@@ -278,7 +278,7 @@ func New(fileStore *store.FileStore, settingsDir string) *Server {
 		store:       fileStore,
 		settingsDir: settingsDir,
 		httpClient: &http.Client{
-			Timeout: 0,
+			Timeout: time.Duration(defaultAITimeout) * time.Second,
 		},
 	}
 }
@@ -290,7 +290,7 @@ func NewWithTokenStore(fileStore *store.FileStore, settingsDir string, tokenStor
 		tokenStore:  tokenStore,
 		settingsDir: settingsDir,
 		httpClient: &http.Client{
-			Timeout: 0,
+			Timeout: time.Duration(defaultAITimeout) * time.Second,
 		},
 	}
 }
@@ -309,9 +309,9 @@ func (s *Server) Handler() http.Handler {
 	s.registerAPI(mux)
 	mux.HandleFunc("/", s.handleFrontend)
 	if s.tokenStore != nil {
-		return loggingMiddleware(corsMiddleware(tokenAuthMiddleware(s, s.tokenStore, mux)))
+		return loggingMiddleware(corsMiddleware(maxBodyMiddleware(tokenAuthMiddleware(s, s.tokenStore, mux))))
 	}
-	return loggingMiddleware(corsMiddleware(apiKeyMiddleware(s, mux)))
+	return loggingMiddleware(corsMiddleware(maxBodyMiddleware(apiKeyMiddleware(s, mux))))
 }
 
 func (s *Server) APIHandler() http.Handler {
@@ -319,9 +319,22 @@ func (s *Server) APIHandler() http.Handler {
 	s.registerAPI(mux)
 	mux.HandleFunc("/share/", s.handleShareDebugPage)
 	if s.tokenStore != nil {
-		return loggingMiddleware(corsMiddleware(tokenAuthMiddleware(s, s.tokenStore, mux)))
+		return loggingMiddleware(corsMiddleware(maxBodyMiddleware(tokenAuthMiddleware(s, s.tokenStore, mux))))
 	}
-	return loggingMiddleware(corsMiddleware(apiKeyMiddleware(s, mux)))
+	return loggingMiddleware(corsMiddleware(maxBodyMiddleware(apiKeyMiddleware(s, mux))))
+}
+
+// maxRequestBodyBytes caps every request body (imports and batch writes are the
+// largest legitimate payloads; 16 MiB leaves generous headroom).
+const maxRequestBodyBytes = 16 << 20
+
+func maxBodyMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Body != nil {
+			r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
@@ -1435,6 +1448,9 @@ func (s *Server) suggestAIChildren(req aiSuggestChildrenRequest) (aiSuggestChild
 
 func (s *Server) testAIConnection(settings aiSettingsRequest) (aiTestResponse, error) {
 	baseURL := normalizeAIBaseURL(settings.BaseURL)
+	if err := s.checkAIBaseURL(baseURL); err != nil {
+		return aiTestResponse{}, err
+	}
 	models, err := s.listAIModels(settings, baseURL)
 	if err != nil {
 		return aiTestResponse{}, err
@@ -1471,6 +1487,9 @@ func (s *Server) testAIConnection(settings aiSettingsRequest) (aiTestResponse, e
 
 func (s *Server) runJSONTask(settings aiSettingsRequest, systemPrompt string, userPrompt string, schema map[string]any, debugRequest aiDebugRequest, target any) (aiTaskResult, error) {
 	baseURL := normalizeAIBaseURL(settings.BaseURL)
+	if err := s.checkAIBaseURL(baseURL); err != nil {
+		return aiTaskResult{}, err
+	}
 	model, err := s.resolveAIModel(settings, baseURL, strings.TrimSpace(settings.Model))
 	if err != nil {
 		return aiTaskResult{}, err

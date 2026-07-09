@@ -1,0 +1,109 @@
+CodeMind 改进与架构演进 · 完整交接文档
+(7.9 修订版:按代码现状核对与审查结论修订——新增"单二进制形态收敛""agent 接入契约""并行验证线";修正过时体量数字;P2 重新定性;仓库卫生按现状更新。修订处以 [修订]/[新增] 标注。)
+
+0. 产品定位
+本质:从 xmind 类本地脑图,演进为 vibecoding / AI coding agent 的"人类理解层"——agent 改代码时,人看实时脑图把握全局、评审、接手。
+命题依据:AI 时代瓶颈不是 AI 产出,而是人审查/理解的带宽。愿意多花 token/算力换更高带宽的人类表征(脑图 > HTML > MD)是划算的。
+[修订] 命题风险自觉:此命题成立的前提是脑图能自动、持续、忠实跟上 agent 的工作,否则退化为"过期文档"(代码可视化类产品的历史死因)。故设并行验证线(见 3),验证优先于重投入。
+核心原则:local-first。数据永远本地、单机永远可用;协作是叠加在同一数据模型上的可选层。
+两种形态,同一核心:①不用 AI 的人下 exe 当 xmind,默认不联网、不监听端口、无 token;②要 AI/协作的人主动开启,经中继 server(先)或 P2P(后)连接。
+[修订] 交付收敛为单一二进制(三模式,一套面):
+  codemind.exe        → 默认起 GUI(现有 Wails 主程序)
+  codemind.exe serve  → headless 服务端(自托管/docker 用同一个二进制)
+  codemind.exe mcp    → agent 用的 stdio MCP 适配器
+  不再维护独立 mcp.exe / server.exe 产线,不在 VSIX 内置服务端。服务器部署与 AI 接入共享同一二进制、同一端口、同一 token、同一权限模型。MCP/插件在"包装"上处于附属地位,但 agent 契约本身是核心回路(见 1)。
+技术栈结论:保留 Go + Wails + TS。不换 Rust(后端无 CPU 密集场景)、不换 Tauri/Electron(架构同构、纯重写)。Go 单静态二进制是自托管部署的王牌,也是上述子命令收敛的前提。
+
+1. 数据模型与同步(核心地基)
+三层同步架构:
+实时层:CRDT + presence(光标、在线、"AI 正在写")—— 提供多人协作"活人感"。
+提交层:在 commit 时把 CRDT 状态落盘为 git 跟踪的语义文件。
+耐久层:git 负责版本/分支/合并/评审/回滚。
+脑图存储 = git 仓库里一个受版本管理的文本文件:
+白嫖 git 全套(历史、diff、分支、PR 评审、CI、回滚)。checkout 任意 commit 即见当时的项目脑图。
+格式必须 diff/merge 友好:稳定序列化(key 排序固定、尽量一节点一行/一文件);语义层(节点/文本/关系,进 git 要合并)与 布局层(坐标/缩放/折叠,可再生,可不进 git)分离。
+优先 DSL 而非裸坐标(天然 diff 友好)。
+MVP 取舍:异步、commit 粒度的协作用 git 文件即可,MVP 可暂不上 CRDT;CRDT 作为"实时同屏协同/活人感"的升级项按需引入(用户明确要此体验,故列为计划内)。
+节点 ↔ 代码绑定(核心原语):节点可引用文件路径/glob/符号/素材路径。统一支撑:素材自动接线、稳定区=git 状态、变更可视快照高亮。
+[新增] agent 接入契约(与文件格式同级的"最难改"契约,原计划缺失):
+  单一契约来源 = HTTP API;MCP 工具只是它的薄视图。现状 cmd/mcp 本就是 676 行无状态 stdio→HTTP 适配器(零业务逻辑),天然支持此定位。一套契约,两个入口,不设独立"MCP 设计线"。
+  契约需定义:agent 可用操作集、写入粒度、幂等性、真实版本号 + If-Match 乐观并发、按分区的授权(agent token 默认只写开发区)。
+  与脑图文件格式同批定稿(P1-8 扩展为"双契约")。
+可视快照(给人看的图):CodeMind 自动渲染脑图图,高亮本次 git 变更对应的节点。放置方式:CI/bot 贴到 PR(首选)或 SVG 按需再生;不要把二进制图片提交进 git 历史。
+
+2. 协作模型:单项目的"人机控制平面 / 单一事实来源"
+注意:不是"中台"(那是跨业务线复用、易膨胀成瓶颈的陷阱,也是过度建设的老病)。是按单项目收敛的控制平面:人和 AI 共读写,脑图是项目状态唯一权威视图,AI 是执行器。
+分区 = 权威方向模型(驯服双向同步的钥匙):
+  分区   | 权威方向          | 谁能写
+  需求区 | 人 → 权威(意图)   | 策划写;美工提交素材文件
+  开发区 | AI 工作台(草稿)   | AI 写,人评审
+  稳定区 | 代码/git → 权威   | 由 git 状态回写,只读展示
+不要全局双向同步;按分区约束方向。稳定区天然=git 历史(代码+脑图同一 commit 提交)。
+AI 对代码/工程的每次自动操作必须可评审、可回滚(复用 snapshots)。
+[修订] agent 的 token 同样按分区授权:默认仅开发区可写,是"分区权威 × agent 契约"的自然对接点;MVP 期权限做到"按分区"即可,不做完整 RBAC。
+协作层设计原则(源于真实教训:多人 Minecraft 模组死于"想法没被结构化"+"关键路径缺人",而非沟通不足):
+AI 当"策划秘书":把聊天/语音/散点想法自动结构化成脑图节点,让"落地成结构"的成本趋近零。
+关键路径/依赖可见:显式阻塞关系 + "可动手/被阻塞"状态,引导贡献流向"项目需要的"而非"个人容易的"。
+以"产出物变更"为协作单位,异步优先、低仪式感(别再堆没人用的实时沟通功能)。
+AI 产出必须"可被接手":结构清晰 + 脑图作理解层,否则是负债(吓跑高手),不是资产。
+单人+AI 体验优先:先做出"能面世、可被接手的真东西",协作是加成。真东西是最强的招募/协调工具。
+细粒度权限:按分区/角色授权(美工只能往需求区提素材、维护者动开发区、稳定区只读),而非"能连上就全能改"。
+典型闭环(北极星,非 v1):多人共享脑图 → AI 在开发区改代码并实时回写进度 → 需要素材时美工把文件提交到需求区节点 → AI 自动接线入工程、晋级到稳定区。
+
+3. 分优先级工作项
+ P0 安全与稳定性(最先,~1–2 天;"server 默认关"后对纯本地用户多数归零;进行中:fix/p0-security-hardening 分支)
+SSRF 防护:AI 代理(internal/server/server.go 的 chatCompletion/listAIModels/normalizeAIBaseURL)对用户传入 BaseURL 加 scheme 白名单 + 私网/回环黑名单。
+请求体上限:所有写入端点统一 http.MaxBytesReader(重点 /api/import、/batch、/import-fragment、saveMap)。
+服务器超时:http.Server 补 ReadHeaderTimeout/ReadTimeout/WriteTimeout;AI 出站 http.Client 设 Timeout(当前 0=无限)。
+Token 哈希落盘:internal/store/token_store.go 存 SHA-256 而非明文。
+父子环检测:internal/mindmap/document.go 的 Document.Validate() 加环检测,并在 PATCH /nodes 更新路径强制调用;导入路径把 _ = doc.Validate() 改为真正处理错误。
+ [新增] 形态收敛(小、独立、清偿插件产线技术债;紧跟 P0、先于其余 P1,~1–2 天)
+入口合并:main.go 按 os.Args 分流(须在 webview 初始化前),收编 cmd/server(38 行)与 cmd/mcp(676 行)为 serve / mcp 子命令;构建脚本与发布产物随之收敛为单一 exe。MCP 不再需要单独安装——exe 即 MCP。
+Windows 细节:GUI 以 -H windowsgui 编译后,被 agent 宿主以管道拉起做 stdio MCP 没问题(句柄显式传递);终端交互跑 serve 看不到输出——子命令路径 AttachConsole 或写日志文件,标准解法,不构成障碍。
+VS Code 插件:砍掉"VSIX 内置本地服务端"产线(版本漂移、双份安全面、双份更新路径,近期多个 fix commit 都在为其还债)。插件降级为薄客户端(发现/连接本机 exe 的 server + webview)或暂时冻结;浏览器直开 localhost 可覆盖多数场景;必要时用户才单独装插件。
+后续增量(非本项):MCP over streamable HTTP 挂到同一 server 的 /mcp 路径,agent 只填一个 URL;本机/中继同一 URL+token 方案。
+ P1 架构减负 + 地基(后续一切前提;[修订] 工时上修:实际体量大于原记录,按 2 周以上预留)
+模块化拆分(按"local 核心 vs 同步层"这条线切,auth/token/CORS/AI 只在同步层):
+internal/server/server.go(实际 ~100KB,原记 88KB)→ maps/import/ai/collab/settings/middleware/json。
+frontend/src/app.ts(实际 ~360KB,原记 273KB)→ state/render/interaction/ai/api-sync;渲染逻辑独立成层。
+[修订] app.ts 拆分极易回归且现状前端测试薄弱:拆分前先补最小测试护栏(核心交互冒烟 + 序列化往返)。
+"server 默认关闭"形态:核心默认纯本地不监听;仅"协作/AI 模式"才拉起 HTTP server+token;核心不感知网络/token/CORS。MCP 端点/适配器跟着 server 走,默认同样不开。
+数据模型落地(P1-8,[修订] 扩展为双契约):git 跟踪的 diff 友好脑图文件 + 语义/布局分离 + 节点↔代码绑定;真实版本号 + If-Match 乐观并发;同批定稿 agent HTTP/MCP 契约(见 1);CRDT 作为实时层按需引入。
+ [新增] 并行验证线(与 P1 同期启动,贯穿全程,不阻塞也不被阻塞)
+用现有 MCP + 现有脑图,让真实 agent 会话把任务/进度结构化写进脑图,自吃狗粮 ≥1 周。
+验证目标:①"人看脑图评审 agent"是否真的优于"看 diff+PR"(核心命题);②agent 实际需要哪些操作/字段/粒度(反哺双契约取舍)。
+此线的结论优先级高于地基进度:若命题被证伪或修正,及时调整 P1-8/P3 投入方向。
+ P2 AI 可视化节点([修订] 重新定性:低成本增值项,非差异化主打)
+定性依据:Mermaid 渲染是 commodity(Obsidian/GitHub/Typora 均有);真正差异化 = 分区控制平面 + 节点↔代码绑定 + PR 可视快照。P2 改动小可插队,但与 P3 可视快照争资源时让位。
+优先 Mermaid 图表节点(改动小、省 token、最安全):节点新增可选 render:{type:"mermaid"|"svg"|"html", source},text 保留为可读摘要与 render 并存;现有 PATCH /nodes//batch//import-fragment 自动兼容;?compact=true 可只传 source。
+安全渲染(硬红线:Wails 主 webview 挂着 Go 绑定,注入=RCE):HTML/JS 一律 <iframe sandbox="allow-scripts">(不加 allow-same-origin)+ CSP 禁外联;SVG 用 DOMPurify 或 iframe 化,禁止 innerHTML;render payload 设大小上限。
+顺序:DSL(Mermaid)→ 沙箱 HTML → SVG;让 AI 生成 DSL 由前端渲染,优于 AI 直吐裸 SVG/HTML。
+节点加"AI 生成图表"按钮,复用 /api/ai/generate。
+ P3 同步层与协作
+中继 server 优先(异步、可靠、离线可补),P2P 后期作局域网/隐私增强。
+实时:轮询(当前 2s)→ SSE;支撑"实时看 AI 在改什么"+ CRDT presence 活人感。
+可视快照:CI/bot 在 PR 贴渲染图,高亮变更对应节点(靠节点↔代码绑定)。
+部署体验(作者自己都嫌难=用户必放弃,重点):[修订] 自托管服务端与桌面端同一二进制(serve 子命令),docker run -p 7979:7979 -v ./data:/data <image> 即"形态收敛"的直接产物;客户端做"连接服务器"向导(地址+token);agent 连本机或中继用同一 URL+token 方案;三档引导(零部署/一键自托管/进阶反代+HTTPS);录制首次部署踩坑作文档。
+协作功能:讨论→策划案 AI 合成;依赖/关键路径视图;贡献以节点变更为单位 + 变更可见性(复用 snapshots)。
+ P4 UX(参考自有 docs/analysis-ux-comparison.md,诊断准确:"好看但不活")
+半天见效:面板 slide-in、节点增删 fade、缩放平滑插值。
+可发现性(优先于装饰动画):空画布引导 + 快捷键覆盖层 + 节点浮动上下文工具条(ROI 最高)。
+AI 协作可见性:"AI 正在写"状态 + snapshots 回滚入口。
+大图性能:先视口虚拟化(只渲染可见节点);真扛不住再 Canvas/WebGL(须在渲染层模块化之后)。
+触屏:全键盘+拖拽在触屏基本不可用,不支持则在定位上说明。
+仓库卫生([修订] 按现状更新)
+已处理:.gitignore 已覆盖 build/bin/、*.exe、dist/、node_modules/、vscode-extension/out/;git 跟踪文件中已无 exe。
+待办:从 git 移除仍被跟踪的 .wails-probe/ 整目录;形态收敛落地后,清理根目录遗留的 mcp.exe / server.exe 构建产物及对应打包脚本。
+竞品定位
+README 竞品从 Miro/Tana/Heptabase/Xmind 收敛到 Project Graph / GitMind + AI coding agent 生态(Cursor/Claude Code),主打"开发者 + AI 协作的项目理解/规划画布"。
+
+4. 推进顺序(按依赖,[修订])
+P0 安全收口(独立、快;进行中)
+形态收敛:单 exe 三模式(GUI/serve/mcp)+ 砍 VSIX 服务端线(小而独立,紧跟 P0)
+并行验证线启动:现有 MCP + 脑图自吃狗粮,结论随时反哺后续各项
+P1-6 模块化拆分(前端先补测试护栏;按核心/同步层切;一切前提)
+P1-8 双契约定稿:脑图文件格式 + agent HTTP/MCP 契约(git 友好 + 语义/布局分离 + 节点↔代码绑定 + 操作集/幂等/If-Match/分区授权;最难改,越早越好)
+P1-7 local 核心跑通 + server 默认关(MCP 随 server 同开同关)
+P3 中继 server + 部署体验 + 可视快照
+CRDT 实时层、AI 可视化(P2)、SSE、协作功能、Canvas 虚拟化、UX —— 地基之后并行
+主线:语言/GUI 框架都别动;真正投入的是——git 作耐久层 + CRDT 作可选实时层、单二进制三模式(部署与 AI 接入一套面)、按"核心 vs 同步层"拆分、"文件格式 + agent 契约"双契约、节点↔代码绑定、分区权威的控制平面、傻瓜级自托管部署。先做出"一个人+AI 能面世、且可被接手"的真东西,协作层围绕"结构化落地 + 关键路径可见 + 异步低门槛"展开。

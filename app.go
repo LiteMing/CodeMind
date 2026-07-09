@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"time"
 	"path/filepath"
 
 	"code-mind/internal/collab"
@@ -39,8 +40,9 @@ func (a *App) startup(ctx context.Context) {
 	}
 	apiHandler := server.NewWithTokenStore(a.store, settingsDir, tokenStore).Handler()
 	a.apiServer = &http.Server{
-		Addr:    desktopAPIAddress,
-		Handler: apiHandler,
+		Addr:              desktopAPIAddress,
+		Handler:           apiHandler,
+		ReadHeaderTimeout: 10 * time.Second,
 	}
 	a.collab = collab.NewServer(collab.DefaultAddress, tokenStore)
 

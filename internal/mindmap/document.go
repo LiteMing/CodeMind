@@ -197,6 +197,10 @@ func (d *Document) Validate() error {
 		}
 	}
 
+	if err := detectParentCycles(d.Nodes); err != nil {
+		return err
+	}
+
 	for _, edge := range d.Relations {
 		if strings.TrimSpace(edge.ID) == "" {
 			return errors.New("relation id is required")
@@ -278,6 +282,41 @@ func (d *Document) PrepareForSave(now time.Time) {
 	if d.Meta.LastOpenedAt.IsZero() {
 		d.Meta.LastOpenedAt = now
 	}
+}
+
+// detectParentCycles verifies the parentId graph is acyclic. Node parents were
+// already checked to exist, so any walk that revisits a node is a cycle.
+func detectParentCycles(nodes []Node) error {
+	parentOf := make(map[string]string, len(nodes))
+	for _, node := range nodes {
+		parentOf[node.ID] = node.ParentID
+	}
+
+	const (
+		unvisited = 0
+		visiting  = 1
+		done      = 2
+	)
+	state := make(map[string]int, len(nodes))
+	for _, node := range nodes {
+		if state[node.ID] != unvisited {
+			continue
+		}
+		path := make([]string, 0, 8)
+		current := node.ID
+		for current != "" && state[current] == unvisited {
+			state[current] = visiting
+			path = append(path, current)
+			current = parentOf[current]
+		}
+		if current != "" && state[current] == visiting {
+			return fmt.Errorf("node %s is part of a parent cycle", current)
+		}
+		for _, id := range path {
+			state[id] = done
+		}
+	}
+	return nil
 }
 
 func isSafeIdentifier(value string) bool {

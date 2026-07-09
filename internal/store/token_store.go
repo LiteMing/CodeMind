@@ -2,6 +2,8 @@ package store
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -17,7 +19,8 @@ type Token struct {
 	ID          string     `json:"id"`
 	MapID       string     `json:"mapId"`
 	AccessLevel string     `json:"accessLevel"` // "owner" | "editor" | "viewer"
-	Secret      string     `json:"secret"`      // random 32-byte hex
+	Secret      string     `json:"secret,omitempty"`     // plaintext, only populated on create; never persisted
+	SecretHash  string     `json:"secretHash,omitempty"` // SHA-256 hex of the secret, persisted
 	DisplayName string     `json:"displayName"` // for presence (max 30 chars)
 	ExpiresAt   *time.Time `json:"expiresAt,omitempty"`
 	CreatedAt   time.Time  `json:"createdAt"`
@@ -96,7 +99,7 @@ func (ts *TokenStore) Create(mapId, accessLevel, displayName string, expiration 
 		ID:          fmt.Sprintf("tok-%d", now.UnixMilli()),
 		MapID:       mapId,
 		AccessLevel: accessLevel,
-		Secret:      secret,
+		SecretHash:  hashSecret(secret),
 		DisplayName: displayName,
 		CreatedAt:   now,
 		Revoked:     false,
@@ -115,7 +118,10 @@ func (ts *TokenStore) Create(mapId, accessLevel, displayName string, expiration 
 		return nil, fmt.Errorf("failed to persist token: %w", err)
 	}
 
-	return &token, nil
+	// Return a copy carrying the plaintext secret; it is never stored.
+	result := token
+	result.Secret = secret
+	return &result, nil
 }
 
 // Validate checks a secret and returns the associated token if valid.
@@ -124,8 +130,9 @@ func (ts *TokenStore) Validate(secret string) (*Token, error) {
 	ts.mu.RLock()
 	defer ts.mu.RUnlock()
 
+	hashed := hashSecret(secret)
 	for i := range ts.tokens {
-		if ts.tokens[i].Secret == secret {
+		if subtle.ConstantTimeCompare([]byte(ts.tokens[i].SecretHash), []byte(hashed)) == 1 {
 			if ts.tokens[i].Revoked {
 				return nil, errors.New("token has been revoked")
 			}
@@ -205,6 +212,23 @@ func (ts *TokenStore) load() error {
 		return fmt.Errorf("failed to parse token store: %w", err)
 	}
 
+	// Migrate legacy plaintext secrets to hashed form.
+	migrated := false
+	for i := range ts.tokens {
+		if ts.tokens[i].Secret != "" {
+			if ts.tokens[i].SecretHash == "" {
+				ts.tokens[i].SecretHash = hashSecret(ts.tokens[i].Secret)
+			}
+			ts.tokens[i].Secret = ""
+			migrated = true
+		}
+	}
+	if migrated {
+		if err := ts.persist(); err != nil {
+			return fmt.Errorf("failed to migrate token store to hashed secrets: %w", err)
+		}
+	}
+
 	return nil
 }
 
@@ -230,4 +254,10 @@ func generateSecret() (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(bytes), nil
+}
+
+// hashSecret returns the SHA-256 hex digest of a token secret.
+func hashSecret(secret string) string {
+	sum := sha256.Sum256([]byte(secret))
+	return hex.EncodeToString(sum[:])
 }

@@ -3,6 +3,7 @@ package collab
 import (
 	"context"
 	"net/http"
+	"time"
 
 	"code-mind/internal/store"
 	"github.com/gorilla/websocket"
@@ -30,7 +31,7 @@ func NewServer(addr string, tokenStore *store.TokenStore) *Server {
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc(WSPath, s.handleWS)
-	s.http = &http.Server{Addr: addr, Handler: mux}
+	s.http = &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
 	return s
 }
 
