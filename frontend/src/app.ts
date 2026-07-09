@@ -1,4 +1,13 @@
 import { api } from './api'
+import { PRIORITY_VALUES } from './app-types'
+import { renderHome } from './render/home'
+import { renderNodes, renderEdges } from './render/canvas'
+import { renderSettings } from './render/settings'
+import { renderInspector } from './render/inspector'
+import { renderFixedToolbar } from './render/toolbar'
+import { renderContextMenu } from './render/context-menu'
+import { renderShortcutOverlay } from './render/shortcut-overlay'
+import { renderAIWorkspace } from './render/ai-panel'
 import { UxEngine, MinimapRenderer } from './ux-engine'
 import type { NodeBounds, MinimapNodeData } from './ux-engine'
 import type {
@@ -19,15 +28,7 @@ import type {
   ShellRefs,
   ToastItem,
 } from './app-types'
-import {
-  NODE_COLOR_PALETTES,
-  NODE_COLOR_VALUES,
-  normalizeNodeColor,
-  resolveNodeColorPalette,
-  buildNodeColorStyle,
-  rgbaFromRgb,
-  applyAlphaToHex,
-} from './color-palette'
+import { normalizeNodeColor, resolveNodeColorPalette, rgbaFromRgb, applyAlphaToHex } from './color-palette'
 import {
   autoLayoutHierarchy,
   childrenOf,
@@ -39,7 +40,6 @@ import {
   descendantIds,
   findNode,
   findRoot,
-  hiddenDescendantCount,
   nextChildPosition,
   nextFloatingPosition,
   nextSiblingPosition,
@@ -51,10 +51,7 @@ import {
 } from './document'
 import {
   type NodeRenderMetrics,
-  buildHierarchyPath,
-  resolveHierarchyEdgeEndpoints,
   resolveRelationEdgeEndpoints,
-  resolveNodeAnchorToward,
   buildRelationSegmentPath,
   getRelationDefaultMidpoint,
 } from './edge-geometry'
@@ -68,7 +65,6 @@ import {
 import { type GraphHitNode, buildGraphFrame, traceRoundedRectPath } from './graph-frame'
 import { type TranslationKey, kindLabel, nodeColorLabel, themeLabel, translate } from './i18n'
 import {
-  buildNodeDimensionStyle,
   nodeVisibleTitle,
   normalizeNodeNote,
   deriveNoteChildTitle,
@@ -77,9 +73,6 @@ import {
 } from './node-render'
 import { estimateNodeHeight, estimateNodeWidth, TOPIC_NODE_MAX_WIDTH } from './node-sizing'
 import {
-  DEFAULT_AI_MAX_TOKENS,
-  DEFAULT_AI_TIMEOUT_SECONDS,
-  DEFAULT_CHILD_GAP_X,
   DEFAULT_LM_STUDIO_URL,
   loadPreferences,
   normalizeAIMaxTokens,
@@ -95,9 +88,7 @@ import {
 } from './preferences'
 import { listLocalSnapshots, loadLocalSnapshot, saveLocalSnapshot, type LocalSnapshotSummary } from './snapshots'
 import {
-  AI_TEMPLATES,
   normalizeAITemplateId,
-  templateLabel,
   promptTemplateCopy,
   createTemplateDocument,
   normalizedRelationPairKey,
@@ -131,7 +122,6 @@ import {
   downloadTextFile,
   escapeAttribute,
   escapeHtml,
-  formatRelativeTime,
   getAIDebugInfo,
   getErrorMessage,
   getWorkspaceBounds,
@@ -167,21 +157,20 @@ const RELATION_HANDLE_LONG_PRESS_DELAY_MS = 320
 const RELATION_HANDLE_MOVE_THRESHOLD = 8
 const IMPORT_FILE_ACCEPT =
   '.md,.markdown,.txt,.json,.csv,.tsv,.html,.htm,.xml,.opml,.mermaid,.mmd,.yaml,.yml,.toml,.ini,.cfg,.log,.rst,text/plain,text/markdown,application/json,text/csv,text/html,application/xml,text/xml'
-const PRIORITY_VALUES: Priority[] = ['', 'P0', 'P1', 'P2', 'P3']
 
 export async function createApp(rootEl: HTMLElement): Promise<void> {
   const app = new MindMapApp(rootEl)
   await app.mount()
 }
 
-class MindMapApp {
-  private readonly rootEl: HTMLElement
+export class MindMapApp {
+  readonly rootEl: HTMLElement
   private autosaveHandle: number | null = null
-  private refs: ShellRefs | null = null
+  refs: ShellRefs | null = null
   private pan: PanState | null = null
   private graphDrag: GraphDragState | null = null
   private didInitializeViewport = false
-  private viewport = { x: 0, y: 0, scale: 1 }
+  viewport = { x: 0, y: 0, scale: 1 }
   private historyPast: HistorySnapshot[] = []
   private historyFuture: HistorySnapshot[] = []
   private liveCanvasHandle: number | null = null
@@ -207,13 +196,13 @@ class MindMapApp {
     activated: boolean
   } | null = null
   private pendingEditorOptions: EditorLaunchOptions | null = null
-  private activeEditorAnchorLeft: number | null = null
-  private activeEditorPreview: ActiveEditorPreviewState | null = null
+  activeEditorAnchorLeft: number | null = null
+  activeEditorPreview: ActiveEditorPreviewState | null = null
   private activeEditorLockedWidth: number | null = null
   private editingOriginalTitle: string | null = null
   private nodeEditorMeasureCanvas: HTMLCanvasElement | null = null
   private pendingImportMode: PendingImportMode = 'auto'
-  private workspaceBounds: WorkspaceBounds = {
+  workspaceBounds: WorkspaceBounds = {
     minX: 0,
     minY: 0,
     width: WORKSPACE_MIN_WIDTH,
@@ -248,8 +237,8 @@ class MindMapApp {
   private toastTimers: Map<string, number> = new Map()
   private toastIdCounter = 0
   /** Tracks which Inspector sections are collapsed (default: all collapsed) */
-  private inspectorSectionsCollapsed: Set<string> = new Set(['relations', 'snapshots', 'advanced'])
-  private state: AppState
+  inspectorSectionsCollapsed: Set<string> = new Set(['relations', 'snapshots', 'advanced'])
+  state: AppState
   private uxEngine: UxEngine
   private minimapRenderer: MinimapRenderer | null = null
   private minimapDragging = false
@@ -2720,18 +2709,18 @@ class MindMapApp {
     this.applyTheme()
 
     if (this.state.view === 'home') {
-      this.renderHome()
+      renderHome(this)
       return
     }
 
     this.ensureShell()
     this.renderHeader()
     this.renderWorkspace()
-    this.renderInspector()
+    renderInspector(this)
     this.syncInspectorNoteInputs()
     this.renderOverlay()
-    this.renderSettings()
-    this.renderAIWorkspace()
+    renderSettings(this)
+    renderAIWorkspace(this)
     this.renderGraphOverlay()
     this.renderOnboarding()
     this.updateCanvasGuide()
@@ -2741,77 +2730,6 @@ class MindMapApp {
     this.syncInspectorDrag()
     this.focusEditorIfNeeded()
     this.updateContextToolbar()
-  }
-
-  private renderHome(): void {
-    this.destroyContextToolbar()
-    this.refs = null
-    this.rootEl.innerHTML = `
-      <div class="home-shell">
-        <header class="home-hero">
-          <div>
-            <p class="eyebrow">${this.t('app.eyebrow')}</p>
-            <h1>${this.t('home.title')}</h1>
-            <p class="home-copy">${this.t('home.subtitle')}</p>
-            <p class="home-status">${this.t(this.state.status.key, this.state.status.values)}</p>
-          </div>
-          <button type="button" class="action-button primary-action" data-command="create-map">${this.t('home.create')}</button>
-        </header>
-
-        <section class="file-grid">
-          ${
-            this.state.maps.length === 0
-              ? `<article class="file-card file-card-empty">
-                   <p class="section-label">${this.t('home.title')}</p>
-                   <h2>${this.t('home.empty')}</h2>
-                   <button type="button" class="action-button" data-command="create-map">${this.t('home.create')}</button>
-                 </article>`
-              : this.state.maps
-                  .map((summary) => {
-                    const summaryId = escapeAttribute(summary.id)
-                    return `
-                      <article class="file-card">
-                        <div class="file-card-top">
-                          <div>
-                            <p class="section-label">${escapeHtml(summary.id)}</p>
-                            <h2>${escapeHtml(summary.title)}</h2>
-                            <p class="file-meta">${this.t('home.lastEdited', {
-                              value: formatRelativeTime(summary.lastEditedAt, this.state.preferences.locale),
-                            })}</p>
-                          </div>
-                        </div>
-                        <div class="file-card-actions">
-                          <button type="button" class="chip-button" data-command="open-map:${summaryId}">${this.t('home.open')}</button>
-                          <button type="button" class="chip-button" data-command="rename-map:${summaryId}">${this.t('home.rename')}</button>
-                          <button type="button" class="chip-button danger" data-command="delete-map:${summaryId}">${this.t('home.delete')}</button>
-                        </div>
-                      </article>
-                    `
-                  })
-                  .join('')
-          }
-        </section>
-
-        <section class="template-strip">
-          <div class="template-strip-copy">
-            <p class="section-label">${this.t('ai.templateExamples')}</p>
-            <h2>${this.t('ai.templateExamplesTitle')}</h2>
-            <p class="inspector-copy">${this.t('ai.templateExamplesCopy')}</p>
-          </div>
-          <div class="template-grid">
-            ${AI_TEMPLATES.map((template) => {
-              return `
-                <article class="template-card">
-                  <p class="section-label">${templateLabel(template.id, this.state.preferences.locale)}</p>
-                  <p class="inspector-copy">${escapeHtml(promptTemplateCopy(template.id, this.state.preferences.locale))}</p>
-                  <button type="button" class="chip-button" data-command="create-template-map:${template.id}">${this.t('ai.templateAction')}</button>
-                </article>
-              `
-            }).join('')}
-          </div>
-        </section>
-      </div>
-    `
   }
 
   private ensureShell(): void {
@@ -2955,7 +2873,7 @@ class MindMapApp {
     this.refs.topPanel.classList.toggle('is-collapsed', this.state.topPanelCollapsed)
     this.refs.topPanel.classList.toggle('is-hidden', chromeLayout === 'fixed')
     this.refs.fixedToolbar.classList.toggle('is-visible', chromeLayout === 'fixed')
-    this.refs.fixedToolbar.innerHTML = chromeLayout === 'fixed' ? this.renderFixedToolbar() : ''
+    this.refs.fixedToolbar.innerHTML = chromeLayout === 'fixed' ? renderFixedToolbar(this) : ''
     this.refs.eyebrow.textContent = this.t('app.eyebrow')
     this.refs.title.textContent = this.state.document.title
     this.refs.saveIndicator.classList.toggle('is-dirty', this.state.dirty)
@@ -2992,144 +2910,6 @@ class MindMapApp {
     document.title = `${this.state.document.title} - Code Mind`
   }
 
-  private renderFixedToolbar(): string {
-    const locale = this.state.preferences.locale
-    const selectedNode = this.selectedNode()
-    const hasSelection = Boolean(selectedNode)
-    const childCount = selectedNode ? childrenOf(this.state.document, selectedNode.id).length : 0
-    const canDeleteSelection = this.selectedNodeIds().some((nodeId) => this.findNode(nodeId)?.kind !== 'root')
-    const aiBusy = this.state.ai.busy
-    const labels =
-      locale === 'zh-CN'
-        ? {
-            file: '文件',
-            node: '节点',
-            ai: 'AI',
-            view: '视图',
-          }
-        : {
-            file: 'File',
-            node: 'Node',
-            ai: 'AI',
-            view: 'View',
-          }
-
-    const renderMenuItem = (command: string, label: string, disabled = false, tone: '' | 'danger' = ''): string => {
-      return `
-        <button type="button" class="fixed-menu-item ${tone}" data-command="${command}" ${disabled ? 'disabled' : ''}>
-          ${escapeHtml(label)}
-        </button>
-      `
-    }
-
-    const renderMenu = (menuId: FixedMenuId, label: string, content: string): string => {
-      const open = this.state.fixedMenu === menuId
-      return `
-        <div class="fixed-menu-group ${open ? 'is-open' : ''}">
-          <button
-            type="button"
-            class="fixed-toolbar-tab ${open ? 'is-active' : ''}"
-            data-command="toggle-fixed-menu:${menuId}"
-            aria-expanded="${open ? 'true' : 'false'}"
-          >
-            ${escapeHtml(label)}
-          </button>
-          ${
-            open
-              ? `
-                <div class="fixed-menu-popup">
-                  ${content}
-                </div>
-              `
-              : ''
-          }
-        </div>
-      `
-    }
-
-    return `
-      <div class="fixed-toolbar-shell" data-fixed-menu-shell>
-        <div class="fixed-toolbar-main">
-          <button type="button" class="chip-button fixed-toolbar-home" data-command="go-home">${this.t('toolbar.home')}</button>
-          <div class="fixed-toolbar-copy">
-            <p class="eyebrow">${this.t('app.eyebrow')}</p>
-            <strong>${escapeHtml(this.state.document.title)}</strong>
-          </div>
-          <span class="save-indicator ${this.state.dirty ? 'is-dirty' : ''}" title="${escapeAttribute(this.t(this.state.dirty ? 'status.unsaved' : 'status.allSaved'))}"></span>
-          <p class="fixed-toolbar-status" aria-live="polite">${escapeHtml(this.t(this.state.status.key, this.state.status.values))}</p>
-        </div>
-
-        <div class="fixed-toolbar-menus">
-          ${renderMenu(
-            'file',
-            labels.file,
-            [
-              renderMenuItem('save', this.t('toolbar.save')),
-              renderMenuItem('import-file', this.t('toolbar.import')),
-              renderMenuItem('export-markdown', this.t('toolbar.exportMarkdown')),
-              renderMenuItem('rename-map', this.t('toolbar.renameMap')),
-              renderMenuItem('delete-map', this.t('toolbar.deleteMap'), false, 'danger'),
-            ].join(''),
-          )}
-          ${renderMenu(
-            'node',
-            labels.node,
-            [
-              renderMenuItem('new-child', this.t('action.newChild'), !hasSelection),
-              renderMenuItem('new-sibling', this.t('action.newSibling'), !hasSelection),
-              renderMenuItem('new-floating', this.t('action.newFloating')),
-              renderMenuItem(
-                'toggle-collapse',
-                selectedNode?.collapsed ? this.t('action.expand') : this.t('action.collapse'),
-                !hasSelection || childCount === 0,
-              ),
-              renderMenuItem('connect-selected', this.t('action.linkRelation'), !hasSelection),
-              renderMenuItem('delete-selected', this.t('action.delete'), !canDeleteSelection, 'danger'),
-            ].join(''),
-          )}
-          ${renderMenu(
-            'ai',
-            labels.ai,
-            [
-              renderMenuItem('open-ai-workspace', this.t('toolbar.ai'), aiBusy),
-              renderMenuItem('ai-suggest-children', this.t('ai.suggestChildrenAction'), aiBusy || !hasSelection),
-              renderMenuItem(
-                'ai-suggest-siblings',
-                this.t('ai.suggestSiblingsAction'),
-                aiBusy || !this.canSuggestSiblings(),
-              ),
-              renderMenuItem('ai-complete-node-notes', this.t('ai.notesAction'), aiBusy),
-              renderMenuItem('ai-connect-relations', this.t('ai.connectAction'), aiBusy),
-            ].join(''),
-          )}
-          ${renderMenu(
-            'view',
-            labels.view,
-            [
-              renderMenuItem('auto-layout', this.t('toolbar.autoLayout')),
-              renderMenuItem(
-                'toggle-inspector',
-                this.t(this.state.inspectorCollapsed ? 'panel.side.show' : 'panel.side.hide'),
-              ),
-              renderMenuItem('open-graph-overlay', this.t('toolbar.graph3d')),
-              renderMenuItem(
-                'theme-toggle',
-                this.t('toolbar.theme', { theme: themeLabel(locale, this.state.document.theme) }),
-              ),
-              renderMenuItem('toggle-settings', this.t('toolbar.settings')),
-            ].join(''),
-          )}
-        </div>
-
-        <div class="fixed-toolbar-quick">
-          <button type="button" class="chip-button" data-command="undo" ${this.canUndo() ? '' : 'disabled'}>${this.t('toolbar.undo')}</button>
-          <button type="button" class="chip-button" data-command="redo" ${this.canRedo() ? '' : 'disabled'}>${this.t('toolbar.redo')}</button>
-          <button type="button" class="chip-button" data-command="save">${this.t('toolbar.save')}</button>
-        </div>
-      </div>
-    `
-  }
-
   private toggleFixedMenu(menuId: FixedMenuId): void {
     if (this.state.preferences.appearance.chromeLayout !== 'fixed') {
       return
@@ -3138,69 +2918,7 @@ class MindMapApp {
     this.renderHeader()
   }
 
-  private renderGestureActionOptions(selected: GestureAction): string {
-    const gestureOptions =
-      this.state.preferences.locale === 'zh-CN'
-        ? [
-            { value: 'none' as const, label: '无操作' },
-            { value: 'rename' as const, label: '重命名节点' },
-            { value: 'edit-tail' as const, label: '在标题末尾编辑' },
-            { value: 'ai-quick' as const, label: 'AI 快捷请求' },
-            { value: 'ai-suggest-children' as const, label: '建议子节点' },
-            { value: 'ai-suggest-siblings' as const, label: '建议同级节点' },
-            { value: 'ai-wheel' as const, label: 'AI 轮盘' },
-            { value: 'new-child' as const, label: '新建子节点' },
-            { value: 'new-sibling' as const, label: '新建同级节点' },
-            { value: 'new-floating' as const, label: '新建自由节点' },
-            { value: 'toggle-collapse' as const, label: '折叠 / 展开分支' },
-          ]
-        : [
-            { value: 'none' as const, label: 'No action' },
-            { value: 'rename' as const, label: 'Rename node' },
-            { value: 'edit-tail' as const, label: 'Edit title tail' },
-            { value: 'ai-quick' as const, label: 'AI quick assist' },
-            { value: 'ai-suggest-children' as const, label: 'Suggest children' },
-            { value: 'ai-suggest-siblings' as const, label: 'Suggest siblings' },
-            { value: 'ai-wheel' as const, label: 'AI wheel' },
-            { value: 'new-child' as const, label: 'New child' },
-            { value: 'new-sibling' as const, label: 'New sibling' },
-            { value: 'new-floating' as const, label: 'New floating node' },
-            { value: 'toggle-collapse' as const, label: 'Toggle collapse' },
-          ]
-
-    return gestureOptions
-      .map(
-        (option) =>
-          `<option value="${option.value}" ${selected === option.value ? 'selected' : ''}>${escapeHtml(option.label)}</option>`,
-      )
-      .join('')
-  }
-
-  private renderCanvasDragActionOptions(selected: CanvasDragAction): string {
-    const options =
-      this.state.preferences.locale === 'zh-CN'
-        ? [
-            { value: 'none' as const, label: '无操作' },
-            { value: 'marquee-select' as const, label: '框选节点' },
-            { value: 'pan-canvas' as const, label: '拖动画布' },
-            { value: 'cutting' as const, label: '切除模式' },
-          ]
-        : [
-            { value: 'none' as const, label: 'No action' },
-            { value: 'marquee-select' as const, label: 'Marquee select' },
-            { value: 'pan-canvas' as const, label: 'Pan canvas' },
-            { value: 'cutting' as const, label: 'Cutting mode' },
-          ]
-
-    return options
-      .map(
-        (option) =>
-          `<option value="${option.value}" ${selected === option.value ? 'selected' : ''}>${escapeHtml(option.label)}</option>`,
-      )
-      .join('')
-  }
-
-  private canSuggestSiblings(nodeId?: string): boolean {
+  canSuggestSiblings(nodeId?: string): boolean {
     const targetId = nodeId ?? this.selectedNode()?.id
     if (!targetId) {
       return false
@@ -3237,9 +2955,9 @@ class MindMapApp {
     this.refs.edgeLayer.setAttribute('viewBox', `0 0 ${bounds.width} ${bounds.height}`)
     this.updateCanvasViewportView()
     this.refs.scroll.classList.toggle('is-marqueeing', Boolean(this.state.marquee))
-    this.refs.edgeLayer.innerHTML = this.renderEdges()
+    this.refs.edgeLayer.innerHTML = renderEdges(this)
     this.refs.regionLayer.innerHTML = this.renderRegions()
-    this.refs.nodeLayer.innerHTML = this.renderNodes()
+    this.refs.nodeLayer.innerHTML = renderNodes(this)
   }
 
   private renderRegionDrawPreview(): void {
@@ -3263,164 +2981,6 @@ class MindMapApp {
       left: ${left}px; top: ${top}px; width: ${w}px; height: ${h}px;
       background: ${bgColor}; border: 2px dashed ${borderColor};
     "></div>`
-  }
-
-  private renderInspector(): void {
-    if (!this.refs) {
-      return
-    }
-
-    const selectedNode = this.selectedNode()
-    const selectedCount = this.selectedNodeIds().length
-    const workspaceMetrics = `
-      <span class="metric-chip">${this.t('dock.selected', { value: selectedCount })}</span>
-      <span class="metric-chip">${this.t('dock.nodes', { value: this.state.document.nodes.length })}</span>
-      <span class="metric-chip">${this.t('dock.relations', { value: this.state.document.relations.length })}</span>
-      <span class="metric-chip">${Math.round(this.viewport.scale * 100)}%</span>
-      <span class="metric-chip">${this.t('dock.theme', { value: themeLabel(this.state.preferences.locale, this.state.document.theme) })}</span>
-    `
-
-    this.refs.inspector.classList.toggle('is-collapsed', this.state.inspectorCollapsed)
-    if (!selectedNode) {
-      this.refs.inspector.innerHTML = this.state.inspectorCollapsed
-        ? `
-          <section class="inspector-card inspector-card-compact inspector-handle-card">
-            <p class="section-label">${this.t('inspector.summary')}</p>
-            <p class="inspector-handle-copy">${this.t('inspector.noneSelected')}</p>
-            <button type="button" class="action-button inspector-toggle-button" data-command="toggle-inspector">${this.t('panel.side.show')}</button>
-          </section>
-        `
-        : `
-          <section class="inspector-card">
-            <div class="inspector-header">
-              <div>
-                <p class="section-label">${this.t('inspector.selected')}</p>
-                <h2>${this.t('inspector.noneSelected')}</h2>
-              </div>
-              <button type="button" class="ghost-button" data-command="toggle-inspector">${this.t('panel.side.hide')}</button>
-            </div>
-            <p class="inspector-copy">${this.t('inspector.emptySelectionCopy')}</p>
-          </section>
-
-          <section class="inspector-card">
-            <p class="section-label inspector-section-header" data-command="toggle-inspector-section:advanced">${this.t('panel.workspace')} ${this.inspectorSectionsCollapsed.has('advanced') ? '▸' : '▾'}</p>
-            <div class="${this.inspectorSectionsCollapsed.has('advanced') ? 'section-collapsed' : 'section-expanded'}">
-              <div class="metric-row">
-                ${workspaceMetrics}
-              </div>
-            </div>
-          </section>
-
-          <section class="inspector-card">
-            <p class="section-label inspector-section-header" data-command="toggle-inspector-section:snapshots">${this.t('snapshot.title')} ${this.inspectorSectionsCollapsed.has('snapshots') ? '▸' : '▾'}</p>
-            <div class="${this.inspectorSectionsCollapsed.has('snapshots') ? 'section-collapsed' : 'section-expanded'}">
-              ${this.renderSnapshotSectionContent()}
-            </div>
-          </section>
-        `
-      return
-    }
-
-    const relatedRelations = connectedRelations(this.state.document, selectedNode.id)
-    const directChildren = childrenOf(this.state.document, selectedNode.id)
-    const hiddenChildren = hiddenDescendantCount(this.state.document, selectedNode.id)
-    const singleSelection = selectedCount === 1
-    const canDeleteSelection = this.selectedNodeIds().some((nodeId) => this.findNode(nodeId)?.kind !== 'root')
-    const relationModeText = this.state.connectSourceNodeId
-      ? this.t('inspector.relationConnecting', {
-          title: this.findNode(this.state.connectSourceNodeId)?.title ?? this.t('common.unknown'),
-        })
-      : this.t('inspector.relationIdle')
-    const selectionTitle = singleSelection
-      ? selectedNode.title
-      : this.t('context.selectionCount', {
-          value: selectedCount,
-        })
-    const selectedNote = normalizeNodeNote(selectedNode.note) ?? ''
-
-    this.refs.inspector.innerHTML = this.state.inspectorCollapsed
-      ? `
-        <section class="inspector-card inspector-card-compact inspector-handle-card">
-          <p class="section-label">${this.t('inspector.summary')}</p>
-          <p class="inspector-handle-copy">${escapeHtml(shorten(selectionTitle, 24))}</p>
-          <button type="button" class="action-button inspector-toggle-button" data-command="toggle-inspector">${this.t('panel.side.show')}</button>
-        </section>
-      `
-      : `
-        <section class="inspector-card">
-          <div class="inspector-header">
-            <div>
-              <p class="section-label">${this.t('inspector.selected')}</p>
-              <h2>${escapeHtml(selectionTitle)}</h2>
-            </div>
-            <button type="button" class="ghost-button" data-command="toggle-inspector">${this.t('panel.side.hide')}</button>
-          </div>
-          <div class="metric-row">
-            <span class="metric-chip">${this.t('dock.selected', { value: selectedCount })}</span>
-            <span class="metric-chip">${this.t('inspector.type', { value: kindLabel(this.state.preferences.locale, selectedNode.kind) })}</span>
-            <span class="metric-chip">${this.t('inspector.children', { value: directChildren.length })}</span>
-            <span class="metric-chip">${this.t('inspector.relationsCount', { value: relatedRelations.length })}</span>
-            <span class="metric-chip">${this.t('inspector.hidden', { value: hiddenChildren })}</span>
-          </div>
-          <p class="inspector-copy">${this.t('inspector.position', {
-            x: Math.round(selectedNode.position.x),
-            y: Math.round(selectedNode.position.y),
-          })}</p>
-          <div class="inspector-note-group">
-            <div class="inspector-note-header">
-              <p class="section-label">${this.t('inspector.note')}</p>
-              ${singleSelection && selectedNote ? `<span class="metric-chip">${this.t('inspector.noteSaved')}</span>` : ''}
-            </div>
-            <textarea class="settings-input inspector-note-input" data-node-note="${escapeAttribute(selectedNode.id)}" placeholder="${escapeAttribute(
-              singleSelection ? this.t('inspector.notePlaceholder') : this.t('inspector.noteDisabledPlaceholder'),
-            )}" ${singleSelection ? '' : 'readonly'}>${escapeHtml(singleSelection ? selectedNote : '')}</textarea>
-          </div>
-          <div class="priority-row">
-            ${PRIORITY_VALUES.map((priority) => this.renderPriorityButton(priority, selectedNode.priority ?? '')).join('')}
-          </div>
-          <div class="inspector-color-group">
-            <p class="section-label">${this.t('inspector.color')}</p>
-            <div class="color-row">
-              ${NODE_COLOR_VALUES.map((color) => this.renderNodeColorButton(color, selectedNode.color ?? '')).join('')}
-            </div>
-          </div>
-          <div class="action-grid">
-            <button type="button" class="chip-button" data-command="new-child" ${singleSelection ? '' : 'disabled'}>${this.t('action.newChild')}</button>
-            <button type="button" class="chip-button" data-command="new-sibling" ${singleSelection ? '' : 'disabled'}>${this.t('action.newSibling')}</button>
-            <button type="button" class="chip-button" data-command="new-floating" ${singleSelection ? '' : 'disabled'}>${this.t('action.newFloating')}</button>
-            <button type="button" class="chip-button" data-command="rename-selected" ${singleSelection ? '' : 'disabled'}>${this.t('action.rename')}</button>
-            <button type="button" class="chip-button" data-command="toggle-collapse" ${singleSelection && directChildren.length > 0 ? '' : 'disabled'}>
-              ${selectedNode.collapsed ? this.t('action.expand') : this.t('action.collapse')}
-            </button>
-            <button type="button" class="chip-button ${this.state.connectSourceNodeId ? 'is-active' : ''}" data-command="connect-selected" ${singleSelection ? '' : 'disabled'}>${this.t('action.linkRelation')}</button>
-            <button type="button" class="chip-button danger" data-command="delete-selected" ${canDeleteSelection ? '' : 'disabled'}>${this.t('action.delete')}</button>
-          </div>
-        </section>
-
-        <section class="inspector-card">
-          <p class="section-label inspector-section-header" data-command="toggle-inspector-section:advanced">${this.t('panel.workspace')} ${this.inspectorSectionsCollapsed.has('advanced') ? '▸' : '▾'}</p>
-          <div class="${this.inspectorSectionsCollapsed.has('advanced') ? 'section-collapsed' : 'section-expanded'}">
-            <div class="metric-row">
-              ${workspaceMetrics}
-            </div>
-          </div>
-        </section>
-
-        <section class="inspector-card">
-          <p class="section-label inspector-section-header" data-command="toggle-inspector-section:snapshots">${this.t('snapshot.title')} ${this.inspectorSectionsCollapsed.has('snapshots') ? '▸' : '▾'}</p>
-          <div class="${this.inspectorSectionsCollapsed.has('snapshots') ? 'section-collapsed' : 'section-expanded'}">
-            ${this.renderSnapshotSectionContent()}
-          </div>
-        </section>
-
-        <section class="inspector-card">
-          <p class="section-label inspector-section-header" data-command="toggle-inspector-section:relations">${this.t('inspector.relations')} ${this.inspectorSectionsCollapsed.has('relations') ? '▸' : '▾'}</p>
-          <div class="${this.inspectorSectionsCollapsed.has('relations') ? 'section-collapsed' : 'section-expanded'}">
-            <p class="inspector-copy">${escapeHtml(relationModeText)}</p>
-            ${this.renderRelationList(selectedNode.id)}
-          </div>
-        </section>
-      `
   }
 
   private syncFloatingLayout(): void {
@@ -3629,7 +3189,7 @@ class MindMapApp {
     }
 
     const marqueeMarkup = this.state.marquee?.active ? this.renderMarqueeBox(this.state.marquee) : ''
-    const contextMenuMarkup = this.state.contextMenu ? this.renderContextMenu() : ''
+    const contextMenuMarkup = this.state.contextMenu ? renderContextMenu(this) : ''
     const aiWheelMarkup = this.state.aiWheel.open ? this.renderAIWheel() : ''
 
     this.refs.overlayLayer.classList.toggle('is-visible', Boolean(marqueeMarkup || contextMenuMarkup || aiWheelMarkup))
@@ -3657,98 +3217,6 @@ class MindMapApp {
         class="marquee-box"
         style="left: ${Math.round(left - stageRect.left)}px; top: ${Math.round(top - stageRect.top)}px; width: ${Math.round(width)}px; height: ${Math.round(height)}px;"
       ></div>
-    `
-  }
-
-  private renderContextMenu(): string {
-    if (!this.refs || !this.state.contextMenu) {
-      return ''
-    }
-
-    const stageRect = this.refs.overlayLayer.getBoundingClientRect()
-    const left = Math.round(this.state.contextMenu.clientX - stageRect.left)
-    const top = Math.round(this.state.contextMenu.clientY - stageRect.top)
-
-    // Relation context menu
-    if (this.state.contextMenu.relationId) {
-      const relation = this.state.document.relations.find((r) => r.id === this.state.contextMenu!.relationId)
-      const sourceNode = relation ? this.findNode(relation.sourceId) : null
-      const targetNode = relation ? this.findNode(relation.targetId) : null
-      const arrowDir = relation?.arrowDirection ?? 'none'
-      const sourceLabel = sourceNode ? shorten(sourceNode.title, 12) : 'A'
-      const targetLabel = targetNode ? shorten(targetNode.title, 12) : 'B'
-      return `
-        <section class="relation-wheel-shell" data-context-menu style="left: ${Math.round(left)}px; top: ${Math.round(top)}px;">
-          <section class="relation-wheel" data-relation-wheel>
-            <p class="section-label relation-wheel-label">${this.t('context.relation')}</p>
-            <button type="button" class="relation-wheel-button relation-wheel-button-top ${arrowDir === 'both' ? 'is-active' : ''}" data-command="set-arrow:both:${this.state.contextMenu.relationId}">${this.t('action.arrowBoth')}</button>
-            <button type="button" class="relation-wheel-button relation-wheel-button-left ${arrowDir === 'backward' ? 'is-active' : ''}" data-command="set-arrow:backward:${this.state.contextMenu.relationId}">${escapeHtml(sourceLabel)}</button>
-            <button type="button" class="relation-wheel-button relation-wheel-button-right ${arrowDir === 'forward' ? 'is-active' : ''}" data-command="set-arrow:forward:${this.state.contextMenu.relationId}">${escapeHtml(targetLabel)}</button>
-            <button type="button" class="relation-wheel-button relation-wheel-button-bottom ${arrowDir === 'none' ? 'is-active' : ''}" data-command="set-arrow:none:${this.state.contextMenu.relationId}">${this.t('action.arrowNone')}</button>
-            <div class="relation-wheel-center">${this.state.preferences.locale === 'zh-CN' ? '箭头' : 'Arrow'}</div>
-          </section>
-          <div class="relation-wheel-actions">
-            <button type="button" class="chip-button context-menu-button" data-command="branch-connection:${this.state.contextMenu.relationId}">${this.t('action.branchConnection')}</button>
-            <button type="button" class="chip-button danger context-menu-button" data-command="delete-relation:${this.state.contextMenu.relationId}">${this.t('action.remove')}</button>
-          </div>
-        </section>
-      `
-    }
-
-    // Region context menu
-    if (this.state.contextMenu.regionId) {
-      const ctxRegion = this.state.document.regions?.find((r) => r.id === this.state.contextMenu!.regionId)
-      const currentRegionColor = ctxRegion?.color ?? ''
-      return `
-        <section class="context-menu" data-context-menu style="left: ${Math.round(left)}px; top: ${Math.round(top)}px;">
-          <p class="section-label">${this.t('context.regionActions')}</p>
-          ${NODE_COLOR_VALUES.filter((c) => c !== '')
-            .map((color) => {
-              const palette = NODE_COLOR_PALETTES[color as Exclude<NodeColor, ''>]
-              const activeClass = color === currentRegionColor ? ' is-active' : ''
-              return `<button type="button" class="chip-button context-menu-button${activeClass}" data-command="set-region-color:${color}:${this.state.contextMenu!.regionId}" style="border-left: 4px solid ${palette.accent};">${this.t(palette.labelKey)}</button>`
-            })
-            .join('')}
-          <div class="context-menu-divider"></div>
-          <button type="button" class="chip-button danger context-menu-button" data-command="delete-region:${this.state.contextMenu.regionId}">${this.t('action.deleteRegion')}</button>
-        </section>
-      `
-    }
-
-    const selectedIds = this.selectedNodeIds()
-    const selectedCount = selectedIds.length
-    const primaryNode = this.selectedNode()
-    const isCanvasMenu = this.state.contextMenu.nodeId === null
-    const primaryChildren = !isCanvasMenu && primaryNode ? childrenOf(this.state.document, primaryNode.id).length : 0
-    const canUseSingleNodeActions = !isCanvasMenu && selectedCount === 1 && Boolean(primaryNode)
-    const canDelete = !isCanvasMenu && selectedIds.some((nodeId) => this.findNode(nodeId)?.kind !== 'root')
-    const heading = isCanvasMenu
-      ? this.t('context.canvas')
-      : selectedCount > 1
-        ? this.t('context.selectionCount', { value: selectedCount })
-        : escapeHtml(primaryNode?.title ?? this.t('context.canvas'))
-
-    return `
-      <section class="context-menu" data-context-menu style="left: ${Math.round(left)}px; top: ${Math.round(top)}px;">
-        <p class="section-label">${this.t(this.state.contextMenu.nodeId ? 'context.node' : 'context.canvas')}</p>
-        <h3 class="context-menu-title">${heading}</h3>
-        <button type="button" class="chip-button context-menu-button" data-command="new-child" ${canUseSingleNodeActions ? '' : 'disabled'}>${this.t('action.newChild')}</button>
-        <button type="button" class="chip-button context-menu-button" data-command="new-sibling" ${canUseSingleNodeActions ? '' : 'disabled'}>${this.t('action.newSibling')}</button>
-        <button type="button" class="chip-button context-menu-button" data-command="new-floating">${this.t('action.newFloating')}</button>
-        <button type="button" class="chip-button context-menu-button" data-command="rename-selected" ${canUseSingleNodeActions ? '' : 'disabled'}>${this.t('action.rename')}</button>
-        <button type="button" class="chip-button context-menu-button" data-command="toggle-collapse" ${canUseSingleNodeActions && primaryChildren > 0 ? '' : 'disabled'}>
-          ${primaryNode?.collapsed ? this.t('action.expand') : this.t('action.collapse')}
-        </button>
-        <button type="button" class="chip-button context-menu-button" data-command="tidy-subtree:${this.state.contextMenu.nodeId ?? ''}" ${canUseSingleNodeActions && primaryChildren > 0 ? '' : 'disabled'}>${this.t('context.tidyChildren')}</button>
-        <button type="button" class="chip-button context-menu-button" data-command="connect-selected" ${canUseSingleNodeActions ? '' : 'disabled'}>${this.t('action.linkRelation')}</button>
-        <div class="context-menu-divider"></div>
-        <button type="button" class="chip-button context-menu-button" data-command="create-region">${this.t('action.createRegion')}</button>
-        <div class="context-menu-divider"></div>
-        <button type="button" class="chip-button context-menu-button" data-command="set-priority:P0" ${canUseSingleNodeActions ? '' : 'disabled'}>${this.t('context.priorityP0')}</button>
-        <button type="button" class="chip-button context-menu-button" data-command="set-priority:P1" ${canUseSingleNodeActions ? '' : 'disabled'}>${this.t('context.priorityP1')}</button>
-        <button type="button" class="chip-button context-menu-button" data-command="set-priority:" ${canUseSingleNodeActions ? '' : 'disabled'}>${this.t('context.clearPriority')}</button>
-        <button type="button" class="chip-button danger context-menu-button" data-command="delete-selected" ${canDelete ? '' : 'disabled'}>${this.t('action.delete')}</button>
-      </section>
     `
   }
 
@@ -3831,526 +3299,7 @@ class MindMapApp {
     `
   }
 
-  private renderSettings(): void {
-    if (!this.refs) {
-      return
-    }
-
-    if (!this.state.settingsOpen) {
-      this.refs.settingsLayer.innerHTML = ''
-      this.refs.settingsLayer.className = ''
-      return
-    }
-
-    const locale = this.state.preferences.locale
-    const appearance = this.state.preferences.appearance
-    this.refs.settingsLayer.className = 'settings-layer is-visible'
-    this.refs.settingsLayer.innerHTML = `
-      <div class="settings-scrim" data-settings-scrim>
-        <section class="settings-drawer" role="dialog" aria-modal="true">
-          <header class="settings-header">
-            <div>
-              <p class="section-label">${this.t('toolbar.settings')}</p>
-              <h2>${this.t('settings.title')}</h2>
-              <p class="inspector-copy">${this.t('settings.subtitle')}</p>
-            </div>
-            <button type="button" class="ghost-button" data-command="close-settings">${this.t('settings.close')}</button>
-          </header>
-
-          <section class="settings-card">
-            <p class="section-label">${this.t('settings.appearance')}</p>
-            <label class="field-row">
-              <span>${this.t('settings.language')}</span>
-              <select class="settings-select" data-setting-field="locale">
-                <option value="zh-CN" ${locale === 'zh-CN' ? 'selected' : ''}>${this.t('settings.language.zh-CN')}</option>
-                <option value="en" ${locale === 'en' ? 'selected' : ''}>${this.t('settings.language.en')}</option>
-              </select>
-            </label>
-            <label class="field-row">
-              <span>${this.t('settings.theme')}</span>
-              <select class="settings-select" data-setting-field="theme">
-                <option value="light" ${this.state.document.theme === 'light' ? 'selected' : ''}>${this.t('settings.theme.light')}</option>
-                <option value="dark" ${this.state.document.theme === 'dark' ? 'selected' : ''}>${this.t('settings.theme.dark')}</option>
-              </select>
-            </label>
-            <label class="field-row">
-              <span>${this.t('settings.edgeStyle')}</span>
-              <select class="settings-select" data-setting-field="appearance.edgeStyle">
-                <option value="curve" ${appearance.edgeStyle === 'curve' ? 'selected' : ''}>${this.t('settings.edgeStyle.curve')}</option>
-                <option value="orthogonal" ${appearance.edgeStyle === 'orthogonal' ? 'selected' : ''}>${this.t('settings.edgeStyle.orthogonal')}</option>
-                <option value="hidden" ${appearance.edgeStyle === 'hidden' ? 'selected' : ''}>${this.t('settings.edgeStyle.hidden')}</option>
-              </select>
-            </label>
-            <label class="field-row">
-              <span>${this.t('settings.layoutMode')}</span>
-              <select class="settings-select" data-setting-field="appearance.layoutMode">
-                <option value="balanced" ${appearance.layoutMode === 'balanced' ? 'selected' : ''}>${this.t('settings.layoutMode.balanced')}</option>
-                <option value="right" ${appearance.layoutMode === 'right' ? 'selected' : ''}>${this.t('settings.layoutMode.right')}</option>
-              </select>
-            </label>
-            <label class="field-stack">
-              <span>${this.t('settings.childGapX')}</span>
-              <input
-                class="settings-input"
-                type="number"
-                min="120"
-                max="360"
-                step="20"
-                inputmode="numeric"
-                data-setting-field="appearance.childGapX"
-                value="${escapeAttribute(String(appearance.childGapX || DEFAULT_CHILD_GAP_X))}"
-              />
-            </label>
-            <p class="inspector-copy">${this.t('settings.childGapXHint')}</p>
-            <label class="field-row">
-              <span>${this.t('settings.chromeLayout')}</span>
-              <select class="settings-select" data-setting-field="appearance.chromeLayout">
-                <option value="floating" ${appearance.chromeLayout === 'floating' ? 'selected' : ''}>${this.t('settings.chromeLayout.floating')}</option>
-                <option value="fixed" ${appearance.chromeLayout === 'fixed' ? 'selected' : ''}>${this.t('settings.chromeLayout.fixed')}</option>
-              </select>
-            </label>
-            <label class="field-row">
-              <span>${this.t('settings.topPanelPosition')}</span>
-              <select class="settings-select" data-setting-field="appearance.topPanelPosition">
-                <option value="left" ${appearance.topPanelPosition === 'left' ? 'selected' : ''}>${this.t('settings.topPanelPosition.left')}</option>
-                <option value="center" ${appearance.topPanelPosition === 'center' ? 'selected' : ''}>${this.t('settings.topPanelPosition.center')}</option>
-                <option value="right" ${appearance.topPanelPosition === 'right' ? 'selected' : ''}>${this.t('settings.topPanelPosition.right')}</option>
-              </select>
-            </label>
-          </section>
-
-          <section class="settings-card">
-            <p class="section-label">${this.t('settings.interaction')}</p>
-            <label class="field-row">
-              <span>${this.t('settings.dragSubtreeWithParent')}</span>
-              <select class="settings-select" data-setting-field="interaction.dragSubtreeWithParent">
-                <option value="true" ${this.state.preferences.interaction.dragSubtreeWithParent ? 'selected' : ''}>${this.t('common.on')}</option>
-                <option value="false" ${this.state.preferences.interaction.dragSubtreeWithParent ? '' : 'selected'}>${this.t('common.off')}</option>
-              </select>
-            </label>
-            <label class="field-row">
-              <span>${this.t('settings.dragSnap')}</span>
-              <select class="settings-select" data-setting-field="interaction.dragSnap">
-                <option value="true" ${this.state.preferences.interaction.dragSnap ? 'selected' : ''}>${this.t('common.on')}</option>
-                <option value="false" ${this.state.preferences.interaction.dragSnap ? '' : 'selected'}>${this.t('common.off')}</option>
-              </select>
-            </label>
-            <label class="field-row">
-              <span>${this.t('settings.autoLayoutOnCollapse')}</span>
-              <select class="settings-select" data-setting-field="interaction.autoLayoutOnCollapse">
-                <option value="true" ${this.state.preferences.interaction.autoLayoutOnCollapse ? 'selected' : ''}>${this.t('common.on')}</option>
-                <option value="false" ${this.state.preferences.interaction.autoLayoutOnCollapse ? '' : 'selected'}>${this.t('common.off')}</option>
-              </select>
-            </label>
-            <label class="field-row">
-              <span>${this.t('settings.autoSnapshots')}</span>
-              <select class="settings-select" data-setting-field="interaction.autoSnapshots">
-                <option value="true" ${this.state.preferences.interaction.autoSnapshots ? 'selected' : ''}>${this.t('common.on')}</option>
-                <option value="false" ${this.state.preferences.interaction.autoSnapshots ? '' : 'selected'}>${this.t('common.off')}</option>
-              </select>
-            </label>
-            <div class="settings-subsection">
-              <p class="section-label">${this.t('settings.aiQuickRequests')}</p>
-              <label class="field-row">
-                <span>${this.t('settings.aiQuickChildren')}</span>
-                <select class="settings-select" data-setting-field="interaction.aiQuickChildren">
-                  <option value="true" ${this.state.preferences.interaction.aiQuickChildren ? 'selected' : ''}>${this.t('common.on')}</option>
-                  <option value="false" ${this.state.preferences.interaction.aiQuickChildren ? '' : 'selected'}>${this.t('common.off')}</option>
-                </select>
-              </label>
-              <label class="field-row">
-                <span>${this.t('settings.aiQuickSiblings')}</span>
-                <select class="settings-select" data-setting-field="interaction.aiQuickSiblings">
-                  <option value="true" ${this.state.preferences.interaction.aiQuickSiblings ? 'selected' : ''}>${this.t('common.on')}</option>
-                  <option value="false" ${this.state.preferences.interaction.aiQuickSiblings ? '' : 'selected'}>${this.t('common.off')}</option>
-                </select>
-              </label>
-              <label class="field-row">
-                <span>${this.t('settings.aiQuickNotes')}</span>
-                <select class="settings-select" data-setting-field="interaction.aiQuickNotes">
-                  <option value="true" ${this.state.preferences.interaction.aiQuickNotes ? 'selected' : ''}>${this.t('common.on')}</option>
-                  <option value="false" ${this.state.preferences.interaction.aiQuickNotes ? '' : 'selected'}>${this.t('common.off')}</option>
-                </select>
-              </label>
-              <label class="field-row">
-                <span>${this.t('settings.aiQuickRelations')}</span>
-                <select class="settings-select" data-setting-field="interaction.aiQuickRelations">
-                  <option value="true" ${this.state.preferences.interaction.aiQuickRelations ? 'selected' : ''}>${this.t('common.on')}</option>
-                  <option value="false" ${this.state.preferences.interaction.aiQuickRelations ? '' : 'selected'}>${this.t('common.off')}</option>
-                </select>
-              </label>
-            </div>
-            <div class="settings-subsection">
-              <p class="section-label">${this.t('settings.actionBindings')}</p>
-              <label class="field-row">
-                <span>${this.t('settings.doubleClickAction')}</span>
-                <select class="settings-select" data-setting-field="interaction.doubleClickAction">
-                  ${this.renderGestureActionOptions(this.state.preferences.interaction.doubleClickAction)}
-                </select>
-              </label>
-              <label class="field-row">
-                <span>${this.t('settings.tripleClickAction')}</span>
-                <select class="settings-select" data-setting-field="interaction.tripleClickAction">
-                  ${this.renderGestureActionOptions(this.state.preferences.interaction.tripleClickAction)}
-                </select>
-              </label>
-              <label class="field-row">
-                <span>${this.t('settings.leftLongPressAction')}</span>
-                <select class="settings-select" data-setting-field="interaction.leftLongPressAction">
-                  ${this.renderGestureActionOptions(this.state.preferences.interaction.leftLongPressAction)}
-                </select>
-              </label>
-              <label class="field-row">
-                <span>${this.t('settings.middleLongPressAction')}</span>
-                <select class="settings-select" data-setting-field="interaction.middleLongPressAction">
-                  ${this.renderGestureActionOptions(this.state.preferences.interaction.middleLongPressAction)}
-                </select>
-              </label>
-              <label class="field-row">
-                <span>${this.t('settings.rightLongPressAction')}</span>
-                <select class="settings-select" data-setting-field="interaction.rightLongPressAction">
-                  ${this.renderGestureActionOptions(this.state.preferences.interaction.rightLongPressAction)}
-                </select>
-              </label>
-              <label class="field-row">
-                <span>${this.t('settings.spaceAction')}</span>
-                <select class="settings-select" data-setting-field="interaction.spaceAction">
-                  ${this.renderGestureActionOptions(this.state.preferences.interaction.spaceAction)}
-                </select>
-              </label>
-            </div>
-            <div class="settings-subsection">
-              <p class="section-label">${this.t('settings.operationBindings')}</p>
-              <label class="field-row">
-                <span>${this.t('settings.leftDragAction')}</span>
-                <select class="settings-select" data-setting-field="interaction.canvasLeftDragAction">
-                  ${this.renderCanvasDragActionOptions(this.state.preferences.interaction.canvasLeftDragAction)}
-                </select>
-              </label>
-              <label class="field-row">
-                <span>${this.t('settings.middleDragAction')}</span>
-                <select class="settings-select" data-setting-field="interaction.canvasMiddleDragAction">
-                  ${this.renderCanvasDragActionOptions(this.state.preferences.interaction.canvasMiddleDragAction)}
-                </select>
-              </label>
-              <label class="field-row">
-                <span>${this.t('settings.rightDragAction')}</span>
-                <select class="settings-select" data-setting-field="interaction.canvasRightDragAction">
-                  ${this.renderCanvasDragActionOptions(this.state.preferences.interaction.canvasRightDragAction)}
-                </select>
-              </label>
-            </div>
-          </section>
-
-          <section class="settings-card">
-            <p class="section-label">${this.t('settings.ai')}</p>
-            <label class="field-row">
-              <span>${this.t('settings.aiProvider')}</span>
-              <select class="settings-select" data-setting-field="ai.provider">
-                <option value="lmstudio" ${this.state.preferences.ai.provider === 'lmstudio' ? 'selected' : ''}>${this.t('settings.aiProvider.lmstudio')}</option>
-                <option value="openai-compatible" ${this.state.preferences.ai.provider === 'openai-compatible' ? 'selected' : ''}>${this.t('settings.aiProvider.openaiCompatible')}</option>
-              </select>
-            </label>
-            <label class="field-stack">
-              <span>${this.t('settings.aiBaseUrl')}</span>
-              <input class="settings-input" data-setting-field="ai.baseUrl" value="${escapeAttribute(this.state.preferences.ai.baseUrl)}" />
-            </label>
-            <label class="field-stack">
-              <span>${this.t('settings.aiApiKey')}</span>
-              <input
-                class="settings-input"
-                type="password"
-                autocomplete="off"
-                data-setting-field="ai.apiKey"
-                value="${escapeAttribute(this.state.preferences.ai.apiKey)}"
-                placeholder="${escapeAttribute(this.t('settings.aiApiKeyPlaceholder'))}"
-              />
-            </label>
-            <label class="field-stack">
-              <span>${this.t('settings.aiModel')}</span>
-              <input
-                class="settings-input"
-                data-setting-field="ai.model"
-                value="${escapeAttribute(this.state.preferences.ai.model)}"
-                placeholder="${escapeAttribute(this.t('settings.aiModelPlaceholder'))}"
-              />
-            </label>
-            <label class="field-stack">
-              <span>${this.t('settings.aiMaxTokens')}</span>
-              <input
-                class="settings-input"
-                type="number"
-                min="256"
-                max="32768"
-                step="256"
-                inputmode="numeric"
-                data-setting-field="ai.maxTokens"
-                value="${escapeAttribute(String(this.state.preferences.ai.maxTokens || DEFAULT_AI_MAX_TOKENS))}"
-              />
-            </label>
-            <p class="inspector-copy">${this.t('settings.aiMaxTokensHint')}</p>
-            <label class="field-stack">
-              <span>${this.t('settings.aiTimeout')}</span>
-              <input
-                class="settings-input"
-                type="number"
-                min="1"
-                max="600"
-                step="1"
-                inputmode="numeric"
-                data-setting-field="ai.timeoutSeconds"
-                value="${escapeAttribute(String(this.state.preferences.ai.timeoutSeconds || DEFAULT_AI_TIMEOUT_SECONDS))}"
-              />
-            </label>
-            <p class="inspector-copy">${this.t('settings.aiTimeoutHint')}</p>
-            <p class="inspector-copy">${this.t('settings.aiHint')}</p>
-          </section>
-
-          <section class="settings-card">
-            <p class="section-label">${this.t('settings.collabApi')}</p>
-            <div class="field-stack">
-              <span>${this.t('settings.collabApiKey')}</span>
-              <p class="settings-input collab-api-key-display" data-collab-key-display>${this.collabApiKeyMasked()}</p>
-            </div>
-            <div class="collab-api-actions">
-              <button type="button" class="ghost-button" data-command="collab-generate-key">${this.t('settings.collabApiKeyGenerate')}</button>
-              <button type="button" class="ghost-button" data-command="collab-copy-key">${this.t('settings.collabApiKeyCopy')}</button>
-              <button type="button" class="ghost-button" data-command="collab-clear-key">${this.t('settings.collabApiKeyClear')}</button>
-            </div>
-            <div class="collab-api-actions">
-              <button type="button" class="ghost-button" data-command="collab-save-key">${this.t('settings.collabApiKeySave')}</button>
-            </div>
-            <p class="inspector-copy">${this.t('settings.collabApiKeyHint')}</p>
-          </section>
-        </section>
-      </div>
-    `
-  }
-
-  private renderAIWorkspace(): void {
-    if (!this.refs) {
-      return
-    }
-
-    if (!this.state.ai.open) {
-      this.refs.aiLayer.innerHTML = ''
-      this.refs.aiLayer.className = ''
-      return
-    }
-
-    const examplePrompt = promptTemplateCopy(this.state.ai.template, this.state.preferences.locale)
-    const aiStatusNotice = this.renderAIStatusNotice()
-    const noteTargets = this.resolveAINoteTargets()
-    const rawModeLabel = `${this.aiDebugText('rawMode')}: ${this.t(this.state.ai.rawMode ? 'common.on' : 'common.off')}`
-    this.refs.aiLayer.className = 'ai-layer is-visible'
-    this.refs.aiLayer.innerHTML = `
-      <div class="ai-scrim" data-ai-scrim>
-        <section class="ai-drawer" role="dialog" aria-modal="true">
-          <header class="settings-header">
-            <div>
-              <p class="section-label">${this.t('toolbar.ai')}</p>
-              <h2>${this.t('ai.title')}</h2>
-              <p class="inspector-copy">${this.t('ai.subtitle')}</p>
-            </div>
-            <button type="button" class="ghost-button" data-command="close-ai-workspace">${this.t('settings.close')}</button>
-          </header>
-
-          ${aiStatusNotice}
-
-          <section class="settings-card">
-            <div class="ai-action-row ai-debug-toggle-row">
-              <button type="button" class="chip-button ${this.state.ai.debugOpen ? 'is-active' : ''}" data-command="toggle-ai-debug">
-                ${this.state.ai.debugOpen ? this.aiDebugText('hide') : this.aiDebugText('show')}
-              </button>
-              <button type="button" class="chip-button ${this.state.ai.rawMode ? 'is-active' : ''}" data-command="toggle-ai-raw-mode">
-                ${rawModeLabel}
-              </button>
-            </div>
-            <p class="inspector-copy">${this.aiDebugText('hint')}</p>
-          </section>
-
-          <section class="settings-card">
-            <p class="section-label">${this.t('ai.generate')}</p>
-            <label class="field-row">
-              <span>${this.t('ai.template')}</span>
-              <select class="settings-select" data-ai-field="template">
-                ${AI_TEMPLATES.map((template) => {
-                  return `<option value="${template.id}" ${this.state.ai.template === template.id ? 'selected' : ''}>${templateLabel(template.id, this.state.preferences.locale)}</option>`
-                }).join('')}
-              </select>
-            </label>
-            <label class="field-stack">
-              <span>${this.t('ai.topic')}</span>
-              <input
-                class="settings-input"
-                data-ai-field="topic"
-                value="${escapeAttribute(this.state.ai.topic)}"
-                placeholder="${escapeAttribute(this.t('ai.topicPlaceholder'))}"
-              />
-            </label>
-            <label class="field-stack">
-              <span>${this.t('ai.instructions')}</span>
-              <textarea class="settings-input ai-textarea" data-ai-field="generationInstructions" placeholder="${escapeAttribute(this.t('ai.instructionsPlaceholder'))}">${escapeHtml(this.state.ai.generationInstructions)}</textarea>
-            </label>
-            <div class="ai-action-row">
-              <button type="button" class="action-button primary-action" data-command="ai-generate-map" ${this.state.ai.busy ? 'disabled' : ''}>${this.t('ai.generateAction')}</button>
-              <button type="button" class="chip-button" data-command="ai-expand-map" ${this.state.ai.busy ? 'disabled' : ''}>${this.t('ai.expandAction')}</button>
-              <button type="button" class="chip-button" data-command="create-template-map:${this.state.ai.template}" ${this.state.ai.busy ? 'disabled' : ''}>${this.t('ai.templateAction')}</button>
-            </div>
-            ${this.renderAIRawEditor('generateRawRequest', this.state.ai.generateRawRequest)}
-            <p class="inspector-copy">${escapeHtml(examplePrompt)}</p>
-          </section>
-
-          <section class="settings-card">
-            <p class="section-label">${this.t('ai.import')}</p>
-            <p class="inspector-copy">${this.t('ai.importHint')}</p>
-            <label class="field-stack">
-              <span>${this.t('ai.instructions')}</span>
-              <textarea class="settings-input ai-textarea" data-ai-field="importInstructions" placeholder="${escapeAttribute(this.t('ai.importPlaceholder'))}">${escapeHtml(this.state.ai.importInstructions)}</textarea>
-            </label>
-            <div class="ai-action-row">
-              <button type="button" class="action-button" data-command="ai-import-file" ${this.state.ai.busy ? 'disabled' : ''}>${this.t('ai.importAction')}</button>
-            </div>
-            ${this.renderAIRawEditor('importRawRequest', this.state.ai.importRawRequest)}
-          </section>
-
-          <section class="settings-card">
-            <p class="section-label">${this.t('ai.notes')}</p>
-            <p class="inspector-copy">${this.t(
-              noteTargets.mode === 'selection' ? 'ai.notesSelectionHint' : 'ai.notesAllHint',
-              {
-                value: noteTargets.nodes.length,
-              },
-            )}</p>
-            <label class="field-stack">
-              <span>${this.t('ai.instructions')}</span>
-              <textarea class="settings-input ai-textarea" data-ai-field="noteInstructions" placeholder="${escapeAttribute(this.t('ai.notesPlaceholder'))}">${escapeHtml(this.state.ai.noteInstructions)}</textarea>
-            </label>
-            <div class="ai-action-row">
-              <button type="button" class="action-button" data-command="ai-complete-node-notes" ${this.state.ai.busy ? 'disabled' : ''}>${this.t('ai.notesAction')}</button>
-              <button type="button" class="chip-button" data-command="ai-complete-node-notes-as-children" ${this.state.ai.busy ? 'disabled' : ''}>${this.aiNoteChildActionLabel()}</button>
-            </div>
-            ${this.renderAIRawEditor('noteRawRequest', this.state.ai.noteRawRequest)}
-          </section>
-
-          <section class="settings-card">
-            <p class="section-label">${this.t('ai.suggestChildren')}</p>
-            <p class="inspector-copy">${this.t(
-              this.selectedNode() ? 'ai.suggestChildrenHint' : 'ai.suggestChildrenNoSelection',
-              {
-                title: this.selectedNode()?.title ?? '',
-              },
-            )}</p>
-            <div class="ai-action-row">
-              <button type="button" class="action-button" data-command="ai-suggest-children" ${this.state.ai.busy || !this.selectedNode() ? 'disabled' : ''}>${this.t('ai.suggestChildrenAction')}</button>
-              <button type="button" class="chip-button" data-command="ai-suggest-siblings" ${this.state.ai.busy || !this.canSuggestSiblings() ? 'disabled' : ''}>${this.t('ai.suggestSiblingsAction')}</button>
-            </div>
-          </section>
-
-          <section class="settings-card">
-            <p class="section-label">${this.t('ai.connect')}</p>
-            <p class="inspector-copy">${this.t('ai.connectHint', {
-              nodes: this.state.document.nodes.length,
-              relations: this.state.document.relations.length,
-            })}</p>
-            <label class="field-stack">
-              <span>${this.t('ai.instructions')}</span>
-              <textarea class="settings-input ai-textarea" data-ai-field="relationInstructions" placeholder="${escapeAttribute(this.t('ai.connectPlaceholder'))}">${escapeHtml(this.state.ai.relationInstructions)}</textarea>
-            </label>
-            <div class="ai-action-row">
-              <button type="button" class="chip-button" data-command="test-ai-connection" ${this.state.ai.busy || this.state.ai.testing ? 'disabled' : ''}>${this.state.ai.testing ? `${this.t('ai.testConnection')}...` : this.t('ai.testConnection')}</button>
-              <button type="button" class="action-button" data-command="ai-connect-relations" ${this.state.ai.busy ? 'disabled' : ''}>${this.t('ai.connectAction')}</button>
-            </div>
-            ${this.renderAIRawEditor('relationRawRequest', this.state.ai.relationRawRequest)}
-            ${
-              this.state.ai.connectionMessage
-                ? `<p class="ai-connection-note ${this.state.ai.connectionOK === true ? 'is-ok' : this.state.ai.connectionOK === false ? 'is-error' : ''}">${
-                    this.state.ai.connectionModel
-                      ? `<strong>${escapeHtml(this.t('ai.connectionModel', { value: this.state.ai.connectionModel }))}</strong><br />`
-                      : ''
-                  }${escapeHtml(this.state.ai.connectionMessage)}</p>`
-                : ''
-            }
-          </section>
-
-          ${
-            this.state.ai.lastSummary
-              ? `
-                <section class="settings-card">
-                  <p class="section-label">${this.t('ai.lastResult')}</p>
-                  <p class="inspector-copy"><strong>${escapeHtml(this.state.ai.lastModel || this.t('common.unknown'))}</strong>: ${escapeHtml(this.state.ai.lastSummary)}</p>
-                </section>
-              `
-              : ''
-          }
-
-          ${this.renderAIDebugPanel()}
-        </section>
-      </div>
-    `
-  }
-
-  private renderAIRawEditor(
-    field: 'generateRawRequest' | 'importRawRequest' | 'noteRawRequest' | 'relationRawRequest',
-    value: string,
-  ): string {
-    if (!this.state.ai.debugOpen && !this.state.ai.rawMode) {
-      return ''
-    }
-
-    return `
-      <label class="field-stack">
-        <span>${this.aiDebugText('rawRequest')}</span>
-        <textarea class="settings-input ai-textarea ai-raw-textarea" data-ai-field="${field}" spellcheck="false">${escapeHtml(value)}</textarea>
-      </label>
-    `
-  }
-
-  private renderAIDebugPanel(): string {
-    if (!this.state.ai.debugOpen) {
-      return ''
-    }
-
-    const debug = this.state.ai.lastDebugInfo
-    const actionLabel = this.aiDebugActionLabel(this.state.ai.lastDebugAction)
-    return `
-      <section class="settings-card">
-        <p class="section-label">${this.aiDebugText('title')}</p>
-        ${
-          actionLabel
-            ? `<p class="inspector-copy">${escapeHtml(this.aiDebugText('lastAction', actionLabel))}</p>`
-            : `<p class="inspector-copy">${this.aiDebugText('empty')}</p>`
-        }
-        ${
-          this.state.ai.lastDebugError
-            ? `<p class="ai-connection-note is-error"><strong>${escapeHtml(this.aiDebugText('lastError'))}</strong><br />${escapeHtml(this.state.ai.lastDebugError)}</p>`
-            : ''
-        }
-        ${
-          debug
-            ? `
-              <div class="ai-debug-grid">
-                <section class="ai-debug-block">
-                  <p class="section-label">${this.aiDebugText('rawRequest')}</p>
-                  <pre class="ai-debug-pre">${escapeHtml(debug.upstreamRequest || '')}</pre>
-                </section>
-                <section class="ai-debug-block">
-                  <p class="section-label">${this.aiDebugText('rawResponse')}</p>
-                  <pre class="ai-debug-pre">${escapeHtml(debug.upstreamResponse || '')}</pre>
-                </section>
-                <section class="ai-debug-block">
-                  <p class="section-label">${this.aiDebugText('assistantContent')}</p>
-                  <pre class="ai-debug-pre">${escapeHtml(debug.assistantContent || '')}</pre>
-                </section>
-              </div>
-            `
-            : ''
-        }
-      </section>
-    `
-  }
-
-  private aiDebugActionLabel(action: AIDebugAction): string {
+  aiDebugActionLabel(action: AIDebugAction): string {
     switch (action) {
       case 'generate':
         return this.t('ai.generate')
@@ -4365,92 +3314,11 @@ class MindMapApp {
     }
   }
 
-  private aiNoteChildActionLabel(): string {
+  aiNoteChildActionLabel(): string {
     return this.state.preferences.locale === 'zh-CN' ? '生成注释并添加为下级节点' : 'Generate Notes as Child Nodes'
   }
 
-  private aiDebugText(
-    key:
-      | 'title'
-      | 'show'
-      | 'hide'
-      | 'hint'
-      | 'empty'
-      | 'lastAction'
-      | 'lastError'
-      | 'rawMode'
-      | 'rawRequest'
-      | 'rawResponse'
-      | 'assistantContent',
-    value = '',
-  ): string {
-    if (this.state.preferences.locale === 'zh-CN') {
-      switch (key) {
-        case 'title':
-          return 'AI 调试'
-        case 'show':
-          return '显示调试'
-        case 'hide':
-          return '隐藏调试'
-        case 'hint':
-          return '开启 RAW 模式后，编辑区中的 JSON 会被直接发送到上游 AI 接口；关闭 RAW 模式时，这里会保留最近一次自动生成并捕获到的请求，方便复制和修改。'
-        case 'empty':
-          return '先执行一次 AI 操作，才能捕获上游请求和完整响应。'
-        case 'lastAction':
-          return `最近调试动作：${value}`
-        case 'lastError':
-          return '最近错误'
-        case 'rawMode':
-          return 'RAW 模式'
-        case 'rawRequest':
-          return 'RAW 请求'
-        case 'rawResponse':
-          return '原始响应'
-        case 'assistantContent':
-          return '助手内容'
-        default:
-          return ''
-      }
-    }
-
-    switch (key) {
-      case 'title':
-        return 'AI Debug'
-      case 'show':
-        return 'Show Debug'
-      case 'hide':
-        return 'Hide Debug'
-      case 'hint':
-        return 'RAW mode sends the edited JSON directly to the upstream AI endpoint. When RAW mode is off, this area keeps the last captured request for reference.'
-      case 'empty':
-        return 'Run an AI action to capture the upstream request and full response.'
-      case 'lastAction':
-        return `Last action: ${value}`
-      case 'lastError':
-        return 'Last error'
-      case 'rawMode':
-        return 'RAW Mode'
-      case 'rawRequest':
-        return 'RAW Request'
-      case 'rawResponse':
-        return 'Raw Response'
-      case 'assistantContent':
-        return 'Assistant Content'
-      default:
-        return ''
-    }
-  }
-
-  private renderAIStatusNotice(): string {
-    const tone = this.aiStatusTone()
-    if (!tone) {
-      return ''
-    }
-
-    return `<p class="ai-status-note ${tone}">${escapeHtml(this.t(this.state.status.key, this.state.status.values))}</p>`
-  }
-
-  private aiStatusTone(): 'is-busy' | 'is-error' | 'is-ok' | 'is-info' | null {
+  aiStatusTone(): 'is-busy' | 'is-error' | 'is-ok' | 'is-info' | null {
     switch (this.state.status.key) {
       case 'status.aiRunning':
       case 'status.aiTestingConnection':
@@ -4579,205 +3447,7 @@ class MindMapApp {
     `
   }
 
-  private renderEdges(): string {
-    const visibleIds = visibleNodeIds(this.state.document)
-    const edgeStyle = this.state.preferences.appearance.edgeStyle
-    const drawEdgeStyle: EdgeStyle = edgeStyle === 'hidden' ? 'curve' : edgeStyle
-    const projectPosition = (position: Position) => this.toWorkspacePosition(position)
-    const childCountById = new Map(
-      this.state.document.nodes.map((node) => [node.id, childrenOf(this.state.document, node.id).length]),
-    )
-
-    // Arrow marker definitions
-    const arrowDefs = `<defs>
-      <marker id="arrow-forward" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto" markerUnits="strokeWidth">
-        <path d="M 0 0 L 10 4 L 0 8 z" fill="var(--relation)" />
-      </marker>
-      <marker id="arrow-backward" markerWidth="10" markerHeight="8" refX="1" refY="4" orient="auto" markerUnits="strokeWidth">
-        <path d="M 10 0 L 0 4 L 10 8 z" fill="var(--relation)" />
-      </marker>
-    </defs>`
-
-    // Hierarchy edges (hidden when edge style is hidden)
-    const hierarchyEdges =
-      edgeStyle === 'hidden'
-        ? ''
-        : this.state.document.nodes
-            .filter((node) => Boolean(node.parentId) && visibleIds.has(node.id) && visibleIds.has(node.parentId ?? ''))
-            .map((node) => {
-              const parent = this.findNode(node.parentId ?? '')
-              if (!parent) {
-                return ''
-              }
-              const edgePoints = resolveHierarchyEdgeEndpoints(
-                this.resolveNodeRenderMetrics(parent, childCountById.get(parent.id) ?? 0),
-                this.resolveNodeRenderMetrics(node, childCountById.get(node.id) ?? 0),
-              )
-              const warningClass = this.state.cutting?.warningHierarchyEdgeKeys.has(`${parent.id}::${node.id}`)
-                ? ' cutting-warning'
-                : ''
-              return `<path class="edge edge-hierarchy${warningClass}" data-source-id="${escapeAttribute(parent.id)}" data-target-id="${escapeAttribute(node.id)}" d="${buildHierarchyPath(projectPosition(edgePoints.source), projectPosition(edgePoints.target), drawEdgeStyle)}" />`
-            })
-            .join('')
-
-    // Relation edges - always shown (even when hierarchy is hidden), with optional arrows and branches
-    const relationEdges = this.state.document.relations
-      .map((edge) => {
-        const source = this.findNode(edge.sourceId)
-        const target = this.findNode(edge.targetId)
-        if (!source || !target || !visibleIds.has(source.id) || !visibleIds.has(target.id)) {
-          return ''
-        }
-
-        const sourceMetrics = this.resolveNodeRenderMetrics(source, childCountById.get(source.id) ?? 0)
-        const targetMetrics = this.resolveNodeRenderMetrics(target, childCountById.get(target.id) ?? 0)
-        const edgePoints = resolveRelationEdgeEndpoints(sourceMetrics, targetMetrics)
-        const projectedSource = projectPosition(edgePoints.source)
-        const projectedTarget = projectPosition(edgePoints.target)
-        const midpointDoc = this.resolveRelationMidpointForEdge(edge, sourceMetrics, targetMetrics, drawEdgeStyle)
-        const mid = projectPosition(midpointDoc)
-        const label = edge.label
-          ? `<text class="relation-label" x="${mid.x}" y="${mid.y - 10}">${escapeHtml(edge.label)}</text>`
-          : ''
-
-        const midpointDrag = this.state.midpointDrag?.relationId === edge.id ? this.state.midpointDrag : null
-        const isSelected = this.state.selectedRelationId === edge.id
-        const selectedClass = isSelected ? ' is-selected' : ''
-        const warningRelClass = this.state.cutting?.warningRelationIds.has(edge.id) ? ' cutting-warning' : ''
-        const edgeId = escapeAttribute(edge.id)
-        const arrowDir = edge.arrowDirection ?? 'none'
-        const markerStart = arrowDir === 'backward' || arrowDir === 'both' ? ' marker-start="url(#arrow-backward)"' : ''
-        const markerEnd = arrowDir === 'forward' || arrowDir === 'both' ? ' marker-end="url(#arrow-forward)"' : ''
-        const usesMidpointHub =
-          Boolean(edge.midpointOffset) ||
-          (edge.branches?.length ?? 0) > 0 ||
-          (edge.waypoints?.length ?? 0) > 0 ||
-          midpointDrag?.mode === 'move' ||
-          midpointDrag?.mode === 'branch'
-        const mainPaths = usesMidpointHub
-          ? [
-              `<path class="edge edge-relation${selectedClass}${warningRelClass}" d="${buildRelationSegmentPath(projectedSource, mid, drawEdgeStyle)}"${markerStart} />`,
-              `<path class="edge edge-relation${selectedClass}${warningRelClass}" d="${buildRelationSegmentPath(mid, projectedTarget, drawEdgeStyle)}"${markerEnd} />`,
-            ]
-          : [
-              `<path class="edge edge-relation${selectedClass}${warningRelClass}" d="${buildRelationSegmentPath(projectedSource, projectedTarget, drawEdgeStyle)}"${markerStart}${markerEnd} />`,
-            ]
-        const hitSegments = usesMidpointHub
-          ? [
-              buildRelationSegmentPath(projectedSource, mid, drawEdgeStyle),
-              buildRelationSegmentPath(mid, projectedTarget, drawEdgeStyle),
-            ]
-          : [buildRelationSegmentPath(projectedSource, projectedTarget, drawEdgeStyle)]
-        const branchPaths: string[] = []
-
-        for (const branch of edge.branches ?? []) {
-          const branchNode = this.findNode(branch.targetId)
-          if (!branchNode || !visibleIds.has(branchNode.id)) {
-            continue
-          }
-          const branchMetrics = this.resolveNodeRenderMetrics(branchNode, childCountById.get(branchNode.id) ?? 0)
-          const branchTarget = projectPosition(resolveNodeAnchorToward(branchMetrics, midpointDoc))
-          const branchPath = buildRelationSegmentPath(mid, branchTarget, drawEdgeStyle)
-          hitSegments.push(branchPath)
-          branchPaths.push(
-            `<path class="edge edge-relation edge-branch${selectedClass}${warningRelClass}" d="${branchPath}"${markerEnd} />`,
-          )
-        }
-
-        let legacyWaypointLines = ''
-        if (edge.waypoints && edge.waypoints.length > 0) {
-          legacyWaypointLines = edge.waypoints
-            .map((wp) => {
-              const projectedWaypoint = projectPosition(wp)
-              const path = buildRelationSegmentPath(mid, projectedWaypoint, drawEdgeStyle)
-              hitSegments.push(path)
-              return `<path class="edge edge-relation edge-branch${selectedClass}${warningRelClass}" d="${path}" />`
-            })
-            .join('')
-        }
-
-        const hitPath = `<path class="edge-hit-area${selectedClass}" data-relation-click="${edgeId}" d="${hitSegments.join(' ')}" />`
-
-        // Midpoint dot for selected relation
-        const midpointDot = isSelected
-          ? `<circle class="edge-midpoint-dot" data-midpoint-dot="${edgeId}" cx="${mid.x}" cy="${mid.y}" r="6" />`
-          : ''
-
-        const branchPreview =
-          midpointDrag?.mode === 'branch'
-            ? (() => {
-                const previewTarget = projectPosition(
-                  this.clientToCanvasPosition(midpointDrag.currentClientX, midpointDrag.currentClientY),
-                )
-                const previewPath = buildRelationSegmentPath(mid, previewTarget, drawEdgeStyle)
-                return `<path class="edge edge-connector-drag edge-branch-preview" d="${previewPath}" />`
-              })()
-            : ''
-
-        return `<g>
-          ${hitPath}
-          ${mainPaths.join('')}
-          ${branchPaths.join('')}
-          ${legacyWaypointLines}
-          ${label}
-          ${midpointDot}
-          ${branchPreview}
-        </g>`
-      })
-      .join('')
-
-    // Live connector drag line
-    let connectorLine = ''
-    if (this.state.connectorDrag) {
-      const sourceNode = this.findNode(this.state.connectorDrag.sourceNodeId)
-      if (sourceNode) {
-        const sourceMetrics = this.resolveNodeRenderMetrics(sourceNode, childCountById.get(sourceNode.id) ?? 0)
-        const projSource = projectPosition({
-          x: sourceMetrics.position.x + sourceMetrics.width / 2,
-          y: sourceMetrics.position.y - sourceMetrics.height / 2,
-        })
-        const canvasPos = this.clientToCanvas(
-          this.state.connectorDrag.currentClientX,
-          this.state.connectorDrag.currentClientY,
-        )
-        if (canvasPos) {
-          connectorLine = `<line class="edge edge-connector-drag" x1="${projSource.x}" y1="${projSource.y}" x2="${canvasPos.x}" y2="${canvasPos.y}" />`
-        }
-      }
-    }
-
-    // Parent connector drag line (from floating node left side to mouse)
-    let parentConnectorLine = ''
-    if (this.state.parentConnectorDrag) {
-      const childNode = this.findNode(this.state.parentConnectorDrag.childNodeId)
-      if (childNode) {
-        const childMetrics = this.resolveNodeRenderMetrics(childNode, childCountById.get(childNode.id) ?? 0)
-        const projSource = projectPosition({
-          x: childMetrics.position.x - childMetrics.width / 2,
-          y: childMetrics.position.y,
-        })
-        const canvasPos = this.clientToCanvas(
-          this.state.parentConnectorDrag.currentClientX,
-          this.state.parentConnectorDrag.currentClientY,
-        )
-        if (canvasPos) {
-          parentConnectorLine = `<line class="edge edge-connector-drag" x1="${projSource.x}" y1="${projSource.y}" x2="${canvasPos.x}" y2="${canvasPos.y}" />`
-        }
-      }
-    }
-
-    // Cutting line (red dashed line from start to current mouse position)
-    let cuttingLine = ''
-    if (this.state.cutting) {
-      const start = projectPosition(this.state.cutting.startPoint)
-      const end = projectPosition(this.state.cutting.currentPoint)
-      cuttingLine = `<line class="cutting-line" x1="${start.x}" y1="${start.y}" x2="${end.x}" y2="${end.y}" />`
-    }
-
-    return arrowDefs + hierarchyEdges + relationEdges + connectorLine + parentConnectorLine + cuttingLine
-  }
-
-  private resolveNodeRenderMetrics(node: MindNode, childCount: number): NodeRenderMetrics {
+  resolveNodeRenderMetrics(node: MindNode, childCount: number): NodeRenderMetrics {
     const preview = this.activeEditorPreview
     if (preview && preview.nodeId === node.id) {
       return {
@@ -4798,169 +3468,7 @@ class MindMapApp {
     }
   }
 
-  private renderNodes(): string {
-    const visibleIds = visibleNodeIds(this.state.document)
-    const selectedIds = new Set(this.selectedNodeIds())
-    const originX = this.workspaceBounds.originX
-    const originY = this.workspaceBounds.originY
-
-    return this.state.document.nodes
-      .filter((node) => visibleIds.has(node.id))
-      .map((node) => {
-        const nodeColor = normalizeNodeColor(node.color)
-        const isEditingNode = this.state.editingNodeId === node.id
-        const preview = this.activeEditorPreview?.nodeId === node.id ? this.activeEditorPreview : null
-        const autoWidthAnchorLeft = preview?.anchorLeft ?? this.activeEditorAnchorLeft
-        const isAutoWidthEditingNode = isEditingNode && !node.width && autoWidthAnchorLeft !== null
-        const classes = [
-          'node-card',
-          `node-${node.kind}`,
-          nodeColor ? 'has-color' : '',
-          isAutoWidthEditingNode ? 'is-editing-auto-width' : '',
-          node.id === this.state.selectedNodeId ? 'is-selected' : '',
-          selectedIds.has(node.id) && node.id !== this.state.selectedNodeId ? 'is-selected-secondary' : '',
-          node.id === this.state.connectSourceNodeId ? 'is-connect-source' : '',
-          node.collapsed ? 'is-collapsed' : '',
-          this.state.cutting?.warningNodeIds.has(node.id) ? 'cutting-warning' : '',
-        ]
-          .filter(Boolean)
-          .join(' ')
-
-        const priorityBadge = node.priority
-          ? `<span class="priority-badge priority-${node.priority.toLowerCase()}">${node.priority}</span>`
-          : ''
-
-        const childCount = childrenOf(this.state.document, node.id).length
-        const branchBadge =
-          childCount > 0
-            ? `<span class="node-branch-badge">${node.collapsed ? `+${hiddenDescendantCount(this.state.document, node.id)}` : childCount}</span>`
-            : ''
-        const collapseLabel = node.collapsed ? this.t('action.expand') : this.t('action.collapse')
-
-        const nodeDimensions = buildNodeDimensionStyle(
-          node,
-          preview ? { width: preview.width, height: preview.height } : undefined,
-        )
-        const nodePresentationStyle = buildNodeColorStyle(nodeColor)
-        const anchorX = isAutoWidthEditingNode ? (autoWidthAnchorLeft ?? node.position.x) : node.position.x
-        const articleStyle = `left: ${anchorX + originX}px; top: ${node.position.y + originY}px; ${nodePresentationStyle}`
-        const nodeId = escapeAttribute(node.id)
-
-        const content = isEditingNode
-          ? `<textarea class="node-editor" style="${nodeDimensions}" data-node-editor="${nodeId}" rows="1" spellcheck="false">${escapeHtml(
-              node.title,
-            )}</textarea>`
-          : `<button type="button" class="node-shell" style="${nodeDimensions}" data-node-button="${nodeId}">
-               ${priorityBadge}
-               <span class="node-title" data-node-title="${nodeId}">${escapeHtml(nodeVisibleTitle(node))}</span>
-               ${branchBadge}
-             </button>`
-
-        const resizeHandle =
-          node.kind !== 'root'
-            ? `<button type="button" class="node-resizer" data-node-resizer="${nodeId}" aria-label="Resize node"></button>`
-            : ''
-        const collapseButton =
-          childCount > 0
-            ? `<button
-               type="button"
-               class="node-collapse-button"
-               data-node-collapse-button="${nodeId}"
-               data-command="toggle-node-collapse:${nodeId}"
-               aria-label="${escapeAttribute(collapseLabel)}"
-               title="${escapeAttribute(collapseLabel)}"
-             ></button>`
-            : ''
-
-        const connectorDot = `<button type="button" class="node-connector-dot" data-node-connector="${nodeId}" aria-label="Drag to connect"></button>`
-
-        const parentConnectorDot =
-          node.kind === 'floating'
-            ? `<button type="button" class="node-parent-connector-dot" data-node-parent-connector="${nodeId}" aria-label="Drag to set parent"></button>`
-            : ''
-
-        return `
-          <article
-            class="${classes}"
-            data-node-id="${nodeId}"
-            style="${articleStyle}"
-          >
-            ${content}
-            ${collapseButton}
-            ${resizeHandle}
-            ${connectorDot}
-            ${parentConnectorDot}
-          </article>
-        `
-      })
-      .join('')
-  }
-
-  private renderPriorityButton(priority: Priority, selectedPriority: Priority): string {
-    const label = priority === '' ? this.t('priority.clear') : priority
-    const active = selectedPriority === priority
-    return `<button type="button" class="chip-button ${active ? 'is-active' : ''}" data-priority="${priority}">${label}</button>`
-  }
-
-  private renderNodeColorButton(color: NodeColor, selectedColor: NodeColor): string {
-    const active = selectedColor === color
-    if (color === '') {
-      return `<button type="button" class="color-button color-button-clear ${active ? 'is-active' : ''}" data-node-color="" title="${escapeAttribute(this.t('color.clear'))}" aria-label="${escapeAttribute(this.t('color.clear'))}">${this.t('color.clear')}</button>`
-    }
-
-    const palette = NODE_COLOR_PALETTES[color]
-    const label = this.t(palette.labelKey)
-    return `
-      <button
-        type="button"
-        class="color-button ${active ? 'is-active' : ''}"
-        data-node-color="${color}"
-        title="${escapeAttribute(label)}"
-        aria-label="${escapeAttribute(label)}"
-        style="--color-swatch: ${palette.accent};"
-      >
-        <span class="color-button-swatch"></span>
-      </button>
-    `
-  }
-
-  private renderRelationList(nodeId: string): string {
-    const relations = connectedRelations(this.state.document, nodeId)
-    if (relations.length === 0) {
-      return `<p class="empty-state">${this.t('inspector.emptyRelations')}</p>`
-    }
-
-    return `
-      <ul class="relation-list">
-        ${relations
-          .map((relation) => {
-            const otherNodeId = relation.sourceId === nodeId ? relation.targetId : relation.sourceId
-            const otherNode = this.findNode(otherNodeId)
-            const otherNodeCommandId = escapeAttribute(otherNodeId)
-            const relationId = escapeAttribute(relation.id)
-            return `
-              <li class="relation-item">
-                <div class="relation-item-top">
-                  <button type="button" class="text-button" data-command="focus-node:${otherNodeCommandId}">
-                    ${escapeHtml(otherNode?.title ?? this.t('common.unknownNode'))}
-                  </button>
-                  <button type="button" class="ghost-button danger" data-command="delete-relation:${relationId}">${this.t('action.remove')}</button>
-                </div>
-                <input
-                  class="relation-input"
-                  data-relation-label="${relationId}"
-                  value="${escapeAttribute(relation.label ?? '')}"
-                  placeholder="${escapeAttribute(this.t('inspector.relationPlaceholder'))}"
-                />
-              </li>
-            `
-          })
-          .join('')}
-      </ul>
-    `
-  }
-
-  private currentSnapshotList(): LocalSnapshotSummary[] {
+  currentSnapshotList(): LocalSnapshotSummary[] {
     if (!this.state.currentMapId) {
       return []
     }
@@ -4969,56 +3477,6 @@ class MindMapApp {
   }
 
   /** Renders snapshot section content without the wrapping <section> card (for collapsible Inspector sections) */
-  private renderSnapshotSectionContent(): string {
-    const snapshots = this.currentSnapshotList()
-    const canSaveSnapshot = Boolean(this.state.currentMapId)
-    return `
-      <p class="inspector-copy">${this.t('snapshot.copy')}</p>
-      <div class="snapshot-save-row">
-        <label class="snapshot-name-field">
-          <span class="snapshot-name-label">${this.t('snapshot.nameLabel')}</span>
-          <input
-            class="settings-input snapshot-name-input"
-            data-snapshot-name
-            value="${escapeAttribute(this.state.snapshotDraftName)}"
-            placeholder="${escapeAttribute(this.t('snapshot.namePlaceholder'))}"
-            ${canSaveSnapshot ? '' : 'disabled'}
-          />
-        </label>
-        <button type="button" class="chip-button" data-command="save-snapshot" ${canSaveSnapshot ? '' : 'disabled'}>${this.t('snapshot.save')}</button>
-      </div>
-      ${
-        snapshots.length === 0
-          ? `<p class="empty-state">${this.t('snapshot.empty')}</p>`
-          : `
-            <ul class="snapshot-list">
-              ${snapshots
-                .map((snapshot) => {
-                  const modeLabel =
-                    snapshot.mode === 'manual' ? this.t('snapshot.modeManual') : this.t('snapshot.modeAuto')
-                  const metaSuffix =
-                    snapshot.mapTitle && snapshot.mapTitle !== snapshot.title
-                      ? ` · ${escapeHtml(snapshot.mapTitle)}`
-                      : ''
-                  return `
-                    <li class="snapshot-item">
-                      <div class="snapshot-item-copy">
-                        <p class="snapshot-item-title">${escapeHtml(snapshot.title)}</p>
-                        <p class="snapshot-item-meta">${escapeHtml(modeLabel)} · ${escapeHtml(
-                          formatRelativeTime(snapshot.createdAt, this.state.preferences.locale),
-                        )} · ${escapeHtml(this.t('dock.nodes', { value: snapshot.nodeCount }))}${metaSuffix}</p>
-                      </div>
-                      <button type="button" class="ghost-button snapshot-restore-button" data-command="restore-snapshot:${escapeAttribute(snapshot.id)}">${this.t('snapshot.restore')}</button>
-                    </li>
-                  `
-                })
-                .join('')}
-            </ul>
-          `
-      }
-    `
-  }
-
   private nodeEditor(nodeId = this.state.editingNodeId): HTMLTextAreaElement | null {
     if (!nodeId) {
       return null
@@ -5141,7 +3599,7 @@ class MindMapApp {
         article.style.top = `${node.position.y + this.workspaceBounds.originY}px`
       }
       if (this.refs?.edgeLayer) {
-        this.refs.edgeLayer.innerHTML = this.renderEdges()
+        this.refs.edgeLayer.innerHTML = renderEdges(this)
       }
       return
     }
@@ -5149,7 +3607,7 @@ class MindMapApp {
     if (this.activeEditorPreview?.nodeId === node.id) {
       this.activeEditorPreview = null
       if (this.refs?.edgeLayer) {
-        this.refs.edgeLayer.innerHTML = this.renderEdges()
+        this.refs.edgeLayer.innerHTML = renderEdges(this)
       }
     }
   }
@@ -5299,7 +3757,7 @@ class MindMapApp {
     return selectionStart === 0 && selectionEnd === editor.value.length
   }
 
-  private selectedNode(): MindNode | undefined {
+  selectedNode(): MindNode | undefined {
     if (!this.state.selectedNodeId) {
       return undefined
     }
@@ -5307,7 +3765,7 @@ class MindMapApp {
     return this.findNode(this.state.selectedNodeId)
   }
 
-  private selectedNodeIds(): string[] {
+  selectedNodeIds(): string[] {
     const seen = new Set<string>()
     const orderedIds: string[] = []
     for (const nodeId of this.state.selectedNodeIds) {
@@ -6964,7 +5422,7 @@ class MindMapApp {
     return this.resolveRelationMidpointForEdge(relation, sourceMetrics, targetMetrics, edgeStyle)
   }
 
-  private resolveRelationMidpointForEdge(
+  resolveRelationMidpointForEdge(
     relation: RelationEdge,
     sourceMetrics: NodeRenderMetrics,
     targetMetrics: NodeRenderMetrics,
@@ -6983,7 +5441,7 @@ class MindMapApp {
 
   // ---- Helper: client coordinates to canvas coordinates ----
 
-  private clientToCanvas(clientX: number, clientY: number): Position | null {
+  clientToCanvas(clientX: number, clientY: number): Position | null {
     if (!this.refs) return null
     const scrollRect = this.refs.scroll.getBoundingClientRect()
     const scrollLeft = this.refs.scroll.scrollLeft
@@ -7412,7 +5870,7 @@ class MindMapApp {
     }
   }
 
-  private resolveAINoteTargets(): AINoteTargetState {
+  resolveAINoteTargets(): AINoteTargetState {
     const selectedNodes = this.selectedNodeIds()
       .map((nodeId) => this.findNode(nodeId))
       .filter((node): node is MindNode => Boolean(node))
@@ -7499,7 +5957,7 @@ class MindMapApp {
     this.state.ai.busy = true
     this.setStatus('status.aiRunning')
     this.renderHeader()
-    this.renderAIWorkspace()
+    renderAIWorkspace(this)
 
     try {
       const result = await api.completeNodeNotes({
@@ -7614,7 +6072,7 @@ class MindMapApp {
     this.state.ai.busy = true
     this.setStatus('status.aiRunning')
     this.renderHeader()
-    this.renderAIWorkspace()
+    renderAIWorkspace(this)
 
     try {
       const result = await api.suggestRelations(
@@ -8338,7 +6796,7 @@ class MindMapApp {
     }
   }
 
-  private collabApiKeyMasked(): string {
+  collabApiKeyMasked(): string {
     if (!this.collabApiKey) {
       return this.t('settings.collabApiKeyEmpty')
     }
@@ -8353,7 +6811,7 @@ class MindMapApp {
       .map((b) => b.toString(16).padStart(2, '0'))
       .join('')
     this.setStatus('settings.collabApiKeyGenerated')
-    this.renderSettings()
+    renderSettings(this)
   }
 
   private async copyCollabApiKey(): Promise<void> {
@@ -8428,7 +6886,7 @@ class MindMapApp {
   private clearCollabApiKey(): void {
     this.collabApiKey = ''
     this.setStatus('settings.collabApiKeyCleared')
-    this.renderSettings()
+    renderSettings(this)
   }
 
   private async saveCollabApiKey(): Promise<void> {
@@ -8736,7 +7194,7 @@ class MindMapApp {
     } else {
       this.inspectorSectionsCollapsed.add(sectionId)
     }
-    this.renderInspector()
+    renderInspector(this)
   }
 
   private closeSettings(): void {
@@ -8867,10 +7325,10 @@ class MindMapApp {
       return
     }
     this.state.guideOverlay.shortcutOverlayVisible = true
-    this.renderShortcutOverlay()
+    renderShortcutOverlay(this)
   }
 
-  private hideShortcutOverlay(): void {
+  hideShortcutOverlay(): void {
     if (!this.state.guideOverlay.shortcutOverlayVisible) {
       return
     }
@@ -8884,88 +7342,6 @@ class MindMapApp {
     } else {
       this.state.guideOverlay.shortcutOverlayVisible = false
     }
-  }
-
-  private renderShortcutOverlay(): void {
-    // Remove existing if any
-    document.querySelector('.shortcut-overlay')?.remove()
-
-    if (!this.state.guideOverlay.shortcutOverlayVisible) {
-      return
-    }
-
-    const isMac = navigator.platform.toUpperCase().includes('MAC')
-    const mod = isMac ? '⌘' : 'Ctrl'
-
-    const categories = [
-      {
-        title: this.t('guide.categoryEditing'),
-        shortcuts: [
-          { key: 'Tab', desc: this.t('guide.shortcut.tab') },
-          { key: 'Enter', desc: this.t('guide.shortcut.enter') },
-          { key: 'Delete', desc: this.t('guide.shortcut.delete') },
-          { key: 'F2', desc: this.t('guide.shortcut.f2') },
-          { key: 'Space', desc: this.t('guide.shortcut.space') },
-          { key: `${mod}+C`, desc: this.t('guide.shortcut.ctrlC') },
-          { key: `${mod}+V`, desc: this.t('guide.shortcut.ctrlV') },
-        ],
-      },
-      {
-        title: this.t('guide.categoryNavigation'),
-        shortcuts: [{ key: '↑ ↓ ← →', desc: this.t('guide.shortcut.arrows') }],
-      },
-      {
-        title: this.t('guide.categoryView'),
-        shortcuts: [
-          { key: `${mod}++`, desc: this.t('guide.shortcut.ctrlPlus') },
-          { key: `${mod}+-`, desc: this.t('guide.shortcut.ctrlMinus') },
-          { key: `${mod}+0`, desc: this.t('guide.shortcut.ctrl0') },
-          { key: `${mod}+L`, desc: this.t('guide.shortcut.ctrlL') },
-        ],
-      },
-      {
-        title: this.t('guide.categoryGeneral'),
-        shortcuts: [
-          { key: `${mod}+S`, desc: this.t('guide.shortcut.ctrlS') },
-          { key: `${mod}+Z`, desc: this.t('guide.shortcut.ctrlZ') },
-          { key: `${mod}+Shift+Z`, desc: this.t('guide.shortcut.ctrlShiftZ') },
-          { key: `${mod}+/`, desc: this.t('guide.shortcut.ctrlSlash') },
-          { key: 'Escape', desc: this.t('guide.shortcut.escape') },
-        ],
-      },
-    ]
-
-    const categoriesHtml = categories
-      .map(
-        (cat) => `
-      <div class="shortcut-category">
-        <h3 class="shortcut-category-title">${cat.title}</h3>
-        <div class="shortcut-grid">
-          ${cat.shortcuts.map((s) => `<span class="shortcut-key">${s.key}</span><span class="shortcut-desc">${s.desc}</span>`).join('')}
-        </div>
-      </div>
-    `,
-      )
-      .join('')
-
-    const overlay = document.createElement('div')
-    overlay.className = 'shortcut-overlay'
-    overlay.setAttribute('data-shortcut-overlay', '')
-    overlay.innerHTML = `
-      <div class="shortcut-overlay-content">
-        <h2 class="shortcut-overlay-title">${this.t('guide.shortcutTitle')}</h2>
-        ${categoriesHtml}
-      </div>
-    `
-
-    // Click outside (on backdrop) to close
-    overlay.addEventListener('click', (e) => {
-      if (e.target === overlay) {
-        this.hideShortcutOverlay()
-      }
-    })
-
-    document.body.appendChild(overlay)
   }
 
   private updatePreferences(updater: (preferences: AppPreferences) => void): void {
@@ -9010,7 +7386,7 @@ class MindMapApp {
     this.updateCanvasViewportView()
   }
 
-  private findNode(nodeId: string): MindNode | undefined {
+  findNode(nodeId: string): MindNode | undefined {
     return findNode(this.state.document, nodeId)
   }
 
@@ -9051,11 +7427,11 @@ class MindMapApp {
     this.refs.edgeLayer.style.height = `${scaledHeight}px`
   }
 
-  private canUndo(): boolean {
+  canUndo(): boolean {
     return this.historyPast.length > 0
   }
 
-  private canRedo(): boolean {
+  canRedo(): boolean {
     return this.historyFuture.length > 0
   }
 
@@ -9216,7 +7592,7 @@ class MindMapApp {
       }
     }
 
-    this.refs.edgeLayer.innerHTML = this.renderEdges()
+    this.refs.edgeLayer.innerHTML = renderEdges(this)
   }
 
   private applyMarqueeSelection(marquee: MarqueeState): void {
@@ -9377,7 +7753,7 @@ class MindMapApp {
     this.uxEngine.animateFitToView(current, target)
   }
 
-  private clientToCanvasPosition(clientX: number, clientY: number): Position {
+  clientToCanvasPosition(clientX: number, clientY: number): Position {
     const scroll = this.refs?.scroll
     if (!scroll) {
       return { x: clientX, y: clientY }
@@ -9390,7 +7766,7 @@ class MindMapApp {
     }
   }
 
-  private toWorkspacePosition(position: Position, bounds = this.workspaceBounds): Position {
+  toWorkspacePosition(position: Position, bounds = this.workspaceBounds): Position {
     return {
       x: position.x + bounds.originX,
       y: position.y + bounds.originY,
@@ -9714,7 +8090,7 @@ class MindMapApp {
     return this.state.document.nodes.filter((node) => node.title.toLowerCase().includes(normalized))
   }
 
-  private t(key: TranslationKey, values?: Record<string, string | number>): string {
+  t(key: TranslationKey, values?: Record<string, string | number>): string {
     return translate(this.state.preferences.locale, key, values)
   }
 
@@ -9990,7 +8366,7 @@ class MindMapApp {
     toolbar.classList.add('context-toolbar-hidden')
   }
 
-  private destroyContextToolbar(): void {
+  destroyContextToolbar(): void {
     const toolbar = this.state.contextToolbar.element
     if (toolbar) {
       toolbar.remove()

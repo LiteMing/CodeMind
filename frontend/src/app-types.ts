@@ -380,3 +380,5 @@ export interface CopiedSubtree {
   rootId: string
   nodes: CopiedSubtreeNode[]
 }
+
+export const PRIORITY_VALUES: Priority[] = ['', 'P0', 'P1', 'P2', 'P3']
