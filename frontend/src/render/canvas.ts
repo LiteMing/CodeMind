@@ -36,6 +36,7 @@ export function renderNodes(app: MindMapApp): string {
         node.id === app.state.connectSourceNodeId ? 'is-connect-source' : '',
         node.collapsed ? 'is-collapsed' : '',
         app.creatingNodeIds.has(node.id) ? 'node-creating' : '',
+        app.expandingNodeIds.has(node.id) ? 'node-expanding' : '',
         app.state.cutting?.warningNodeIds.has(node.id) ? 'cutting-warning' : '',
       ]
         .filter(Boolean)
@@ -58,7 +59,9 @@ export function renderNodes(app: MindMapApp): string {
       )
       const nodePresentationStyle = buildNodeColorStyle(nodeColor)
       const anchorX = isAutoWidthEditingNode ? (autoWidthAnchorLeft ?? node.position.x) : node.position.x
-      const articleStyle = `left: ${anchorX + originX}px; top: ${node.position.y + originY}px; ${nodePresentationStyle}`
+      const expandDelay = app.expandingNodeIds.get(node.id)
+      const expandDelayStyle = expandDelay !== undefined ? ` animation-delay: ${expandDelay}ms;` : ''
+      const articleStyle = `left: ${anchorX + originX}px; top: ${node.position.y + originY}px;${expandDelayStyle} ${nodePresentationStyle}`
       const nodeId = escapeAttribute(node.id)
 
       const content = isEditingNode
@@ -148,7 +151,9 @@ export function renderEdges(app: MindMapApp): string {
             const warningClass = app.state.cutting?.warningHierarchyEdgeKeys.has(`${parent.id}::${node.id}`)
               ? ' cutting-warning'
               : ''
-            return `<path class="edge edge-hierarchy${warningClass}" data-source-id="${escapeAttribute(parent.id)}" data-target-id="${escapeAttribute(node.id)}" d="${buildHierarchyPath(projectPosition(edgePoints.source), projectPosition(edgePoints.target), drawEdgeStyle)}" />`
+            const expandingClass =
+              app.expandingNodeIds.has(node.id) || app.expandingNodeIds.has(parent.id) ? ' edge-expanding' : ''
+            return `<path class="edge edge-hierarchy${warningClass}${expandingClass}" data-source-id="${escapeAttribute(parent.id)}" data-target-id="${escapeAttribute(node.id)}" d="${buildHierarchyPath(projectPosition(edgePoints.source), projectPosition(edgePoints.target), drawEdgeStyle)}" />`
           })
           .join('')
 

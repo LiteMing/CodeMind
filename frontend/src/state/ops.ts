@@ -458,52 +458,32 @@ export function toggleNodeCollapse(app: MindMapApp, nodeId: string): void {
     app.pushHistorySnapshot(snapshot)
     touchDocument(app.state.document)
     app.setStatus('status.branchExpanded')
+
+    // State-driven expand animation: fill expandingNodeIds BEFORE render so
+    // renderNodes/renderEdges output the classes and stagger delays in the
+    // first paint. Adding classes after render flashed every node at full
+    // opacity for a frame before restarting the fade from zero.
+    const expandNodeIds = descendantIds(app.state.document, nodeId)
+    const staggerDelays = app.uxEngine.computeStaggerDelays(expandNodeIds, 40)
+    for (const childId of expandNodeIds) {
+      app.expandingNodeIds.set(childId, staggerDelays.get(childId) ?? 0)
+    }
+
     app.render()
     scheduleAutosave(app, 'status.layoutSaveScheduled')
 
-    // After render, apply expand stagger animation (parent-to-leaf order)
-    const expandNodeIds = descendantIds(app.state.document, nodeId)
-    const staggerDelays = app.uxEngine.computeStaggerDelays(expandNodeIds, 40)
-
-    requestAnimationFrame(() => {
+    const totalWindow = app.uxEngine.staggerWindow(expandNodeIds.length, 40) + 350 + 50
+    window.setTimeout(() => {
       for (const childId of expandNodeIds) {
+        app.expandingNodeIds.delete(childId)
         const el = app.rootEl.querySelector<HTMLElement>(`[data-node-id="${childId}"]`)
         if (el) {
-          const delay = staggerDelays.get(childId) ?? 0
-          el.style.animationDelay = `${delay}ms`
-          el.classList.add('node-expanding')
-          el.addEventListener(
-            'animationend',
-            () => {
-              el.classList.remove('node-expanding')
-              el.style.animationDelay = ''
-            },
-            { once: true },
-          )
+          el.classList.remove('node-expanding')
+          el.style.animationDelay = ''
         }
       }
-
-      // Mark hierarchy edges as expanding for smooth fade-in (only subtree edges)
-      const expandNodeIdSet = new Set(expandNodeIds)
-      const edgeLayer = app.rootEl.querySelector<SVGElement>('[data-edge-layer]')
-      if (edgeLayer) {
-        const edges = edgeLayer.querySelectorAll<SVGElement>('.edge-hierarchy')
-        edges.forEach((edge) => {
-          const sourceId = edge.getAttribute('data-source-id')
-          const targetId = edge.getAttribute('data-target-id')
-          if ((sourceId && expandNodeIdSet.has(sourceId)) || (targetId && expandNodeIdSet.has(targetId))) {
-            edge.classList.add('edge-expanding')
-            edge.addEventListener(
-              'animationend',
-              () => {
-                edge.classList.remove('edge-expanding')
-              },
-              { once: true },
-            )
-          }
-        })
-      }
-    })
+      app.rootEl.querySelectorAll('.edge-expanding').forEach((edge) => edge.classList.remove('edge-expanding'))
+    }, totalWindow)
   }
 }
 

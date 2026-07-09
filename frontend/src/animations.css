@@ -170,27 +170,27 @@
 
 /* Node creating class — applied to nodes created via keyboard shortcut (Tab/Enter) */
 .node-creating {
-  animation: node-fade-in var(--duration-normal, 250ms) var(--ease-out) forwards;
+  animation: node-fade-in var(--duration-normal, 250ms) var(--ease-out) both;
   will-change: opacity;
 }
 
 .node-creating .node-shell,
 .node-creating .node-editor {
-  animation: node-create var(--duration-normal, 250ms) var(--ease-out) forwards;
+  animation: node-create var(--duration-normal, 250ms) var(--ease-out) both;
   animation-delay: inherit;
   will-change: transform, opacity;
 }
 
 /* Node deleting class — applied before DOM removal */
 .node-deleting {
-  animation: node-fade-out 200ms var(--ease-out) forwards;
+  animation: node-fade-out 200ms var(--ease-out) both;
   will-change: opacity;
   pointer-events: none;
 }
 
 .node-deleting .node-shell,
 .node-deleting .node-editor {
-  animation: node-delete 200ms var(--ease-out) forwards;
+  animation: node-delete 200ms var(--ease-out) both;
   animation-delay: inherit;
   will-change: transform, opacity;
 }
@@ -484,27 +484,27 @@
 /* Node collapsing class — applied to child nodes during collapse.
    Same split as create/delete: article fades, inner shell scales (M1). */
 .node-collapsing {
-  animation: node-fade-out var(--duration-slow, 350ms) var(--ease-out) forwards;
+  animation: node-fade-out var(--duration-slow, 350ms) var(--ease-out) both;
   will-change: opacity;
   pointer-events: none;
 }
 
 .node-collapsing .node-shell,
 .node-collapsing .node-editor {
-  animation: node-collapse var(--duration-slow, 350ms) var(--ease-out) forwards;
+  animation: node-collapse var(--duration-slow, 350ms) var(--ease-out) both;
   animation-delay: inherit;
   will-change: transform, opacity;
 }
 
 /* Node expanding class — applied to child nodes during expand */
 .node-expanding {
-  animation: node-fade-in var(--duration-slow, 350ms) var(--ease-out) forwards;
+  animation: node-fade-in var(--duration-slow, 350ms) var(--ease-out) both;
   will-change: opacity;
 }
 
 .node-expanding .node-shell,
 .node-expanding .node-editor {
-  animation: node-expand var(--duration-slow, 350ms) var(--ease-out) forwards;
+  animation: node-expand var(--duration-slow, 350ms) var(--ease-out) both;
   animation-delay: inherit;
   will-change: transform, opacity;
 }

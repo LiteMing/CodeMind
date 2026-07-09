@@ -111,6 +111,9 @@ export class MindMapApp {
   graphHitNodes: GraphHitNode[] = []
   // Node ids whose creation animation is still in flight (read by renderNodes)
   creatingNodeIds = new Set<string>()
+  // Node id → stagger delay(ms) for the expand animation in flight (read by
+  // renderNodes/renderEdges so the classes are present from the first paint)
+  expandingNodeIds = new Map<string, number>()
   copiedSubtree: CopiedSubtree | null = null
   suppressContextMenuOnce = false
   suppressClickOnce = false
