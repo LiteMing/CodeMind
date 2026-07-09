@@ -660,6 +660,35 @@
   }
 }
 
+/* === Actor presence (AI is writing) === */
+/* Pulse ring for nodes an agent is currently writing; the global
+   prefers-reduced-motion rule above collapses it to a static outline. */
+@keyframes presence-agent-pulse {
+  0%,
+  100% {
+    box-shadow:
+      0 0 0 0 color-mix(in srgb, var(--accent) 42%, transparent),
+      var(--shadow-card);
+  }
+  50% {
+    box-shadow:
+      0 0 0 7px color-mix(in srgb, var(--accent) 6%, transparent),
+      var(--shadow-card);
+  }
+}
+
+@keyframes presence-dot-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.4;
+    transform: scale(0.78);
+  }
+}
+
 /* === Minimap === */
 .minimap-canvas {
   background: rgba(30, 30, 30, 0.85);

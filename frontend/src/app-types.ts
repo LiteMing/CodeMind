@@ -255,6 +255,22 @@ export interface AppState {
   panelAnimating: Set<string> // panel IDs currently animating
 }
 
+// === Actor presence (总计划 §2 actor 一等模型) ===
+// Humans and agents are the same concept: an identity that is somewhere,
+// touching something. Presence is EPHEMERAL — realtime-channel state only,
+// never persisted into the document, snapshots or git. The built-in AI is
+// actor 'ai' (kind 'agent'); P3 multi-user presence adds more actors to the
+// same map instead of introducing a parallel mechanism.
+export type ActorKind = 'agent' | 'human'
+
+export interface ActorPresence {
+  kind: ActorKind
+  /** Display name for indicator chips ("AI", a collaborator's name, …). */
+  label: string
+  /** Nodes this actor is currently writing/holding focus on. */
+  focusNodeIds: Set<string>
+}
+
 export interface ShellRefs {
   topChrome: HTMLElement
   topPanel: HTMLElement
@@ -293,6 +309,8 @@ export interface ShellRefs {
   zoomLevel: HTMLElement
   aiLayer: HTMLElement
   graphLayer: HTMLElement
+  presenceIndicator: HTMLElement
+  presenceIndicatorText: HTMLElement
 }
 
 // === UX Polish: Context Toolbar ===

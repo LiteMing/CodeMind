@@ -29,6 +29,7 @@ export function renderNodes(app: MindMapApp): string {
       // Collapse takes precedence when a node is (transiently) in both
       // lifecycle maps — it is about to disappear.
       const isCollapsingNode = app.collapsingNodeIds.has(node.id)
+      const presenceKind = app.presenceKindForNode(node.id)
       const classes = [
         'node-card',
         `node-${node.kind}`,
@@ -41,6 +42,8 @@ export function renderNodes(app: MindMapApp): string {
         app.creatingNodeIds.has(node.id) ? 'node-creating' : '',
         isCollapsingNode ? 'node-collapsing' : '',
         !isCollapsingNode && app.expandingNodeIds.has(node.id) ? 'node-expanding' : '',
+        presenceKind ? `node-presence-${presenceKind}` : '',
+        app.aiChangedNodeIds.has(node.id) ? 'node-ai-changed' : '',
         app.state.cutting?.warningNodeIds.has(node.id) ? 'cutting-warning' : '',
       ]
         .filter(Boolean)

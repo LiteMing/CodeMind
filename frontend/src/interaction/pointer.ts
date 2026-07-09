@@ -227,6 +227,12 @@ export function handlePointerDown(app: MindMapApp, event: PointerEvent): void {
     app.cancelPendingNodeGesture()
   }
 
+  // Any canvas interaction dismisses the "what the AI just changed" highlight
+  // (its other exit is the fade timer).
+  if (element.closest('[data-workspace-scroll]')) {
+    app.clearAIChangeHighlights()
+  }
+
   if (event.button !== 0 && event.button !== 1 && event.button !== 2) {
     return
   }

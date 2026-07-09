@@ -1965,6 +1965,93 @@ kbd {
   border-style: dashed;
 }
 
+/* === Actor presence & AI change visibility === */
+/* An agent (today: the built-in AI) is writing this node right now. */
+.node-card.node-presence-agent .node-shell {
+  border-style: dashed;
+  border-color: color-mix(in srgb, var(--accent) 80%, var(--node-border));
+  animation: presence-agent-pulse 1.6s ease-in-out infinite both;
+}
+
+.node-card.node-presence-agent::after {
+  content: 'AI';
+  position: absolute;
+  top: -9px;
+  right: -9px;
+  z-index: 3;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #171a30;
+  font-family: 'IBM Plex Mono', 'Consolas', monospace;
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  box-shadow: var(--shadow-card);
+  pointer-events: none;
+}
+
+/* What the last AI action created/modified — fades via timer or on the next
+ * canvas interaction (clearAIChangeHighlights). */
+.node-card.node-ai-changed .node-shell {
+  border-color: color-mix(in srgb, var(--accent) 85%, var(--node-border));
+  box-shadow:
+    0 0 0 3px color-mix(in srgb, var(--accent-soft) 92%, transparent),
+    0 0 20px color-mix(in srgb, var(--accent) 30%, transparent),
+    var(--shadow-card);
+}
+
+/* Canvas presence chip ("AI is writing…"), bottom-center to stay clear of the
+ * zoom controls (bottom-left) and minimap (bottom-right). */
+.presence-indicator {
+  position: absolute;
+  left: 50%;
+  bottom: 18px;
+  transform: translateX(-50%);
+  z-index: 12;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--accent) 48%, var(--line));
+  background: color-mix(in srgb, var(--accent-soft) 62%, var(--surface));
+  color: var(--text);
+  font-size: 0.82rem;
+  pointer-events: none;
+  box-shadow: var(--shadow-card);
+}
+
+.presence-indicator[hidden] {
+  display: none;
+}
+
+.presence-indicator-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: presence-dot-pulse 1.2s ease-in-out infinite both;
+}
+
+/* AI-mode snapshot rows in the Inspector list */
+.snapshot-item-ai {
+  border-color: color-mix(in srgb, var(--accent) 46%, var(--line));
+}
+
+.snapshot-ai-chip {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 1px 6px;
+  border-radius: 6px;
+  border: 1px solid color-mix(in srgb, var(--accent) 55%, transparent);
+  background: color-mix(in srgb, var(--accent-soft) 80%, transparent);
+  color: var(--accent);
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
 .node-card.is-collapsed .node-collapse-button {
   border-color: color-mix(in srgb, var(--accent) 62%, transparent);
   background: color-mix(in srgb, var(--accent) 88%, var(--surface));

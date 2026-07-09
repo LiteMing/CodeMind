@@ -20,6 +20,8 @@ import { UxEngine, MinimapRenderer } from './ux-engine'
 import type { MinimapNodeData } from './ux-engine'
 import type {
   ActiveEditorPreviewState,
+  ActorKind,
+  ActorPresence,
   AIDebugAction,
   AppState,
   CopiedSubtree,
@@ -122,6 +124,16 @@ export class MindMapApp {
   // settles (clearTimeout + run) the previous animation before starting the
   // next one, so rapid re-toggles never double-fire deferred state flips.
   collapseToggleAnimations = new Map<string, { timer: number; settle: () => void }>()
+  // Minimal actor presence (总计划 §2 actor 一等模型): actorId → who/kind and
+  // which nodes they are currently writing. Ephemeral by design — lives only
+  // here, never enters the document, snapshots or git. Today's only writer is
+  // the built-in AI actor; multi-user presence (P3 SSE) adds map entries, not
+  // new mechanisms.
+  actorPresence = new Map<string, ActorPresence>()
+  // Nodes the last finished AI action created/modified (node-ai-changed
+  // highlight) — state-driven like creatingNodeIds so full re-renders keep it.
+  aiChangedNodeIds = new Set<string>()
+  private aiChangeClearHandle: number | null = null
   copiedSubtree: CopiedSubtree | null = null
   suppressContextMenuOnce = false
   suppressClickOnce = false
@@ -502,6 +514,7 @@ export class MindMapApp {
     this.ensureShell()
     renderHeader(this)
     renderWorkspace(this)
+    this.syncPresenceIndicator()
     renderInspector(this)
     this.syncInspectorNoteInputs()
     renderOverlay(this)
@@ -578,6 +591,10 @@ export class MindMapApp {
                 <div class="node-layer" data-node-layer></div>
               </div>
             </div>
+            <div class="presence-indicator" data-presence-indicator hidden>
+              <span class="presence-indicator-dot" aria-hidden="true"></span>
+              <span data-presence-indicator-text></span>
+            </div>
           </section>
 
           <aside class="inspector" data-inspector></aside>
@@ -635,6 +652,8 @@ export class MindMapApp {
       zoomLevel: requiredElement(this.rootEl, '[data-zoom-level]'),
       aiLayer: requiredElement(this.rootEl, '[data-ai-layer]'),
       graphLayer: requiredElement(this.rootEl, '[data-graph-layer]'),
+      presenceIndicator: requiredElement(this.rootEl, '[data-presence-indicator]'),
+      presenceIndicatorText: requiredElement(this.rootEl, '[data-presence-indicator-text]'),
     }
 
     // Attach inspector drag/resize event listeners (stable element, only bound once)
@@ -850,6 +869,93 @@ export class MindMapApp {
       this.creatingNodeIds.delete(nodeId)
       this.rootEl.querySelector(`[data-node-id="${nodeId}"]`)?.classList.remove('node-creating')
     }, 320)
+  }
+
+  /** Upserts an actor's ephemeral presence. Callers render() afterwards so
+   * renderNodes paints node-presence-<kind> on the focused nodes. */
+  setActorPresence(actorId: string, kind: ActorKind, label: string, focusNodeIds: string[]): void {
+    this.actorPresence.set(actorId, { kind, label, focusNodeIds: new Set(focusNodeIds) })
+  }
+
+  clearActorPresence(actorId: string): void {
+    this.actorPresence.delete(actorId)
+  }
+
+  /** Convenience for the built-in AI actor: presence for the nodes an
+   * in-flight AI request is about to write. Cleared in the action's finally. */
+  beginAIWriting(nodeIds: string[]): void {
+    this.setActorPresence('ai', 'agent', 'AI', nodeIds)
+  }
+
+  endAIWriting(): void {
+    this.clearActorPresence('ai')
+  }
+
+  /** The presence kind touching a node, if any (read by renderNodes). Agents
+   * win over humans when both hold the same node — the writer is the one the
+   * reviewer needs to see. */
+  presenceKindForNode(nodeId: string): ActorKind | null {
+    let kind: ActorKind | null = null
+    for (const presence of this.actorPresence.values()) {
+      if (!presence.focusNodeIds.has(nodeId)) {
+        continue
+      }
+      if (presence.kind === 'agent') {
+        return 'agent'
+      }
+      kind = presence.kind
+    }
+    return kind
+  }
+
+  /** Canvas-corner "AI is writing…" chip, derived from agent presence (not
+   * from state.ai.busy — busy is the request lifecycle, presence is the
+   * display layer). Stable shell element toggled on every render path. */
+  private syncPresenceIndicator(): void {
+    if (!this.refs) {
+      return
+    }
+    const writingAgents = [...this.actorPresence.values()].filter((presence) => presence.kind === 'agent')
+    this.refs.presenceIndicator.hidden = writingAgents.length === 0
+    this.refs.presenceIndicatorText.textContent = this.t('ai.pendingBadge')
+  }
+
+  /** Highlights what the AI just created/modified and pans the camera to the
+   * first change. The highlight fades after a few seconds or on the next
+   * canvas interaction — "AI 做完了但不知道改了哪" 的直接解法. */
+  markAIChangedNodes(nodeIds: string[], centerNodeId = nodeIds[0] ?? null): void {
+    if (this.aiChangeClearHandle !== null) {
+      window.clearTimeout(this.aiChangeClearHandle)
+      this.aiChangeClearHandle = null
+    }
+    this.clearAIChangeHighlights()
+    for (const nodeId of nodeIds) {
+      this.aiChangedNodeIds.add(nodeId)
+    }
+    if (this.aiChangedNodeIds.size === 0) {
+      return
+    }
+
+    // Callers render() right after; center once the new layout is in the DOM.
+    if (centerNodeId) {
+      queueMicrotask(() => {
+        this.centerViewportOnNode(centerNodeId)
+      })
+    }
+    this.aiChangeClearHandle = window.setTimeout(() => {
+      this.aiChangeClearHandle = null
+      this.clearAIChangeHighlights()
+    }, 8000)
+  }
+
+  /** Strips the AI change highlight without a full re-render (same DOM-surgery
+   * pattern as applyNodeCreateAnimation's timeout). */
+  clearAIChangeHighlights(): void {
+    if (this.aiChangedNodeIds.size === 0) {
+      return
+    }
+    this.aiChangedNodeIds.clear()
+    this.rootEl.querySelectorAll('.node-ai-changed').forEach((element) => element.classList.remove('node-ai-changed'))
   }
 
   cycleSelectedNodePriority(): void {
@@ -1190,7 +1296,7 @@ export class MindMapApp {
     })
   }
 
-  private centerViewportOnNode(nodeId: string): void {
+  centerViewportOnNode(nodeId: string): void {
     const node = this.findNode(nodeId)
     const scroll = this.refs?.scroll
     if (!node || !scroll) {

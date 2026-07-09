@@ -328,4 +328,86 @@ describe('app interaction smoke', () => {
     expect(reopenedInput!.closest('.section-expanded'), 'note card should be expanded').toBeTruthy()
     expect(document.activeElement, 'note input should be focused').toBe(reopenedInput)
   })
+
+  it('AI notes flow: forced pre-write ai snapshot, actor presence in flight, change highlight after', async () => {
+    // Canvas pointer interactions are overlay-blocked while onboarding is
+    // open — mark it completed before boot so the dismissal step can run.
+    window.localStorage.setItem('code-mind.preferences', JSON.stringify({ onboardingCompleted: true }))
+    const { createApp } = await import('./app')
+    const { api } = await import('./api')
+    await createApp(root)
+    await flush()
+
+    root.querySelector<HTMLElement>('[data-command="create-map"]')!.click()
+    await flush()
+    pressKey('Tab')
+    await flush()
+    pressKey('Escape')
+    await flush()
+    const childId = nodeElements(root).find((el) => el.dataset.nodeId !== 'root')?.dataset.nodeId
+    expect(childId, 'a child node should exist').toBeTruthy()
+    const childEl = () => root.querySelector<HTMLElement>(`[data-node-id="${childId}"]`)
+
+    // Deferred completeNodeNotes so the in-flight state is observable.
+    let resolveNotes: (value: {
+      notes: Array<{ id: string; note: string }>
+      summary: string
+      model: string
+    }) => void = () => {}
+    vi.mocked(api.completeNodeNotes).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveNotes = resolve as typeof resolveNotes
+        }) as never,
+    )
+
+    // Tab+Escape left the child selected → it is the AI notes target.
+    root.querySelector<HTMLElement>('[data-command="open-ai-workspace"]')!.click()
+    await flush()
+    root.querySelector<HTMLElement>('[data-command="ai-complete-node-notes"]')!.click()
+    await flush()
+
+    // In flight: agent presence marker on the target + the global canvas chip.
+    expect(childEl()!.classList.contains('node-presence-agent'), 'presence marker while AI runs').toBe(true)
+    const indicator = root.querySelector<HTMLElement>('[data-presence-indicator]')
+    expect(indicator, 'presence indicator element exists').toBeTruthy()
+    expect(indicator!.hidden, 'presence chip visible while AI runs').toBe(false)
+
+    resolveNotes({ notes: [{ id: childId!, note: 'AI 写的注释' }], summary: 'ok', model: 'test-model' })
+    await flush(10)
+
+    // Red line: an 'ai'-mode snapshot captured BEFORE the write — its stored
+    // copy of the target node must not carry the new note yet.
+    const raw = window.localStorage.getItem('code-mind.snapshots.map-smoke-1')
+    expect(raw, 'snapshot storage for the map').toBeTruthy()
+    const storedSnapshots = JSON.parse(raw!) as Array<{
+      mode: string
+      document: { nodes: Array<{ id: string; note?: string }> }
+    }>
+    const aiSnapshot = storedSnapshots.find((snapshot) => snapshot.mode === 'ai')
+    expect(aiSnapshot, 'ai-mode snapshot exists').toBeTruthy()
+    const snapshotChild = aiSnapshot!.document.nodes.find((node) => node.id === childId)
+    expect(snapshotChild, 'snapshot contains the target node').toBeTruthy()
+    expect(snapshotChild!.note ?? '', 'snapshot is pre-write: target has no note yet').toBe('')
+
+    // Applied: change highlight on, presence off, chip hidden, note badge on.
+    expect(childEl()!.classList.contains('node-ai-changed'), 'change highlight after AI finishes').toBe(true)
+    expect(childEl()!.classList.contains('node-presence-agent')).toBe(false)
+    expect(indicator!.hidden, 'presence chip hidden after AI finishes').toBe(true)
+    expect(root.querySelector(`[data-node-note-badge="${childId}"]`), 'note badge for the AI note').toBeTruthy()
+
+    // A canvas interaction dismisses the highlight (the fade timer is its
+    // other exit). The AI drawer overlay-blocks the canvas while open, and
+    // closeAIWorkspace drops clicks while the slide-in is still animating
+    // (300ms jsdom safety) — settle, close, then wait for the slide-out.
+    await new Promise((resolve) => setTimeout(resolve, 320))
+    root.querySelector<HTMLElement>('[data-command="close-ai-workspace"]')!.click()
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    await flush()
+    expect(childEl()!.classList.contains('node-ai-changed'), 'highlight survives panel close renders').toBe(true)
+    childEl()!
+      .querySelector<HTMLElement>('[data-node-button]')!
+      .dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, cancelable: true, button: 0 }))
+    expect(childEl()!.classList.contains('node-ai-changed'), 'highlight cleared on canvas interaction').toBe(false)
+  })
 })

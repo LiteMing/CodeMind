@@ -1,6 +1,9 @@
 import type { MindMapDocument } from './types'
 
-export type SnapshotMode = 'manual' | 'auto'
+// 'ai' snapshots are captured automatically right before an AI write lands —
+// the rollback guarantee ("AI 操作必须可评审可回滚") — and are rendered with a
+// distinct badge in the snapshot list.
+export type SnapshotMode = 'manual' | 'auto' | 'ai'
 
 export interface LocalSnapshotSummary {
   id: string
@@ -78,7 +81,7 @@ function readSnapshots(mapId: string): StoredSnapshot[] {
         return (
           typeof entry?.id === 'string' &&
           typeof entry?.title === 'string' &&
-          (entry?.mode === 'manual' || entry?.mode === 'auto') &&
+          (entry?.mode === 'manual' || entry?.mode === 'auto' || entry?.mode === 'ai') &&
           typeof entry?.createdAt === 'string' &&
           typeof entry?.nodeCount === 'number' &&
           Boolean(entry?.document && typeof entry.document === 'object')
@@ -87,9 +90,10 @@ function readSnapshots(mapId: string): StoredSnapshot[] {
       .map((entry) => ({
         id: entry.id as string,
         title: (entry.title as string).trim() || 'Untitled Snapshot',
-        mapTitle: typeof entry.mapTitle === 'string' && entry.mapTitle.trim()
-          ? entry.mapTitle.trim()
-          : ((entry.title as string).trim() || 'Untitled Map'),
+        mapTitle:
+          typeof entry.mapTitle === 'string' && entry.mapTitle.trim()
+            ? entry.mapTitle.trim()
+            : (entry.title as string).trim() || 'Untitled Map',
         mode: entry.mode as SnapshotMode,
         createdAt: entry.createdAt as string,
         nodeCount: entry.nodeCount as number,

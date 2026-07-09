@@ -17,9 +17,75 @@ import { clamp, getAIDebugInfo, getErrorMessage } from '../utils'
 import { normalizeNodeColor } from '../color-palette'
 import { deriveNoteChildTitle, normalizeNodeNote } from '../node-render'
 import { normalizedRelationPairKey } from '../templates'
-import { renderAIWorkspace } from '../render/ai-panel'
+import { saveLocalSnapshot } from '../snapshots'
 import type { AIDebugAction, AINoteTargetState } from '../app-types'
 import type { AIDebugInfo, AIDebugRequest, MindMapDocument, MindNode } from '../types'
+import type { TranslationKey } from '../i18n'
+
+/** Red line (总计划 §2 "AI 操作必须可评审可回滚"): every AI write is preceded
+ * by a forced 'ai'-mode snapshot — deliberately independent of the
+ * autoSnapshots preference and the auto-snapshot throttle — so the snapshot
+ * list can roll any AI action back in one click. Call it only after the
+ * action has confirmed it will actually change the document. */
+function captureAISnapshot(
+  app: MindMapApp,
+  actionKey: TranslationKey,
+  document: MindMapDocument = app.state.document,
+): void {
+  const mapId = document.id || app.state.currentMapId
+  if (!mapId) {
+    return
+  }
+  const title = document.title.trim() || app.t('node.untitled')
+  saveLocalSnapshot({
+    mapId,
+    title: app.t('snapshot.aiBeforeName', { action: app.t(actionKey), title }),
+    mapTitle: document.title,
+    mode: 'ai',
+    document,
+  })
+}
+
+/** Marks a freshly AI-generated/imported map's initial state ('ai' mode) so
+ * its provenance shows up in the snapshot list and the draft can be restored. */
+function captureAIGeneratedSnapshot(app: MindMapApp): void {
+  const mapId = app.state.currentMapId
+  if (!mapId) {
+    return
+  }
+  const title = app.state.document.title.trim() || app.t('node.untitled')
+  saveLocalSnapshot({
+    mapId,
+    title: app.t('snapshot.aiGeneratedName', { title }),
+    mapTitle: app.state.document.title,
+    mode: 'ai',
+    document: app.state.document,
+  })
+}
+
+/** Nodes the AI added or meaningfully edited between two document versions
+ * (position-only moves from auto-layout are deliberately ignored). */
+function diffAIChangedNodeIds(before: MindMapDocument, after: MindMapDocument): string[] {
+  const beforeById = new Map(before.nodes.map((node) => [node.id, node]))
+  const changed: string[] = []
+  for (const node of after.nodes) {
+    const previous = beforeById.get(node.id)
+    if (!previous) {
+      changed.push(node.id)
+      continue
+    }
+    if (
+      previous.title !== node.title ||
+      (normalizeNodeNote(previous.note) ?? '') !== (normalizeNodeNote(node.note) ?? '') ||
+      (previous.parentId ?? '') !== (node.parentId ?? '') ||
+      (previous.color ?? '') !== (node.color ?? '') ||
+      (previous.priority ?? '') !== (node.priority ?? '')
+    ) {
+      changed.push(node.id)
+    }
+  }
+  return changed
+}
 
 export function openAIWheel(app: MindMapApp, nodeId: string, clientX?: number, clientY?: number): void {
   app.state.contextMenu = null
@@ -139,6 +205,9 @@ export async function importFileWithAI(app: MindMapApp, file: File): Promise<voi
 
   app.state.ai.busy = true
   app.setStatus('status.aiRunning')
+  // Import creates a brand-new map — no target node on the current canvas;
+  // the canvas-corner presence chip is the pending signal.
+  app.beginAIWriting([])
   app.render()
 
   try {
@@ -157,6 +226,8 @@ export async function importFileWithAI(app: MindMapApp, file: File): Promise<voi
     app.state.ai.lastModel = result.model
     captureAIDebug(app, 'import', result.debug)
     await persistGeneratedDocument(app, result.document)
+    // Whole map is AI-born: record provenance + a restorable draft baseline.
+    captureAIGeneratedSnapshot(app)
     app.state.ai.open = false
     app.setStatus('status.aiImported', { filename: file.name, count: result.document.nodes.length })
   } catch (error) {
@@ -165,6 +236,7 @@ export async function importFileWithAI(app: MindMapApp, file: File): Promise<voi
     app.setStatus('status.aiFailed', { reason })
   } finally {
     app.state.ai.busy = false
+    app.endAIWriting()
     app.render()
   }
 }
@@ -310,8 +382,10 @@ export async function applyAINodeNotesForTargets(
 
   app.state.ai.busy = true
   app.setStatus('status.aiRunning')
-  renderHeader(app)
-  renderAIWorkspace(app)
+  // Full render (not just header/panel): paints node-ai-pending on the
+  // targets and the canvas-corner "AI is writing…" chip.
+  app.beginAIWriting(targetNodeIds.filter((nodeId) => Boolean(app.findNode(nodeId))))
+  app.render()
 
   try {
     const result = await api.completeNodeNotes({
@@ -351,6 +425,7 @@ export async function applyAINodeNotesForTargets(
         return 0
       }
 
+      captureAISnapshot(app, 'snapshot.aiActionNotes')
       captureHistory(app)
       const createdIds: string[] = []
       for (const { parent, normalizedNote } of preparedChildren) {
@@ -380,6 +455,7 @@ export async function applyAINodeNotesForTargets(
         app.state.preferences.appearance.childGapX,
       )
       app.setSelection(createdIds, createdIds[0] ?? null)
+      app.markAIChangedNodes(createdIds)
     } else {
       const changes = nextNotes.filter(
         (item) => normalizeNodeNote(app.findNode(item.id)?.note) !== normalizeNodeNote(item.note),
@@ -389,6 +465,7 @@ export async function applyAINodeNotesForTargets(
         return 0
       }
 
+      captureAISnapshot(app, 'snapshot.aiActionNotes')
       captureHistory(app)
       for (const item of changes) {
         app.updateNode(item.id, (draft) => {
@@ -396,6 +473,7 @@ export async function applyAINodeNotesForTargets(
         })
       }
       appliedCount = changes.length
+      app.markAIChangedNodes(changes.map((item) => item.id))
     }
 
     touchDocument(app.state.document)
@@ -410,6 +488,7 @@ export async function applyAINodeNotesForTargets(
     return 0
   } finally {
     app.state.ai.busy = false
+    app.endAIWriting()
     app.render()
   }
 }
@@ -425,8 +504,8 @@ export async function applyAIRelationsForFocus(app: MindMapApp, focusNodeIds?: s
 
   app.state.ai.busy = true
   app.setStatus('status.aiRunning')
-  renderHeader(app)
-  renderAIWorkspace(app)
+  app.beginAIWriting((focusNodeIds ?? []).filter((nodeId) => Boolean(app.findNode(nodeId))))
+  app.render()
 
   try {
     const result = await api.suggestRelations(
@@ -448,18 +527,30 @@ export async function applyAIRelationsForFocus(app: MindMapApp, focusNodeIds?: s
       return 0
     }
 
-    captureHistory(app)
-    const now = new Date().toISOString()
+    // Dedupe against existing pairs BEFORE snapshotting so a fully-duplicate
+    // suggestion set doesn't pollute the snapshot list with a no-op entry.
     const existingPairs = new Set(
       app.state.document.relations.map((relation) => normalizedRelationPairKey(relation.sourceId, relation.targetId)),
     )
-    let added = 0
+    const freshRelations: typeof nextRelations = []
     for (const relation of nextRelations) {
       const key = normalizedRelationPairKey(relation.sourceId, relation.targetId)
       if (existingPairs.has(key)) {
         continue
       }
       existingPairs.add(key)
+      freshRelations.push(relation)
+    }
+    if (freshRelations.length === 0) {
+      app.setStatus('status.aiNoRelations')
+      return 0
+    }
+
+    captureAISnapshot(app, 'snapshot.aiActionRelations')
+    captureHistory(app)
+    const now = new Date().toISOString()
+    const linkedNodeIds = new Set<string>()
+    for (const relation of freshRelations) {
       app.state.document.relations.push({
         id: createId('rel'),
         sourceId: relation.sourceId,
@@ -468,14 +559,12 @@ export async function applyAIRelationsForFocus(app: MindMapApp, focusNodeIds?: s
         createdAt: now,
         updatedAt: now,
       })
-      added += 1
+      linkedNodeIds.add(relation.sourceId)
+      linkedNodeIds.add(relation.targetId)
     }
+    const added = freshRelations.length
 
-    if (added === 0) {
-      app.setStatus('status.aiNoRelations')
-      return 0
-    }
-
+    app.markAIChangedNodes([...linkedNodeIds])
     touchDocument(app.state.document)
     app.setStatus('status.aiRelationsApplied', { count: added })
     app.render()
@@ -488,6 +577,7 @@ export async function applyAIRelationsForFocus(app: MindMapApp, focusNodeIds?: s
     return 0
   } finally {
     app.state.ai.busy = false
+    app.endAIWriting()
     app.render()
   }
 }
@@ -505,6 +595,9 @@ export async function generateAIMap(app: MindMapApp): Promise<void> {
 
   app.state.ai.busy = true
   app.setStatus('status.aiRunning')
+  // New-map generation has no target node on the current canvas — the global
+  // canvas-corner chip (state.ai.busy) is the pending signal.
+  app.beginAIWriting([])
   app.render()
 
   try {
@@ -521,6 +614,9 @@ export async function generateAIMap(app: MindMapApp): Promise<void> {
     app.state.ai.lastModel = result.model
     captureAIDebug(app, 'generate', result.debug)
     await persistGeneratedDocument(app, result.document)
+    // Whole map is AI-born: record provenance + a restorable draft baseline
+    // instead of highlighting every node.
+    captureAIGeneratedSnapshot(app)
     app.state.ai.open = false
     app.setStatus('status.aiMapGenerated', { count: result.document.nodes.length })
   } catch (error) {
@@ -529,6 +625,7 @@ export async function generateAIMap(app: MindMapApp): Promise<void> {
     app.setStatus('status.aiFailed', { reason })
   } finally {
     app.state.ai.busy = false
+    app.endAIWriting()
     app.render()
   }
 }
@@ -548,6 +645,8 @@ export async function expandAIMap(app: MindMapApp): Promise<void> {
 
   app.state.ai.busy = true
   app.setStatus('status.aiRunning')
+  // Expansion rewrites the whole map — mark the root as the pending anchor.
+  app.beginAIWriting([findRoot(app.state.document).id].filter(Boolean))
   app.render()
 
   try {
@@ -573,6 +672,7 @@ export async function expandAIMap(app: MindMapApp): Promise<void> {
     app.setStatus('status.aiFailed', { reason })
   } finally {
     app.state.ai.busy = false
+    app.endAIWriting()
     app.render()
   }
 }
@@ -599,7 +699,8 @@ export async function applyAISuggestNodes(
 
   app.state.ai.busy = true
   app.setStatus('status.aiRunning')
-  renderHeader(app)
+  app.beginAIWriting([selectedNode.id])
+  app.render()
 
   try {
     const result = await api.suggestChildren({
@@ -620,6 +721,7 @@ export async function applyAISuggestNodes(
       return 0
     }
 
+    captureAISnapshot(app, 'snapshot.aiActionSuggest')
     captureHistory(app)
     const createdIds: string[] = []
     const parentId = mode === 'siblings' ? (selectedNode.parentId ?? '') : selectedNode.id
@@ -662,6 +764,7 @@ export async function applyAISuggestNodes(
       app.state.preferences.appearance.childGapX,
     )
     app.setSelection(createdIds, createdIds[0] ?? null)
+    app.markAIChangedNodes(createdIds)
     touchDocument(app.state.document)
     app.setStatus('status.aiSuggestionsApplied', { count: createdIds.length })
     app.render()
@@ -674,6 +777,7 @@ export async function applyAISuggestNodes(
     return 0
   } finally {
     app.state.ai.busy = false
+    app.endAIWriting()
     app.render()
   }
 }
@@ -770,7 +874,13 @@ export async function persistExpandedDocument(app: MindMapApp, document: MindMap
     id: baseDocument.id,
     meta: baseDocument.meta,
   }
+  // Red line: expansion replaces the whole map and reloads it below, which
+  // resets the undo stack — this pre-write snapshot is the only rollback path.
+  captureAISnapshot(app, 'snapshot.aiActionExpand', baseDocument)
   const saved = await api.saveMap(nextDocument)
   await refreshMaps(app)
   openLoadedDocument(app, saved, 'status.loaded')
+  // Highlight what the expansion actually touched and bring it on screen
+  // (the caller's finally render paints the classes).
+  app.markAIChangedNodes(diffAIChangedNodeIds(baseDocument, app.state.document))
 }

@@ -256,13 +256,19 @@ export function renderSnapshotSectionContent(app: MindMapApp): string {
           <ul class="snapshot-list">
             ${snapshots
               .map((snapshot) => {
-                const modeLabel = snapshot.mode === 'manual' ? app.t('snapshot.modeManual') : app.t('snapshot.modeAuto')
+                const modeLabel =
+                  snapshot.mode === 'manual'
+                    ? app.t('snapshot.modeManual')
+                    : snapshot.mode === 'ai'
+                      ? app.t('snapshot.modeAI')
+                      : app.t('snapshot.modeAuto')
                 const metaSuffix =
                   snapshot.mapTitle && snapshot.mapTitle !== snapshot.title ? ` · ${escapeHtml(snapshot.mapTitle)}` : ''
+                const aiChip = snapshot.mode === 'ai' ? `<span class="snapshot-ai-chip">AI</span>` : ''
                 return `
-                  <li class="snapshot-item">
+                  <li class="snapshot-item${snapshot.mode === 'ai' ? ' snapshot-item-ai' : ''}">
                     <div class="snapshot-item-copy">
-                      <p class="snapshot-item-title">${escapeHtml(snapshot.title)}</p>
+                      <p class="snapshot-item-title">${aiChip}${escapeHtml(snapshot.title)}</p>
                       <p class="snapshot-item-meta">${escapeHtml(modeLabel)} · ${escapeHtml(
                         formatRelativeTime(snapshot.createdAt, app.state.preferences.locale),
                       )} · ${escapeHtml(app.t('dock.nodes', { value: snapshot.nodeCount }))}${metaSuffix}</p>
