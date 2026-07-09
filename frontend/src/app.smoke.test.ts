@@ -305,17 +305,22 @@ describe('app interaction smoke', () => {
     const badge = root.querySelector<HTMLElement>('[data-node-note-badge="root"]')
     expect(badge, 'note badge should render for a node with a note').toBeTruthy()
 
+    // Let the note change's 700ms autosave and the panel slide-in (300ms
+    // safety in jsdom) fully settle: both end in a full re-render that would
+    // otherwise rebuild the inspector right after our focus assertion target.
+    await new Promise((resolve) => setTimeout(resolve, 950))
+    await flush()
+
     // Collapse the "current node" section so the badge click has a card to pop open.
     root.querySelector<HTMLElement>('[data-command="toggle-inspector-section:node"]')!.click()
     await flush()
     expect(root.querySelector('[data-node-note="root"]')!.closest('.section-collapsed')).toBeTruthy()
 
-    badge!.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
-    // The click lands while the inspector's slide-in animation is still
-    // "in flight" (jsdom never fires animationend, so the 300ms safety
-    // timeout clears it) — openNodeNoteEditor retries until it settles,
-    // then focuses on the next animation frame. Wait past the whole window.
-    await new Promise((resolve) => setTimeout(resolve, 600))
+    const settledBadge = root.querySelector<HTMLElement>('[data-node-note-badge="root"]')
+    expect(settledBadge, 'note badge should still render after autosave').toBeTruthy()
+    settledBadge!.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    // openNodeNoteEditor focuses on the next animation frame.
+    await new Promise((resolve) => setTimeout(resolve, 120))
     await flush()
 
     const reopenedInput = root.querySelector<HTMLTextAreaElement>('[data-node-note="root"]')
