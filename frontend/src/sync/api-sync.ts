@@ -1,4 +1,6 @@
 import type { MindMapApp } from '../app'
+import { captureActiveNodeEditorDraft, restoreActiveNodeEditorDraft } from '../interaction/editor'
+import { resetHistory } from '../state/ops'
 import { api } from '../api'
 import { findRoot, tidySubtree, touchDocument } from '../document'
 import { downloadTextFile, getErrorMessage, slugify } from '../utils'
@@ -13,7 +15,7 @@ export async function saveDocument(
   statusKey: TranslationKey,
   values?: Record<string, string | number>,
 ): Promise<void> {
-  const editorDraft = app.captureActiveNodeEditorDraft()
+  const editorDraft = captureActiveNodeEditorDraft(app)
   try {
     const savedDocument = await api.saveMap(app.state.document)
     app.state.document = savedDocument
@@ -24,10 +26,10 @@ export async function saveDocument(
     await refreshMaps(app)
     maybeSaveAutoSnapshot(app, savedDocument)
     app.setStatus(statusKey, values)
-    app.restoreActiveNodeEditorDraft(editorDraft)
+    restoreActiveNodeEditorDraft(app, editorDraft)
   } catch (error) {
     app.setStatus('status.saveFailed', { reason: getErrorMessage(error) })
-    app.restoreActiveNodeEditorDraft(editorDraft)
+    restoreActiveNodeEditorDraft(app, editorDraft)
   }
 
   app.applyTheme()
@@ -125,7 +127,7 @@ export async function goHome(app: MindMapApp): Promise<void> {
   app.destroyMinimap()
   app.uxEngine.destroy()
   app.refs = null
-  app.resetHistory()
+  resetHistory(app)
   app.render()
 }
 
@@ -141,7 +143,7 @@ export async function renameMap(app: MindMapApp, mapId: string): Promise<void> {
   await refreshMaps(app)
   if (app.state.currentMapId === mapId) {
     app.state.document = doc
-    app.resetHistory()
+    resetHistory(app)
   }
   app.setStatus('status.mapRenamed')
   app.render()
@@ -159,7 +161,7 @@ export async function deleteMap(app: MindMapApp, mapId: string): Promise<void> {
     app.state.view = 'home'
     app.state.currentMapId = null
     app.refs = null
-    app.resetHistory()
+    resetHistory(app)
   }
 
   app.setStatus('status.mapDeleted')
@@ -180,7 +182,7 @@ export function openLoadedDocument(app: MindMapApp, document: MindMapDocument, s
   app.state.regionResize = null
   app.didInitializeViewport = false
   app.refs = null
-  app.resetHistory()
+  resetHistory(app)
   app.setStatus(statusKey)
   startPolling(app)
 }

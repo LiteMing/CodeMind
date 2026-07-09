@@ -1,4 +1,5 @@
 import type { MindMapApp } from '../app'
+import { captureHistory } from '../state/ops'
 import { renderOverlay } from '../render/overlay'
 import { renderHeader } from '../render/shell'
 import { openLoadedDocument, refreshMaps, scheduleAutosave } from '../sync/api-sync'
@@ -350,7 +351,7 @@ export async function applyAINodeNotesForTargets(
         return 0
       }
 
-      app.captureHistory()
+      captureHistory(app)
       const createdIds: string[] = []
       for (const { parent, normalizedNote } of preparedChildren) {
         parent.collapsed = false
@@ -388,7 +389,7 @@ export async function applyAINodeNotesForTargets(
         return 0
       }
 
-      app.captureHistory()
+      captureHistory(app)
       for (const item of changes) {
         app.updateNode(item.id, (draft) => {
           draft.note = normalizeNodeNote(item.note)
@@ -447,7 +448,7 @@ export async function applyAIRelationsForFocus(app: MindMapApp, focusNodeIds?: s
       return 0
     }
 
-    app.captureHistory()
+    captureHistory(app)
     const now = new Date().toISOString()
     const existingPairs = new Set(
       app.state.document.relations.map((relation) => normalizedRelationPairKey(relation.sourceId, relation.targetId)),
@@ -619,7 +620,7 @@ export async function applyAISuggestNodes(
       return 0
     }
 
-    app.captureHistory()
+    captureHistory(app)
     const createdIds: string[] = []
     const parentId = mode === 'siblings' ? (selectedNode.parentId ?? '') : selectedNode.id
     const parentNode = app.findNode(parentId)

@@ -1,48 +1,15 @@
 import { api } from './api'
+import * as commands from './interaction/commands'
+import * as pointer from './interaction/pointer'
+import * as keyboard from './interaction/keyboard'
+import * as editor from './interaction/editor'
+import * as ops from './state/ops'
 import { renderHeader, renderWorkspace } from './render/shell'
 import { renderGraphOverlay, drawGraphScene, updateGraphSummaryPanel } from './render/graph'
-import {
-  renderOverlay,
-  renderRegionDrawPreview,
-  renderOnboarding,
-  renderToasts,
-  renderCanvasGuide,
-  updateCanvasGuide,
-} from './render/overlay'
-import {
-  saveDocument,
-  saveSnapshot,
-  exportMarkdown,
-  refreshMaps,
-  createMap,
-  openMap,
-  goHome,
-  renameMap,
-  deleteMap,
-  saveCollabApiKey,
-  scheduleAutosave,
-} from './sync/api-sync'
-import {
-  openAIWheel,
-  closeAIWheel,
-  importFileWithAI,
-  openAIWorkspace,
-  closeAIWorkspace,
-  toggleAIDebug,
-  toggleAIRawMode,
-  testAIConnection,
-  applyAINodeNotes,
-  applyAINodeNotesForTargets,
-  applyAIRelations,
-  applyAIRelationsForFocus,
-  generateAIMap,
-  expandAIMap,
-  applyAISuggestNodes,
-  applyAIQuickAssist,
-  resetAIConnectionFeedback,
-  persistGeneratedDocument,
-} from './ai/actions'
-import { PRIORITY_VALUES } from './app-types'
+import { renderOverlay, renderOnboarding, renderToasts, renderCanvasGuide, updateCanvasGuide } from './render/overlay'
+import { refreshMaps, scheduleAutosave } from './sync/api-sync'
+import { persistGeneratedDocument } from './ai/actions'
+import { MAX_ZOOM, MIN_ZOOM, PRIORITY_VALUES } from './app-types'
 import { renderHome } from './render/home'
 import { renderEdges } from './render/canvas'
 import { renderSettings } from './render/settings'
@@ -50,7 +17,7 @@ import { renderInspector } from './render/inspector'
 import { renderShortcutOverlay } from './render/shortcut-overlay'
 import { renderAIWorkspace } from './render/ai-panel'
 import { UxEngine, MinimapRenderer } from './ux-engine'
-import type { NodeBounds, MinimapNodeData } from './ux-engine'
+import type { MinimapNodeData } from './ux-engine'
 import type {
   ActiveEditorPreviewState,
   AIDebugAction,
@@ -61,66 +28,30 @@ import type {
   FixedMenuId,
   GraphDragState,
   HistorySnapshot,
-  MarqueeState,
   MidpointDragState,
   PanState,
   PendingImportMode,
   ShellRefs,
   ToastItem,
 } from './app-types'
-import { normalizeNodeColor, resolveNodeColorPalette } from './color-palette'
+import { resolveNodeColorPalette } from './color-palette'
 import {
   autoLayoutHierarchy,
   childrenOf,
   createDefaultDocument,
-  createId,
-  createNode,
-  deleteRelation,
-  descendantIds,
   findNode,
   findRoot,
-  nextChildPosition,
-  nextFloatingPosition,
-  nextSiblingPosition,
-  tidySubtree,
-  toggleCollapse,
   touchDocument,
-  updateRelationLabel,
   visibleNodeIds,
 } from './document'
-import {
-  type NodeRenderMetrics,
-  resolveRelationEdgeEndpoints,
-  buildRelationSegmentPath,
-  getRelationDefaultMidpoint,
-} from './edge-geometry'
-import {
-  segmentIntersectsAABB,
-  segmentIntersectsPolyline,
-  sampleCubicBezier,
-  parseCubicBezierFromPath,
-  parsePolylineFromPath,
-} from './cutting-geometry'
+import { type NodeRenderMetrics, resolveRelationEdgeEndpoints, getRelationDefaultMidpoint } from './edge-geometry'
 import { type GraphHitNode } from './graph-frame'
-import { type TranslationKey, nodeColorLabel, themeLabel, translate } from './i18n'
-import { nodeVisibleTitle, normalizeNodeNote, MIN_NODE_WIDTH, MIN_NODE_HEIGHT } from './node-render'
-import { estimateNodeHeight, estimateNodeWidth, TOPIC_NODE_MAX_WIDTH } from './node-sizing'
-import {
-  DEFAULT_LM_STUDIO_URL,
-  loadPreferences,
-  normalizeAIMaxTokens,
-  normalizeAITimeoutSeconds,
-  normalizeCanvasDragAction,
-  normalizeChildGapX,
-  normalizeChromeLayout,
-  normalizeEdgeStyle,
-  normalizeGestureAction,
-  normalizeLayoutMode,
-  normalizeTopPanelPosition,
-  savePreferences,
-} from './preferences'
-import { listLocalSnapshots, loadLocalSnapshot, type LocalSnapshotSummary } from './snapshots'
-import { normalizeAITemplateId, promptTemplateCopy, createTemplateDocument } from './templates'
+import { type TranslationKey, themeLabel, translate } from './i18n'
+import { nodeVisibleTitle, MIN_NODE_WIDTH, MIN_NODE_HEIGHT } from './node-render'
+import { estimateNodeHeight, estimateNodeWidth } from './node-sizing'
+import { loadPreferences, savePreferences } from './preferences'
+import { listLocalSnapshots, type LocalSnapshotSummary } from './snapshots'
+import { promptTemplateCopy, createTemplateDocument } from './templates'
 import type {
   AppPreferences,
   AITemplateId,
@@ -133,24 +64,16 @@ import type {
   MindNode,
   NodeColor,
   Position,
-  Priority,
   RegionBox,
   RelationEdge,
   Theme,
 } from './types'
 import {
   clamp,
-  clampMin,
   cloneDocument,
-  directionalCrossDelta,
-  directionalPrimaryDelta,
   getErrorMessage,
   getWorkspaceBounds,
-  isTypingTarget,
-  nodeCenter,
-  normalizeClientRect,
   parsePixelValue,
-  rectanglesIntersect,
   rectanglesOverlapCoords,
   requiredElement,
   type WorkspaceBounds,
@@ -158,21 +81,11 @@ import {
   WORKSPACE_MIN_HEIGHT,
 } from './utils'
 
-const MIN_ZOOM = 0.4
-const MAX_ZOOM = 2.4
-const ZOOM_SENSITIVITY = 0.0018
-const AUTO_NODE_EDITOR_MAX_WIDTH = TOPIC_NODE_MAX_WIDTH
-const DRAG_SNAP_THRESHOLD = 18
 const HISTORY_LIMIT = 120
 const GRAPH_DEFAULT_ZOOM = 1.16
 const GRAPH_MIN_ZOOM = 0.68
 const GRAPH_MAX_ZOOM = 1.92
-const GRAPH_ZOOM_SENSITIVITY = 0.0012
 const NODE_GESTURE_MULTI_CLICK_DELAY_MS = 240
-const NODE_LONG_PRESS_DELAY_MS = 520
-const NODE_LONG_PRESS_MOVE_THRESHOLD = 10
-const RELATION_HANDLE_LONG_PRESS_DELAY_MS = 320
-const RELATION_HANDLE_MOVE_THRESHOLD = 8
 const IMPORT_FILE_ACCEPT =
   '.md,.markdown,.txt,.json,.csv,.tsv,.html,.htm,.xml,.opml,.mermaid,.mmd,.yaml,.yml,.toml,.ini,.cfg,.log,.rst,text/plain,text/markdown,application/json,text/csv,text/html,application/xml,text/xml'
 
@@ -185,24 +98,24 @@ export class MindMapApp {
   readonly rootEl: HTMLElement
   autosaveHandle: number | null = null
   refs: ShellRefs | null = null
-  private pan: PanState | null = null
-  private graphDrag: GraphDragState | null = null
+  pan: PanState | null = null
+  graphDrag: GraphDragState | null = null
   didInitializeViewport = false
   viewport = { x: 0, y: 0, scale: 1 }
-  private historyPast: HistorySnapshot[] = []
-  private historyFuture: HistorySnapshot[] = []
+  historyPast: HistorySnapshot[] = []
+  historyFuture: HistorySnapshot[] = []
   private liveCanvasHandle: number | null = null
   private liveNodeIds = new Set<string>()
   private liveNodeDimensionIds = new Set<string>()
   private graphAnimationHandle: number | null = null
   graphHitNodes: GraphHitNode[] = []
-  private copiedSubtree: CopiedSubtree | null = null
-  private suppressContextMenuOnce = false
-  private suppressClickOnce = false
+  copiedSubtree: CopiedSubtree | null = null
+  suppressContextMenuOnce = false
+  suppressClickOnce = false
   private pendingNodeGestureHandle: number | null = null
-  private pendingNodeGestureNodeId: string | null = null
-  private longPressHandle: number | null = null
-  private longPressState: {
+  pendingNodeGestureNodeId: string | null = null
+  longPressHandle: number | null = null
+  longPressState: {
     pointerId: number
     nodeId: string
     button: number
@@ -213,13 +126,13 @@ export class MindMapApp {
     dragNodeIds: string[]
     activated: boolean
   } | null = null
-  private pendingEditorOptions: EditorLaunchOptions | null = null
+  pendingEditorOptions: EditorLaunchOptions | null = null
   activeEditorAnchorLeft: number | null = null
   activeEditorPreview: ActiveEditorPreviewState | null = null
-  private activeEditorLockedWidth: number | null = null
-  private editingOriginalTitle: string | null = null
-  private nodeEditorMeasureCanvas: HTMLCanvasElement | null = null
-  private pendingImportMode: PendingImportMode = 'auto'
+  activeEditorLockedWidth: number | null = null
+  editingOriginalTitle: string | null = null
+  nodeEditorMeasureCanvas: HTMLCanvasElement | null = null
+  pendingImportMode: PendingImportMode = 'auto'
   workspaceBounds: WorkspaceBounds = {
     minX: 0,
     minY: 0,
@@ -232,20 +145,20 @@ export class MindMapApp {
   pollHandle: number | null = null
   lastKnownEditTime: string = ''
   lastFrontendSaveTime: string = ''
-  private inspectorDrag: { x: number; y: number; width: number; dragged: boolean } = {
+  inspectorDrag: { x: number; y: number; width: number; dragged: boolean } = {
     x: 0,
     y: 0,
     width: 340,
     dragged: false,
   }
-  private inspectorDragActive: {
+  inspectorDragActive: {
     pointerId: number
     startX: number
     startY: number
     startLeft: number
     startTop: number
   } | null = null
-  private inspectorResizeActive: {
+  inspectorResizeActive: {
     pointerId: number
     startX: number
     startWidth: number
@@ -412,1198 +325,31 @@ export class MindMapApp {
     this.syncFloatingLayout()
   }
 
-  private readonly handlePointerLeave = (_event: PointerEvent): void => {
-    if (this.state.cutting) {
-      this.cancelCutting()
-    }
-  }
+  private readonly handlePointerLeave = (_event: PointerEvent): void => pointer.handlePointerLeave(this, _event)
 
-  private readonly handleClick = (event: MouseEvent): void => {
-    const target = event.target
-    if (!(target instanceof HTMLElement)) {
-      return
-    }
+  private readonly handleClick = (event: MouseEvent): void => commands.handleClick(this, event)
 
-    if (this.suppressClickOnce) {
-      this.suppressClickOnce = false
-      return
-    }
+  private readonly handleContextMenu = (event: MouseEvent): void => commands.handleContextMenu(this, event)
 
-    const nodeButton = target.closest<HTMLElement>('[data-node-button]')
-    const keepPendingGesture = nodeButton?.dataset.nodeButton === this.pendingNodeGestureNodeId && event.detail >= 2
-    if (!keepPendingGesture) {
-      this.cancelPendingNodeGesture()
-    }
+  private readonly handleDoubleClick = (event: MouseEvent): void => commands.handleDoubleClick(this, event)
 
-    const closedContextMenu = Boolean(this.state.contextMenu) && !target.closest('[data-context-menu]')
-    const closedFixedMenu = this.state.fixedMenu !== '' && !target.closest('[data-fixed-menu-shell]')
-    const closedAIWheel = this.state.aiWheel.open && !target.closest('[data-ai-wheel]')
-    if (closedContextMenu) {
-      this.state.contextMenu = null
-    }
-    if (closedFixedMenu) {
-      this.state.fixedMenu = ''
-    }
-    if (closedAIWheel) {
-      closeAIWheel(this)
-    }
+  private readonly handlePointerDown = (event: PointerEvent): void => pointer.handlePointerDown(this, event)
 
-    const settingsScrim = target.closest<HTMLElement>('[data-settings-scrim]')
-    if (settingsScrim && target === settingsScrim) {
-      this.closeSettings()
-      return
-    }
+  private readonly handlePointerMove = (event: PointerEvent): void => pointer.handlePointerMove(this, event)
 
-    const aiScrim = target.closest<HTMLElement>('[data-ai-scrim]')
-    if (aiScrim && target === aiScrim) {
-      closeAIWorkspace(this)
-      return
-    }
-
-    const graphScrim = target.closest<HTMLElement>('[data-graph-scrim]')
-    if (graphScrim && target === graphScrim) {
-      this.closeGraphOverlay()
-      return
-    }
-
-    const localeOption = target.closest<HTMLElement>('[data-locale-option]')?.dataset.localeOption as Locale | undefined
-    if (localeOption) {
-      this.setLocale(localeOption, false)
-      return
-    }
-
-    const command = target.closest<HTMLElement>('[data-command]')?.dataset.command
-    const clickedNodeEditor = target.closest<HTMLTextAreaElement>('[data-node-editor]')
-    const clickedWorkspace = target.closest<HTMLElement>('[data-workspace-scroll]')
-    const clickedRegion = target.closest<HTMLElement>('[data-region-id]')
-    if (command) {
-      if (!command.startsWith('toggle-fixed-menu')) {
-        this.state.fixedMenu = ''
-      }
-      if (this.state.editingNodeId && !clickedNodeEditor) {
-        this.finishActiveNodeEditing()
-      }
-      this.state.contextMenu = null
-      void this.runCommand(command)
-      return
-    }
-
-    const priority = target.closest<HTMLElement>('[data-priority]')?.dataset.priority as Priority | undefined
-    if (priority !== undefined) {
-      if (this.state.editingNodeId && !clickedNodeEditor) {
-        this.finishActiveNodeEditing()
-      }
-      this.setPriority(priority)
-      return
-    }
-
-    const nodeColor = target.closest<HTMLElement>('[data-node-color]')?.dataset.nodeColor as NodeColor | undefined
-    if (nodeColor !== undefined) {
-      if (this.state.editingNodeId && !clickedNodeEditor) {
-        this.finishActiveNodeEditing()
-      }
-      this.setNodeColor(normalizeNodeColor(nodeColor))
-      return
-    }
-
-    if (target.closest('[data-graph-canvas]')) {
-      this.selectGraphNodeAtPoint(event.clientX, event.clientY)
-      return
-    }
-
-    const graphResultNodeId = target.closest<HTMLElement>('[data-graph-node-result]')?.dataset.graphNodeResult
-    if (graphResultNodeId) {
-      this.state.graph.selectedNodeId = graphResultNodeId
-      updateGraphSummaryPanel(this)
-      drawGraphScene(this)
-      return
-    }
-
-    if (this.overlayBlocksCanvas()) {
-      return
-    }
-
-    if (clickedNodeEditor) {
-      return
-    }
-
-    if (this.state.editingNodeId) {
-      this.finishActiveNodeEditing()
-    }
-
-    if (nodeButton?.dataset.nodeButton) {
-      const nodeId = nodeButton.dataset.nodeButton
-      if (this.state.connectSourceNodeId && this.state.connectSourceNodeId !== nodeId) {
-        this.createRelation(this.state.connectSourceNodeId, nodeId)
-        return
-      }
-
-      if (!event.shiftKey && !event.ctrlKey && !event.metaKey && event.detail >= 3) {
-        event.preventDefault()
-        this.cancelPendingNodeGesture()
-        this.setSelection([nodeId], nodeId)
-        void this.runNodeGestureAction(this.state.preferences.interaction.tripleClickAction, nodeId, {
-          clientX: event.clientX,
-          clientY: event.clientY,
-        })
-        return
-      }
-
-      if (!event.shiftKey && !event.ctrlKey && !event.metaKey && event.detail === 2) {
-        event.preventDefault()
-        this.setSelection([nodeId], nodeId)
-        this.scheduleNodeGestureAction(nodeId, event.clientX, event.clientY)
-        return
-      }
-
-      if (event.shiftKey) {
-        this.selectNodeSubtree(nodeId)
-        return
-      }
-
-      if (event.ctrlKey || event.metaKey) {
-        this.toggleNodeSelection(nodeId)
-        return
-      }
-
-      this.selectNode(nodeId)
-      return
-    }
-
-    if (clickedRegion?.dataset.regionId) {
-      this.selectRegion(clickedRegion.dataset.regionId)
-      this.render()
-      return
-    }
-
-    if (closedContextMenu || closedFixedMenu || closedAIWheel) {
-      renderOverlay(this)
-      renderHeader(this)
-    }
-
-    if (clickedWorkspace) {
-      this.clearSelection()
-    }
-  }
-
-  private readonly handleContextMenu = (event: MouseEvent): void => {
-    if (this.state.view !== 'map' || this.overlayBlocksCanvas()) {
-      return
-    }
-
-    event.preventDefault()
-    if (this.suppressContextMenuOnce) {
-      this.suppressContextMenuOnce = false
-      return
-    }
-
-    const target = event.target
-    const element = target instanceof HTMLElement ? target : null
-    const svgElement = target instanceof SVGElement ? target : null
-
-    // Check for right-click on relation edge hit area
-    const relationClick = svgElement?.closest<SVGElement>('[data-relation-click]')
-    if (relationClick) {
-      const relationId = relationClick.getAttribute('data-relation-click')
-      if (relationId) {
-        this.state.selectedRelationId = relationId
-        this.state.selectedRegionId = null
-        this.applySelectionState([], null)
-        this.state.contextMenu = {
-          clientX: event.clientX,
-          clientY: event.clientY,
-          nodeId: null,
-          relationId,
-        }
-        this.render()
-        return
-      }
-    }
-
-    // Check for right-click on region box
-    const regionEl = element?.closest<HTMLElement>('[data-region-id]')
-    if (regionEl) {
-      const regionId = regionEl.dataset.regionId
-      if (regionId) {
-        this.selectRegion(regionId)
-        this.state.contextMenu = {
-          clientX: event.clientX,
-          clientY: event.clientY,
-          nodeId: null,
-          regionId,
-        }
-        this.render()
-        return
-      }
-    }
-
-    const nodeId = element?.closest<HTMLElement>('[data-node-button]')?.dataset.nodeButton ?? null
-    if (nodeId && !this.state.selectedNodeIds.includes(nodeId)) {
-      this.setSelection([nodeId], nodeId)
-    }
-
-    this.state.contextMenu = {
-      clientX: event.clientX,
-      clientY: event.clientY,
-      nodeId,
-    }
-    this.render()
-  }
-
-  private readonly handleDoubleClick = (event: MouseEvent): void => {
-    const target = event.target
-    if (target instanceof HTMLElement && target.closest('[data-graph-canvas]')) {
-      const nodeId = this.selectGraphNodeAtPoint(event.clientX, event.clientY)
-      if (nodeId) {
-        this.focusNodeFromGraph(nodeId)
-      }
-      return
-    }
-
-    if (this.overlayBlocksCanvas()) {
-      return
-    }
-
-    if (!(target instanceof HTMLElement)) {
-      return
-    }
-
-    const nodeButton = target.closest<HTMLElement>('[data-node-button]')
-    if (!nodeButton?.dataset.nodeButton) {
-      return
-    }
-
-    event.preventDefault()
-  }
-
-  private readonly handlePointerDown = (event: PointerEvent): void => {
-    const target = event.target
-    const element = target instanceof Element ? target : null
-    if (element && this.state.graph.open) {
-      const graphCanvas = element.closest<HTMLCanvasElement>('[data-graph-canvas]')
-      if (graphCanvas && event.button === 0) {
-        this.graphDrag = {
-          pointerId: event.pointerId,
-          startX: event.clientX,
-          startY: event.clientY,
-          startRotation: this.state.graph.rotation,
-          startTilt: this.state.graph.tilt,
-        }
-        event.preventDefault()
-        graphCanvas.setPointerCapture(event.pointerId)
-        graphCanvas.classList.add('is-dragging')
-        return
-      }
-    }
-
-    if (this.state.view !== 'map' || this.overlayBlocksCanvas()) {
-      return
-    }
-
-    if (!element) {
-      return
-    }
-
-    if (element.closest('[data-node-editor]')) {
-      return
-    }
-
-    // Handle connector dot long-press drag to create connection
-    const connectorDot = element.closest<HTMLElement>('[data-node-connector]')
-    if (connectorDot && event.button === 0) {
-      const sourceNodeId = connectorDot.dataset.nodeConnector
-      if (sourceNodeId) {
-        this.state.connectorDrag = {
-          sourceNodeId,
-          pointerId: event.pointerId,
-          currentClientX: event.clientX,
-          currentClientY: event.clientY,
-        }
-        event.preventDefault()
-        return
-      }
-    }
-
-    // Handle parent connector dot drag (floating node → set parent)
-    const parentConnectorDot = element.closest<HTMLElement>('[data-node-parent-connector]')
-    if (parentConnectorDot && event.button === 0) {
-      const childNodeId = parentConnectorDot.dataset.nodeParentConnector
-      if (childNodeId) {
-        this.state.parentConnectorDrag = {
-          childNodeId,
-          pointerId: event.pointerId,
-          currentClientX: event.clientX,
-          currentClientY: event.clientY,
-        }
-        event.preventDefault()
-        return
-      }
-    }
-
-    // Handle midpoint dot drag
-    const midpointDot = (target instanceof SVGElement ? target : null)?.closest<SVGElement>('[data-midpoint-dot]')
-    if (midpointDot && event.button === 0) {
-      const relationId = midpointDot.getAttribute('data-midpoint-dot')
-      if (relationId) {
-        const originMidpoint = this.resolveRelationMidpointPosition(relationId)
-        if (!originMidpoint) {
-          return
-        }
-        this.state.midpointDrag = {
-          relationId,
-          pointerId: event.pointerId,
-          mode: 'pending',
-          startClientX: event.clientX,
-          startClientY: event.clientY,
-          currentClientX: event.clientX,
-          currentClientY: event.clientY,
-          originMidpoint,
-          historyCaptured: false,
-          longPressHandle: window.setTimeout(() => {
-            if (
-              this.state.midpointDrag?.relationId !== relationId ||
-              this.state.midpointDrag.pointerId !== event.pointerId
-            ) {
-              return
-            }
-            if (this.state.midpointDrag.mode !== 'pending') {
-              return
-            }
-            this.state.midpointDrag.mode = 'branch'
-            this.setStatus('status.connectionBranchMode')
-            renderWorkspace(this)
-          }, RELATION_HANDLE_LONG_PRESS_DELAY_MS),
-        }
-        this.state.selectedRelationId = relationId
-        event.preventDefault()
-        return
-      }
-    }
-
-    // Handle click on relation edge to select it
-    const svgTarget = target instanceof SVGElement ? target : null
-    const relationHit = svgTarget?.closest<SVGElement>('[data-relation-click]')
-    if (relationHit && event.button === 0) {
-      const relationId = relationHit.getAttribute('data-relation-click')
-      if (relationId) {
-        this.state.selectedRelationId = this.state.selectedRelationId === relationId ? null : relationId
-        this.state.selectedNodeId = null
-        this.state.selectedNodeIds = []
-        this.state.selectedRegionId = null
-        renderWorkspace(this)
-        event.preventDefault()
-        return
-      }
-    }
-
-    // Handle region box resize
-    const regionResizerEl = element.closest<HTMLElement>('[data-region-resizer]')
-    if (regionResizerEl && event.button === 0) {
-      const handle = regionResizerEl.dataset.regionResizer as import('./app-types').RegionResizeHandle
-      const regionId = regionResizerEl.dataset.regionResizerId
-      const region = regionId ? this.state.document.regions?.find((r) => r.id === regionId) : null
-      if (region && handle) {
-        this.selectRegion(region.id)
-        this.state.regionResize = {
-          regionId: region.id,
-          handle,
-          startX: event.clientX,
-          startY: event.clientY,
-          startCenterX: region.position.x,
-          startCenterY: region.position.y,
-          startWidth: region.width,
-          startHeight: region.height,
-          historyCaptured: false,
-        }
-        event.preventDefault()
-        return
-      }
-    }
-
-    // Handle region box drag
-    const regionDragEl = element.closest<HTMLElement>('[data-region-drag]')
-    if (regionDragEl && event.button === 0 && !this.state.regionDraw) {
-      const regionId = regionDragEl.dataset.regionDrag
-      const region = this.state.document.regions?.find((r) => r.id === regionId)
-      if (region) {
-        this.selectRegion(region.id)
-        const docPos = this.clientToCanvasPosition(event.clientX, event.clientY)
-        const nodesInRegion = this.nodesInRegion(region)
-        const initialNodePositions: Record<string, Position> = {}
-        for (const node of nodesInRegion) {
-          initialNodePositions[node.id] = { ...node.position }
-        }
-        this.state.regionDrag = {
-          regionId: region.id,
-          offsetX: docPos.x - region.position.x,
-          offsetY: docPos.y - region.position.y,
-          initialPosition: { ...region.position },
-          initialNodePositions,
-          historyCaptured: false,
-        }
-        event.preventDefault()
-        return
-      }
-    }
-
-    // Handle region draw mode - left click starts drawing
-    if (this.state.regionDraw && this.state.regionDraw.pointerId === -1 && event.button === 0) {
-      const docPos = this.clientToCanvasPosition(event.clientX, event.clientY)
-      this.state.regionDraw.pointerId = event.pointerId
-      this.state.regionDraw.startCanvasX = docPos.x
-      this.state.regionDraw.startCanvasY = docPos.y
-      this.state.regionDraw.currentCanvasX = docPos.x
-      this.state.regionDraw.currentCanvasY = docPos.y
-      this.setStatus('status.regionDrawing')
-      event.preventDefault()
-      return
-    }
-
-    const nodeButton = element.closest<HTMLElement>('[data-node-button]')
-    const nodeId = nodeButton?.dataset.nodeButton
-    const longPressAction = this.longPressActionForButton(event.button)
-    const keepPendingGesture = nodeId === this.pendingNodeGestureNodeId && event.detail >= 2
-    if (!keepPendingGesture) {
-      this.cancelPendingNodeGesture()
-    }
-
-    if (event.button !== 0 && event.button !== 1 && event.button !== 2) {
-      return
-    }
-
-    const resizeHandle = element.closest<HTMLElement>('[data-node-resizer]')
-    const resizeNodeId = resizeHandle?.dataset.nodeResizer
-    if (resizeNodeId) {
-      if (event.button !== 0) {
-        return
-      }
-      const node = this.findNode(resizeNodeId)
-      if (!node || node.kind === 'root') {
-        return
-      }
-
-      const childCount = childrenOf(this.state.document, node.id).length
-      const currentWidth = node.width ?? estimateNodeWidth(node, childCount)
-      const currentHeight = node.height ?? estimateNodeHeight(node, childCount, currentWidth)
-
-      this.state.resize = {
-        nodeId: resizeNodeId,
-        startX: event.clientX,
-        startY: event.clientY,
-        startWidth: currentWidth,
-        startHeight: currentHeight,
-        anchorLeft: node.position.x - currentWidth / 2,
-        anchorTop: node.position.y - currentHeight / 2,
-        historyCaptured: false,
-      }
-      event.preventDefault()
-      return
-    }
-
-    if (element.closest('[data-node-collapse-button]')) {
-      event.preventDefault()
-      return
-    }
-
-    if (event.shiftKey || event.ctrlKey || event.metaKey) {
-      return
-    }
-
-    if (!nodeId) {
-      this.clearNodeLongPress()
-      const withinScroll = element.closest<HTMLElement>('[data-workspace-scroll]')
-      if (!withinScroll) {
-        return
-      }
-
-      const canvasAction = this.canvasDragActionForButton(event.button)
-      if (canvasAction === 'none') {
-        return
-      }
-
-      this.startCanvasDragAction(canvasAction, event)
-      event.preventDefault()
-      return
-    }
-
-    if (!this.state.selectedNodeIds.includes(nodeId)) {
-      this.setSelection([nodeId], nodeId)
-    }
-
-    const node = this.findNode(nodeId)
-    const selectedDragIds = this.state.selectedNodeIds.includes(nodeId) ? this.state.selectedNodeIds : [nodeId]
-    const dragNodeIds = this.resolveDragNodeIds(selectedDragIds)
-
-    if (event.detail >= 2) {
-      this.clearNodeLongPress()
-      return
-    }
-
-    if (
-      !node ||
-      (event.button === 0 && dragNodeIds.length === 0) ||
-      this.state.editingNodeId === nodeId ||
-      this.state.connectSourceNodeId !== null
-    ) {
-      this.clearNodeLongPress()
-      return
-    }
-
-    if (longPressAction !== 'none') {
-      this.armNodeLongPress(nodeId, dragNodeIds, event)
-      event.preventDefault()
-      return
-    }
-
-    this.clearNodeLongPress()
-    if (event.button === 0) {
-      this.startNodeDrag(nodeId, dragNodeIds, event)
-    }
-  }
-
-  private resolveDragNodeIds(baseNodeIds: string[]): string[] {
-    const dragNodeIds: string[] = []
-    const seen = new Set<string>()
-
-    for (const baseNodeId of baseNodeIds) {
-      const baseNode = this.findNode(baseNodeId)
-      if (!baseNode || baseNode.kind === 'root' || seen.has(baseNodeId)) {
-        continue
-      }
-
-      seen.add(baseNodeId)
-      dragNodeIds.push(baseNodeId)
-
-      if (!this.state.preferences.interaction.dragSubtreeWithParent) {
-        continue
-      }
-
-      for (const descendantId of descendantIds(this.state.document, baseNodeId)) {
-        const descendant = this.findNode(descendantId)
-        if (!descendant || descendant.kind === 'root' || seen.has(descendantId)) {
-          continue
-        }
-
-        seen.add(descendantId)
-        dragNodeIds.push(descendantId)
-      }
-    }
-
-    return dragNodeIds
-  }
-
-  private readonly handlePointerMove = (event: PointerEvent): void => {
-    if (this.graphDrag && event.pointerId === this.graphDrag.pointerId) {
-      const deltaX = event.clientX - this.graphDrag.startX
-      const deltaY = event.clientY - this.graphDrag.startY
-      this.state.graph.rotation = this.graphDrag.startRotation + deltaX * 0.0085
-      this.state.graph.tilt = clamp(this.graphDrag.startTilt + deltaY * 0.0055, -1.1, 1.1)
-      drawGraphScene(this)
-      event.preventDefault()
-      return
-    }
-
-    if (this.state.view !== 'map') {
-      return
-    }
-
-    // Connector dot drag
-    if (this.state.connectorDrag && event.pointerId === this.state.connectorDrag.pointerId) {
-      this.state.connectorDrag.currentClientX = event.clientX
-      this.state.connectorDrag.currentClientY = event.clientY
-      renderWorkspace(this)
-      event.preventDefault()
-      return
-    }
-
-    // Parent connector dot drag
-    if (this.state.parentConnectorDrag && event.pointerId === this.state.parentConnectorDrag.pointerId) {
-      this.state.parentConnectorDrag.currentClientX = event.clientX
-      this.state.parentConnectorDrag.currentClientY = event.clientY
-      renderWorkspace(this)
-      event.preventDefault()
-      return
-    }
-
-    // Midpoint dot drag
-    if (this.state.midpointDrag && event.pointerId === this.state.midpointDrag.pointerId) {
-      this.state.midpointDrag.currentClientX = event.clientX
-      this.state.midpointDrag.currentClientY = event.clientY
-      const dragState = this.state.midpointDrag
-      if (dragState.mode === 'pending') {
-        const moved = Math.hypot(event.clientX - dragState.startClientX, event.clientY - dragState.startClientY)
-        if (moved > RELATION_HANDLE_MOVE_THRESHOLD) {
-          this.clearMidpointDragLongPress(dragState)
-          dragState.mode = 'move'
-        }
-      }
-      renderWorkspace(this)
-      event.preventDefault()
-      return
-    }
-
-    // Region draw mode
-    if (
-      this.state.regionDraw &&
-      this.state.regionDraw.pointerId !== -1 &&
-      event.pointerId === this.state.regionDraw.pointerId
-    ) {
-      const docPos = this.clientToCanvasPosition(event.clientX, event.clientY)
-      this.state.regionDraw.currentCanvasX = docPos.x
-      this.state.regionDraw.currentCanvasY = docPos.y
-      renderRegionDrawPreview(this)
-      event.preventDefault()
-      return
-    }
-
-    // Region resize
-    if (this.state.regionResize) {
-      const rs = this.state.regionResize
-      const scale = this.viewport.scale
-      const dx = (event.clientX - rs.startX) / scale
-      const dy = (event.clientY - rs.startY) / scale
-      if (!rs.historyCaptured && (Math.abs(dx) > 1 || Math.abs(dy) > 1)) {
-        this.captureHistory()
-        rs.historyCaptured = true
-      }
-      const MIN_REGION = 30
-      const h = rs.handle
-      let newW = rs.startWidth
-      let newH = rs.startHeight
-      let newCx = rs.startCenterX
-      let newCy = rs.startCenterY
-      // horizontal
-      if (h === 'w' || h === 'nw' || h === 'sw') {
-        newW = Math.max(MIN_REGION, rs.startWidth - dx)
-        newCx = rs.startCenterX + (rs.startWidth - newW) / 2
-      } else if (h === 'e' || h === 'ne' || h === 'se') {
-        newW = Math.max(MIN_REGION, rs.startWidth + dx)
-        newCx = rs.startCenterX + (newW - rs.startWidth) / 2
-      }
-      // vertical
-      if (h === 'n' || h === 'nw' || h === 'ne') {
-        newH = Math.max(MIN_REGION, rs.startHeight - dy)
-        newCy = rs.startCenterY + (rs.startHeight - newH) / 2
-      } else if (h === 's' || h === 'sw' || h === 'se') {
-        newH = Math.max(MIN_REGION, rs.startHeight + dy)
-        newCy = rs.startCenterY + (newH - rs.startHeight) / 2
-      }
-      const region = this.state.document.regions?.find((r) => r.id === rs.regionId)
-      if (region) {
-        region.width = Math.round(newW)
-        region.height = Math.round(newH)
-        region.position = { x: Math.round(newCx), y: Math.round(newCy) }
-        region.updatedAt = new Date().toISOString()
-        renderWorkspace(this)
-      }
-      event.preventDefault()
-      return
-    }
-
-    // Region drag
-    if (this.state.regionDrag) {
-      const docPos = this.clientToCanvasPosition(event.clientX, event.clientY)
-      const region = this.state.document.regions?.find((r) => r.id === this.state.regionDrag!.regionId)
-      if (region) {
-        const newRegionX = docPos.x - this.state.regionDrag.offsetX
-        const newRegionY = docPos.y - this.state.regionDrag.offsetY
-        if (
-          !this.state.regionDrag.historyCaptured &&
-          (Math.abs(newRegionX - region.position.x) > 0.5 || Math.abs(newRegionY - region.position.y) > 0.5)
-        ) {
-          this.captureHistory()
-          this.state.regionDrag.historyCaptured = true
-        }
-        const dx = newRegionX - this.state.regionDrag.initialPosition.x
-        const dy = newRegionY - this.state.regionDrag.initialPosition.y
-        region.position = { x: newRegionX, y: newRegionY }
-        // Move contained nodes
-        const movedNodeIds: string[] = []
-        for (const [nodeId, initialPos] of Object.entries(this.state.regionDrag.initialNodePositions)) {
-          const node = this.findNode(nodeId)
-          if (node) {
-            node.position = {
-              x: initialPos.x + dx,
-              y: initialPos.y + dy,
-            }
-            movedNodeIds.push(nodeId)
-          }
-        }
-        this.applyLiveRegionDrag(region, movedNodeIds)
-      }
-      event.preventDefault()
-      return
-    }
-
-    if (this.longPressState && event.pointerId === this.longPressState.pointerId) {
-      this.longPressState.clientX = event.clientX
-      this.longPressState.clientY = event.clientY
-      if (
-        !this.longPressState.activated &&
-        Math.hypot(event.clientX - this.longPressState.startClientX, event.clientY - this.longPressState.startClientY) >
-          NODE_LONG_PRESS_MOVE_THRESHOLD
-      ) {
-        const { nodeId, dragNodeIds, button } = this.longPressState
-        const action = this.longPressActionForButton(button)
-        this.clearNodeLongPress()
-        if (action === 'pan-canvas') {
-          if (button === 2) {
-            this.suppressContextMenuOnce = true
-          }
-          this.startCanvasPan(event.pointerId, event.clientX, event.clientY)
-        } else if (button === 0 && dragNodeIds.length > 0) {
-          this.startNodeDrag(nodeId, dragNodeIds, event)
-        }
-      }
-    }
-
-    if (this.state.marquee && event.pointerId === this.state.marquee.pointerId) {
-      this.state.marquee.currentClientX = event.clientX
-      this.state.marquee.currentClientY = event.clientY
-      if (!this.state.marquee.active) {
-        const deltaX = event.clientX - this.state.marquee.startClientX
-        const deltaY = event.clientY - this.state.marquee.startClientY
-        if (Math.hypot(deltaX, deltaY) > 8) {
-          this.state.marquee.active = true
-          this.suppressClickOnce = true
-        }
-      }
-      renderOverlay(this)
-      if (this.state.marquee.active) {
-        event.preventDefault()
-      }
-      return
-    }
-
-    // Cutting mode drag
-    if (this.state.cutting && event.pointerId === this.state.cutting.pointerId) {
-      this.updateCuttingLine(event.clientX, event.clientY)
-      event.preventDefault()
-      return
-    }
-
-    if (this.state.resize) {
-      const resizeState = this.state.resize
-      const deltaX = event.clientX - resizeState.startX
-      const deltaY = event.clientY - resizeState.startY
-      if (!resizeState.historyCaptured && (Math.abs(deltaX) > 1 || Math.abs(deltaY) > 1)) {
-        this.captureHistory()
-        resizeState.historyCaptured = true
-        renderHeader(this)
-      }
-
-      const nextWidth = clampMin(resizeState.startWidth + deltaX / this.viewport.scale, MIN_NODE_WIDTH)
-      const nextHeight = clampMin(resizeState.startHeight + deltaY / this.viewport.scale, MIN_NODE_HEIGHT)
-
-      this.updateNode(resizeState.nodeId, (node) => {
-        node.width = Math.round(nextWidth)
-        node.height = Math.round(nextHeight)
-        node.position = {
-          x: Math.round(resizeState.anchorLeft + nextWidth / 2),
-          y: Math.round(resizeState.anchorTop + nextHeight / 2),
-        }
-      })
-      this.scheduleLiveNodeUpdate(resizeState.nodeId, true)
-      return
-    }
-
-    if (this.pan) {
-      this.handleCanvasPan(event)
-      return
-    }
-
-    if (!this.state.drag) {
-      return
-    }
-
-    const pointerPosition = this.clientToCanvasPosition(event.clientX, event.clientY)
-    const nextPosition = {
-      x: pointerPosition.x - this.state.drag.offsetX,
-      y: pointerPosition.y - this.state.drag.offsetY,
-    }
-    const currentNode = this.findNode(this.state.drag.nodeId)
-
-    if (
-      currentNode &&
-      !this.state.drag.historyCaptured &&
-      (Math.abs(nextPosition.x - currentNode.position.x) > 0.5 ||
-        Math.abs(nextPosition.y - currentNode.position.y) > 0.5)
-    ) {
-      this.captureHistory()
-      this.state.drag.historyCaptured = true
-      renderHeader(this)
-    }
-
-    const anchorStart = this.state.drag.initialPositions[this.state.drag.nodeId]
-    if (!anchorStart) {
-      return
-    }
-
-    const rawDeltaX = nextPosition.x - anchorStart.x
-    const rawDeltaY = nextPosition.y - anchorStart.y
-    const { deltaX, deltaY } = this.state.preferences.interaction.dragSnap
-      ? this.resolveSnappedDragDelta(this.state.drag, rawDeltaX, rawDeltaY)
-      : { deltaX: rawDeltaX, deltaY: rawDeltaY }
-    for (const candidateId of this.state.drag.nodeIds) {
-      const candidateStart = this.state.drag.initialPositions[candidateId]
-      if (!candidateStart) {
-        continue
-      }
-
-      this.updateNode(candidateId, (node) => {
-        node.position = {
-          x: candidateStart.x + deltaX,
-          y: candidateStart.y + deltaY,
-        }
-      })
-      this.scheduleLiveNodeUpdate(candidateId)
-    }
-
-    // Update drop target highlights during drag
-    this.updateDropTargetHighlights()
-
-    // Update alignment guides during drag
-    this.updateAlignmentGuides()
-  }
-
-  private resolveSnappedDragDelta(
-    dragState: DragState,
-    deltaX: number,
-    deltaY: number,
-  ): { deltaX: number; deltaY: number } {
+  resolveSnappedDragDelta(dragState: DragState, deltaX: number, deltaY: number): { deltaX: number; deltaY: number } {
     const draggedNodeIDs = new Set(dragState.nodeIds)
     return {
-      deltaX: this.resolveDragAxisSnap(dragState, deltaX, 'x', draggedNodeIDs),
-      deltaY: this.resolveDragAxisSnap(dragState, deltaY, 'y', draggedNodeIDs),
+      deltaX: pointer.resolveDragAxisSnap(this, dragState, deltaX, 'x', draggedNodeIDs),
+      deltaY: pointer.resolveDragAxisSnap(this, dragState, deltaY, 'y', draggedNodeIDs),
     }
   }
 
-  private resolveDragAxisSnap(
-    dragState: DragState,
-    delta: number,
-    axis: 'x' | 'y',
-    draggedNodeIDs: Set<string>,
-  ): number {
-    let bestOffset: number | null = null
+  private readonly handlePointerUp = (event: PointerEvent): void => pointer.handlePointerUp(this, event)
 
-    for (const nodeId of dragState.nodeIds) {
-      const start = dragState.initialPositions[nodeId]
-      const node = this.findNode(nodeId)
-      if (!start || !node) {
-        continue
-      }
+  private readonly handleWheel = (event: WheelEvent): void => pointer.handleWheel(this, event)
 
-      const currentValue = (axis === 'x' ? start.x : start.y) + delta
-      for (const target of this.dragSnapTargetsForNode(node, axis, draggedNodeIDs)) {
-        const offset = target - currentValue
-        if (Math.abs(offset) > DRAG_SNAP_THRESHOLD) {
-          continue
-        }
-        if (bestOffset === null || Math.abs(offset) < Math.abs(bestOffset)) {
-          bestOffset = offset
-        }
-      }
-    }
-
-    return delta + (bestOffset ?? 0)
-  }
-
-  private dragSnapTargetsForNode(node: MindNode, axis: 'x' | 'y', draggedNodeIDs: Set<string>): number[] {
-    const targets: number[] = []
-
-    if (axis === 'x' && node.parentId) {
-      const parent = this.findNode(node.parentId)
-      if (parent) {
-        const direction = node.position.x < parent.position.x ? -1 : 1
-        const branchGap = Math.max(180, Math.abs(node.position.x - parent.position.x))
-        targets.push(parent.position.x + direction * branchGap)
-      }
-
-      for (const sibling of childrenOf(this.state.document, node.parentId)) {
-        if (sibling.id !== node.id && !draggedNodeIDs.has(sibling.id)) {
-          targets.push(sibling.position.x)
-        }
-      }
-    }
-
-    for (const candidate of this.state.document.nodes) {
-      if (draggedNodeIDs.has(candidate.id)) {
-        continue
-      }
-      targets.push(axis === 'x' ? candidate.position.x : candidate.position.y)
-    }
-
-    return targets
-  }
-
-  private readonly handlePointerUp = (event: PointerEvent): void => {
-    if (this.graphDrag && event.pointerId === this.graphDrag.pointerId) {
-      const canvas = this.rootEl.querySelector<HTMLCanvasElement>('[data-graph-canvas]')
-      canvas?.classList.remove('is-dragging')
-      try {
-        canvas?.releasePointerCapture(event.pointerId)
-      } catch {
-        // Ignore pointer capture release errors when the canvas is already gone.
-      }
-      this.graphDrag = null
-      return
-    }
-
-    if (this.state.view !== 'map') {
-      return
-    }
-
-    // Cancel cutting on pointercancel (not pointerup — executeCutting handles that)
-    if (this.state.cutting && this.state.cutting.pointerId === event.pointerId && event.type === 'pointercancel') {
-      this.cancelCutting()
-      return
-    }
-
-    // Execute cutting on pointerup
-    if (this.state.cutting && this.state.cutting.pointerId === event.pointerId && event.type === 'pointerup') {
-      this.executeCutting()
-      return
-    }
-
-    // Connector drag finish
-    if (this.state.connectorDrag && event.pointerId === this.state.connectorDrag.pointerId) {
-      const sourceNodeId = this.state.connectorDrag.sourceNodeId
-      // Find target node at pointer position
-      const target = document.elementFromPoint(event.clientX, event.clientY)
-      const targetEl = target instanceof HTMLElement ? target : null
-      const targetConnector = targetEl?.closest<HTMLElement>('[data-node-connector]')
-      const targetButton = targetEl?.closest<HTMLElement>('[data-node-button]')
-      const targetNodeId = targetConnector?.dataset.nodeConnector ?? targetButton?.dataset.nodeButton
-      this.state.connectorDrag = null
-      if (targetNodeId && targetNodeId !== sourceNodeId) {
-        this.createRelation(sourceNodeId, targetNodeId)
-      } else {
-        renderWorkspace(this)
-      }
-      return
-    }
-
-    // Parent connector drag finish (set parent for floating node)
-    if (this.state.parentConnectorDrag && event.pointerId === this.state.parentConnectorDrag.pointerId) {
-      const childNodeId = this.state.parentConnectorDrag.childNodeId
-      const target = document.elementFromPoint(event.clientX, event.clientY)
-      const targetEl = target instanceof HTMLElement ? target : null
-      const targetConnector = targetEl?.closest<HTMLElement>('[data-node-connector]')
-      const targetParentConnector = targetEl?.closest<HTMLElement>('[data-node-parent-connector]')
-      const targetButton = targetEl?.closest<HTMLElement>('[data-node-button]')
-      const targetNodeId =
-        targetConnector?.dataset.nodeConnector ??
-        targetButton?.dataset.nodeButton ??
-        targetParentConnector?.dataset.nodeParentConnector
-      this.state.parentConnectorDrag = null
-      if (targetNodeId && targetNodeId !== childNodeId) {
-        const childNode = this.findNode(childNodeId)
-        if (childNode && childNode.kind === 'floating') {
-          // Prevent circular reference: target must not be a descendant of the child node
-          const childDescendants = descendantIds(this.state.document, childNodeId)
-          if (childDescendants.includes(targetNodeId)) {
-            this.setStatus('status.circularParentError')
-            renderWorkspace(this)
-            return
-          }
-          this.captureHistory()
-          childNode.kind = 'topic'
-          childNode.parentId = targetNodeId
-          touchDocument(this.state.document)
-          this.setStatus('status.parentSet')
-          scheduleAutosave(this, 'status.saved')
-        }
-      } else {
-        renderWorkspace(this)
-      }
-      return
-    }
-
-    // Midpoint drag finish
-    if (this.state.midpointDrag && event.pointerId === this.state.midpointDrag.pointerId) {
-      const dragState = this.state.midpointDrag
-      const relation = this.state.document.relations.find((r) => r.id === dragState.relationId)
-      this.clearMidpointDragLongPress(dragState)
-      this.state.midpointDrag = null
-      if (!relation) {
-        renderWorkspace(this)
-        return
-      }
-
-      if (dragState.mode === 'branch') {
-        const target = document.elementFromPoint(event.clientX, event.clientY)
-        const targetEl = target instanceof HTMLElement ? target : null
-        const targetConnector = targetEl?.closest<HTMLElement>('[data-node-connector]')
-        const targetButton = targetEl?.closest<HTMLElement>('[data-node-button]')
-        const targetNodeId = targetConnector?.dataset.nodeConnector ?? targetButton?.dataset.nodeButton ?? null
-        if (targetNodeId) {
-          this.addBranchTargetToRelation(relation, targetNodeId)
-        } else {
-          renderWorkspace(this)
-        }
-        return
-      }
-
-      const moved = Math.hypot(event.clientX - dragState.startClientX, event.clientY - dragState.startClientY)
-      if (dragState.mode === 'move' || moved > RELATION_HANDLE_MOVE_THRESHOLD) {
-        this.moveRelationMidpoint(relation, this.clientToCanvasPosition(event.clientX, event.clientY))
-      } else {
-        renderWorkspace(this)
-      }
-      return
-    }
-
-    // Region draw finish
-    if (
-      this.state.regionDraw &&
-      this.state.regionDraw.pointerId !== -1 &&
-      event.pointerId === this.state.regionDraw.pointerId
-    ) {
-      const rd = this.state.regionDraw
-      const x = Math.min(rd.startCanvasX, rd.currentCanvasX)
-      const y = Math.min(rd.startCanvasY, rd.currentCanvasY)
-      const w = Math.abs(rd.currentCanvasX - rd.startCanvasX)
-      const h = Math.abs(rd.currentCanvasY - rd.startCanvasY)
-      this.finishRegionDraw(x, y, w, h)
-      return
-    }
-
-    // Region resize finish
-    if (this.state.regionResize) {
-      const wasResized = this.state.regionResize.historyCaptured
-      this.state.regionResize = null
-      if (wasResized) {
-        touchDocument(this.state.document)
-        renderWorkspace(this)
-        scheduleAutosave(this, 'status.layoutSaveScheduled')
-      }
-      return
-    }
-
-    // Region drag finish
-    if (this.state.regionDrag) {
-      const wasMoved = this.state.regionDrag.historyCaptured
-      this.state.regionDrag = null
-      if (wasMoved) {
-        touchDocument(this.state.document)
-        renderWorkspace(this)
-        scheduleAutosave(this, 'status.layoutSaveScheduled')
-      }
-      return
-    }
-
-    if (this.longPressState && event.pointerId === this.longPressState.pointerId) {
-      this.clearNodeLongPress()
-    }
-
-    if (this.state.marquee && event.pointerId === this.state.marquee.pointerId) {
-      const marquee = this.state.marquee
-      this.state.marquee = null
-      if (marquee.active) {
-        this.applyMarqueeSelection(marquee)
-        this.suppressContextMenuOnce = true
-      }
-      renderOverlay(this)
-      return
-    }
-
-    if (this.pan) {
-      // Start inertia if velocity is significant (> ~50px/s → ~0.83px/frame at 60fps)
-      const speed = Math.hypot(this.pan.velocityX, this.pan.velocityY)
-      if (speed > 0.83) {
-        this.uxEngine.startInertia(this.pan.velocityX, this.pan.velocityY, {
-          x: this.viewport.x,
-          y: this.viewport.y,
-          scale: this.viewport.scale,
-        })
-      }
-      this.setCanvasPanning(false)
-      this.pan = null
-    }
-
-    if (this.state.resize) {
-      this.flushLiveNodeUpdate()
-      const resized = this.state.resize.historyCaptured
-      this.state.resize = null
-      if (resized) {
-        touchDocument(this.state.document)
-        renderWorkspace(this)
-        renderHeader(this)
-        scheduleAutosave(this, 'status.layoutSaveScheduled')
-      }
-    }
-
-    if (!this.state.drag) {
-      return
-    }
-
-    this.flushLiveNodeUpdate()
-    const moved = this.state.drag.historyCaptured
-
-    // Remove dragging visual feedback classes and apply ease-out settle animation
-    for (const dragId of this.state.drag.nodeIds) {
-      const el = this.rootEl.querySelector<HTMLElement>(`[data-node-id="${dragId}"]`)
-      if (el) {
-        el.classList.remove('node-dragging')
-        // Apply ease-out transition for smooth settle to final position
-        el.style.transition = `transform 150ms var(--ease-out, cubic-bezier(0.33, 1, 0.68, 1))`
-        // Remove the transition after it completes to avoid interfering with future interactions
-        const cleanup = (): void => {
-          el.style.transition = ''
-        }
-        el.addEventListener('transitionend', cleanup, { once: true })
-        // Safety cleanup in case transitionend doesn't fire
-        setTimeout(cleanup, 200)
-      }
-    }
-    // Remove any drop target highlights
-    this.clearDropTargetHighlights()
-    // Remove alignment guides
-    this.clearAlignmentGuides()
-
-    this.state.drag = null
-    if (moved) {
-      touchDocument(this.state.document)
-      renderWorkspace(this)
-      renderHeader(this)
-      scheduleAutosave(this, 'status.layoutSaveScheduled')
-    }
-  }
-
-  private readonly handleWheel = (event: WheelEvent): void => {
-    const target = event.target
-    if (this.state.graph.open && target instanceof HTMLElement) {
-      const graphCanvas = target.closest<HTMLCanvasElement>('[data-graph-canvas]')
-      if (graphCanvas) {
-        event.preventDefault()
-        const zoomFactor = Math.exp(-event.deltaY * GRAPH_ZOOM_SENSITIVITY)
-        this.setGraphZoom(this.state.graph.zoom * zoomFactor)
-        return
-      }
-    }
-
-    if (this.state.view !== 'map' || this.overlayBlocksCanvas()) {
-      return
-    }
-
-    const scroll = this.refs?.scroll
-    if (!(target instanceof HTMLElement) || !target.closest('[data-workspace-scroll]') || !scroll) {
-      return
-    }
-
-    event.preventDefault()
-
-    const rect = scroll.getBoundingClientRect()
-    const pointerX = event.clientX - rect.left
-    const pointerY = event.clientY - rect.top
-    const zoomFactor = Math.exp(-event.deltaY * ZOOM_SENSITIVITY)
-    const targetScale = clamp(this.viewport.scale * zoomFactor, MIN_ZOOM, MAX_ZOOM)
-
-    this.uxEngine.animateZoom(this.viewport.scale, targetScale, pointerX, pointerY, this.viewport.x, this.viewport.y)
-  }
-
-  /** Shortcut → toolbar button ref mapping (bijective: each shortcut maps to exactly one button) */
-  private readonly shortcutButtonMap: Record<string, keyof ShellRefs> = {
+  readonly shortcutButtonMap: Record<string, keyof ShellRefs> = {
     'ctrl+s': 'saveButton',
     'ctrl+z': 'undoButton',
     'ctrl+y': 'redoButton',
@@ -1614,295 +360,11 @@ export class MindMapApp {
   }
 
   /** Flash the corresponding toolbar button for a keyboard shortcut (200ms highlight) */
-  private flashToolbarButton(event: KeyboardEvent): void {
-    if (!this.refs) return
-    const ctrl = event.ctrlKey || event.metaKey
-    const shift = event.shiftKey
-    const key = event.key.toLowerCase()
-    const combo = ctrl && shift ? `ctrl+shift+${key}` : ctrl ? `ctrl+${key}` : key
+  private readonly handleGlobalKeyDown = (event: KeyboardEvent): void => keyboard.handleGlobalKeyDown(this, event)
 
-    const refName = this.shortcutButtonMap[combo]
-    if (!refName) return
+  private readonly handleEditorKeyDown = (event: KeyboardEvent): void => editor.handleEditorKeyDown(this, event)
 
-    const button = this.refs[refName] as HTMLElement | undefined
-    if (!button) return
-
-    button.classList.remove('shortcut-flash')
-    // Force reflow to restart animation if triggered rapidly
-    void button.offsetWidth
-    button.classList.add('shortcut-flash')
-    setTimeout(() => {
-      button.classList.remove('shortcut-flash')
-    }, 200)
-  }
-
-  private readonly handleGlobalKeyDown = (event: KeyboardEvent): void => {
-    if (event.key === 'Escape' && this.state.guideOverlay.shortcutOverlayVisible) {
-      event.preventDefault()
-      this.hideShortcutOverlay()
-      return
-    }
-
-    if (event.key === 'Escape' && this.state.settingsOpen) {
-      event.preventDefault()
-      this.closeSettings()
-      return
-    }
-
-    if (event.key === 'Escape' && this.state.editingNodeId) {
-      event.preventDefault()
-      this.cancelNodeEditor()
-      return
-    }
-
-    const activeTypingTarget = isTypingTarget(document.activeElement)
-    if (
-      this.state.view !== 'map' ||
-      this.onboardingOpen() ||
-      this.state.settingsOpen ||
-      isTypingTarget(event.target) ||
-      activeTypingTarget
-    ) {
-      return
-    }
-
-    if ((event.ctrlKey || event.metaKey) && event.key === '/') {
-      event.preventDefault()
-      if (this.state.guideOverlay.shortcutOverlayVisible) {
-        this.hideShortcutOverlay()
-      } else {
-        this.showShortcutOverlay()
-      }
-      return
-    }
-
-    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
-      event.preventDefault()
-      this.flashToolbarButton(event)
-      void saveDocument(this, 'status.saved')
-      return
-    }
-
-    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z' && !event.shiftKey) {
-      event.preventDefault()
-      this.flashToolbarButton(event)
-      this.undo()
-      return
-    }
-
-    if (
-      (event.ctrlKey || event.metaKey) &&
-      ((event.key.toLowerCase() === 'y' && !event.shiftKey) || (event.key.toLowerCase() === 'z' && event.shiftKey))
-    ) {
-      event.preventDefault()
-      this.flashToolbarButton(event)
-      this.redo()
-      return
-    }
-
-    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'l') {
-      event.preventDefault()
-      this.flashToolbarButton(event)
-      this.autoLayout()
-      return
-    }
-
-    if ((event.ctrlKey || event.metaKey) && (event.key === '=' || event.key === '+')) {
-      event.preventDefault()
-      this.zoomBy(1.25)
-      return
-    }
-
-    if ((event.ctrlKey || event.metaKey) && event.key === '-') {
-      event.preventDefault()
-      this.zoomBy(0.8)
-      return
-    }
-
-    if ((event.ctrlKey || event.metaKey) && event.key === '0') {
-      event.preventDefault()
-      this.zoomReset()
-      return
-    }
-
-    if ((event.ctrlKey || event.metaKey) && !event.shiftKey && event.key.toLowerCase() === 'c') {
-      event.preventDefault()
-      this.copySelectedSubtree()
-      return
-    }
-
-    if ((event.ctrlKey || event.metaKey) && !event.shiftKey && event.key.toLowerCase() === 'x') {
-      event.preventDefault()
-      this.cutSelectedSubtree()
-      return
-    }
-
-    if ((event.ctrlKey || event.metaKey) && !event.shiftKey && event.key.toLowerCase() === 'v') {
-      event.preventDefault()
-      this.pasteCopiedSubtree()
-      return
-    }
-
-    if (event.key === 'Escape' && this.state.regionDraw) {
-      event.preventDefault()
-      this.state.regionDraw = null
-      this.refs?.scroll?.classList.remove('is-region-drawing')
-      this.render()
-      return
-    }
-
-    if (event.key === 'Escape' && this.state.regionResize) {
-      event.preventDefault()
-      // Restore original dimensions
-      const rs = this.state.regionResize
-      const region = this.state.document.regions?.find((r) => r.id === rs.regionId)
-      if (region) {
-        region.width = rs.startWidth
-        region.height = rs.startHeight
-        region.position = { x: rs.startCenterX, y: rs.startCenterY }
-      }
-      this.state.regionResize = null
-      renderWorkspace(this)
-      return
-    }
-
-    if (event.key === 'Escape' && this.state.connectorDrag) {
-      event.preventDefault()
-      this.state.connectorDrag = null
-      renderWorkspace(this)
-      return
-    }
-
-    if (event.key === 'Escape' && this.state.midpointDrag) {
-      event.preventDefault()
-      this.clearMidpointDragLongPress(this.state.midpointDrag)
-      this.state.midpointDrag = null
-      renderWorkspace(this)
-      return
-    }
-
-    if (event.key === 'Escape' && this.state.selectedRelationId) {
-      event.preventDefault()
-      this.state.selectedRelationId = null
-      renderWorkspace(this)
-      return
-    }
-
-    if (event.key === 'Escape' && this.state.connectSourceNodeId) {
-      event.preventDefault()
-      this.state.connectSourceNodeId = null
-      this.setStatus('status.relationModeCancelled')
-      this.render()
-      return
-    }
-
-    const selectedNode = this.selectedNode()
-    if (!selectedNode) {
-      return
-    }
-
-    if (event.key === 'Tab') {
-      event.preventDefault()
-      this.createChildNode(selectedNode.id)
-      return
-    }
-
-    if (event.key === 'Enter') {
-      event.preventDefault()
-      this.createSiblingNode(selectedNode.id)
-      return
-    }
-
-    if (event.key === 'Delete' || event.key === 'Backspace') {
-      event.preventDefault()
-      this.deleteSelectedNode()
-      return
-    }
-
-    if (event.key === 'F2') {
-      event.preventDefault()
-      this.startEditingSelected()
-      return
-    }
-
-    if (event.key.startsWith('Arrow')) {
-      event.preventDefault()
-      if (event.shiftKey) {
-        this.extendSelectionByArrow(event.key)
-      } else {
-        this.moveSelectionByArrow(event.key)
-      }
-      return
-    }
-
-    if (event.key === ' ') {
-      event.preventDefault()
-      void this.runNodeGestureAction(this.state.preferences.interaction.spaceAction, selectedNode.id)
-      return
-    }
-  }
-
-  private readonly handleEditorKeyDown = (event: KeyboardEvent): void => {
-    const target = event.target
-    if (
-      !(
-        target instanceof HTMLInputElement ||
-        target instanceof HTMLTextAreaElement ||
-        target instanceof HTMLSelectElement
-      )
-    ) {
-      return
-    }
-
-    if ((target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) && target.dataset.nodeEditor) {
-      if (event.key === 'Enter' && !event.shiftKey) {
-        event.preventDefault()
-        this.commitNodeEditor(target.dataset.nodeEditor, target.value)
-        return
-      }
-
-      if (event.key === 'Escape') {
-        event.preventDefault()
-        this.clearNodeEditorState()
-        this.render()
-      }
-      return
-    }
-
-    if (target instanceof HTMLInputElement && target.dataset.relationLabel) {
-      if (event.key === 'Enter') {
-        event.preventDefault()
-        this.commitRelationLabel(target.dataset.relationLabel, target.value)
-      }
-
-      if (event.key === 'Escape') {
-        event.preventDefault()
-        this.render()
-      }
-      return
-    }
-
-    if (target instanceof HTMLInputElement && target.dataset.settingField && event.key === 'Enter') {
-      event.preventDefault()
-      target.blur()
-      return
-    }
-
-    if (target instanceof HTMLInputElement && target.dataset.graphSearch && event.key === 'Enter') {
-      event.preventDefault()
-      if (this.state.graph.selectedNodeId) {
-        this.focusNodeFromGraph(this.state.graph.selectedNodeId)
-      }
-      return
-    }
-
-    if (target instanceof HTMLInputElement && target.dataset.snapshotName !== undefined && event.key === 'Enter') {
-      event.preventDefault()
-      saveSnapshot(this, 'manual')
-    }
-  }
-
-  private scheduleNodeGestureAction(nodeId: string, clientX: number, clientY: number): void {
+  scheduleNodeGestureAction(nodeId: string, clientX: number, clientY: number): void {
     this.cancelPendingNodeGesture()
     this.pendingNodeGestureNodeId = nodeId
     this.pendingNodeGestureHandle = window.setTimeout(() => {
@@ -1911,14 +373,14 @@ export class MindMapApp {
       if (!nextNodeId) {
         return
       }
-      void this.runNodeGestureAction(this.state.preferences.interaction.doubleClickAction, nextNodeId, {
+      void commands.runNodeGestureAction(this, this.state.preferences.interaction.doubleClickAction, nextNodeId, {
         clientX,
         clientY,
       })
     }, NODE_GESTURE_MULTI_CLICK_DELAY_MS)
   }
 
-  private cancelPendingNodeGesture(): void {
+  cancelPendingNodeGesture(): void {
     if (this.pendingNodeGestureHandle !== null) {
       window.clearTimeout(this.pendingNodeGestureHandle)
       this.pendingNodeGestureHandle = null
@@ -1926,169 +388,21 @@ export class MindMapApp {
     this.pendingNodeGestureNodeId = null
   }
 
-  private startNodeDrag(nodeId: string, dragNodeIds: string[], event: PointerEvent): void {
-    const node = this.findNode(nodeId)
-    const canvas = this.refs?.canvas
-    if (!node || !canvas) {
-      return
-    }
-
-    const pointerPosition = this.clientToCanvasPosition(event.clientX, event.clientY)
-    this.state.drag = {
-      nodeId,
-      nodeIds: dragNodeIds,
-      offsetX: pointerPosition.x - node.position.x,
-      offsetY: pointerPosition.y - node.position.y,
-      initialPositions: Object.fromEntries(
-        dragNodeIds
-          .map((candidateId) => {
-            const candidateNode = this.findNode(candidateId)
-            if (!candidateNode) {
-              return null
-            }
-            return [candidateId, { ...candidateNode.position }] as const
-          })
-          .filter((entry): entry is readonly [string, Position] => entry !== null),
-      ),
-      historyCaptured: false,
-    }
-
-    // Add dragging visual feedback class to all dragged nodes
-    for (const dragId of dragNodeIds) {
-      const el = this.rootEl.querySelector<HTMLElement>(`[data-node-id="${dragId}"]`)
-      if (el) {
-        el.classList.add('node-dragging')
-      }
-    }
-  }
-
-  private updateDropTargetHighlights(): void {
-    if (!this.state.drag) {
-      return
-    }
-
-    const draggedNode = this.findNode(this.state.drag.nodeId)
-    if (!draggedNode) {
-      return
-    }
-
-    const draggedNodeIds = new Set(this.state.drag.nodeIds)
-    const DROP_TARGET_DISTANCE = 40
-
-    // Clear previous highlights
-    this.clearDropTargetHighlights()
-
-    // Check distance to all non-dragged nodes
-    for (const node of this.state.document.nodes) {
-      if (draggedNodeIds.has(node.id) || node.kind === 'root') {
-        continue
-      }
-
-      const dx = draggedNode.position.x - node.position.x
-      const dy = draggedNode.position.y - node.position.y
-      const distance = Math.sqrt(dx * dx + dy * dy)
-
-      if (distance <= DROP_TARGET_DISTANCE) {
-        const el = this.rootEl.querySelector<HTMLElement>(`[data-node-id="${node.id}"]`)
-        if (el) {
-          el.classList.add('drop-target-highlight')
-        }
-      }
-    }
-  }
-
-  private clearDropTargetHighlights(): void {
+  clearDropTargetHighlights(): void {
     const highlighted = this.rootEl.querySelectorAll<HTMLElement>('.drop-target-highlight')
     for (const el of highlighted) {
       el.classList.remove('drop-target-highlight')
     }
   }
 
-  private updateAlignmentGuides(): void {
-    // Remove existing guides first
-    this.clearAlignmentGuides()
-
-    if (!this.state.drag) {
-      return
-    }
-
-    const draggedNode = this.findNode(this.state.drag.nodeId)
-    if (!draggedNode) {
-      return
-    }
-
-    const scroll = this.refs?.scroll
-    if (!scroll) {
-      return
-    }
-
-    // Compute dragged node bounds (position is center-based in this app)
-    const draggedNodeIds = new Set(this.state.drag.nodeIds)
-    const childCount = childrenOf(this.state.document, draggedNode.id).length
-    const nodeWidth = draggedNode.width ?? estimateNodeWidth(draggedNode, childCount)
-    const nodeHeight = draggedNode.height ?? estimateNodeHeight(draggedNode, childCount, nodeWidth)
-
-    // Position in the app is center-based, so top-left = position - size/2
-    const draggedPos = {
-      x: draggedNode.position.x - nodeWidth / 2,
-      y: draggedNode.position.y - nodeHeight / 2,
-    }
-    const draggedSize = { width: nodeWidth, height: nodeHeight }
-
-    // Build other nodes bounds (excluding dragged nodes)
-    const otherNodes: NodeBounds[] = []
-    const visibleIds = visibleNodeIds(this.state.document)
-    for (const nodeId of visibleIds) {
-      if (draggedNodeIds.has(nodeId)) {
-        continue
-      }
-      const node = this.findNode(nodeId)
-      if (!node) {
-        continue
-      }
-      const nChildCount = childrenOf(this.state.document, node.id).length
-      const nWidth = node.width ?? estimateNodeWidth(node, nChildCount)
-      const nHeight = node.height ?? estimateNodeHeight(node, nChildCount, nWidth)
-      otherNodes.push({
-        id: node.id,
-        x: node.position.x - nWidth / 2,
-        y: node.position.y - nHeight / 2,
-        width: nWidth,
-        height: nHeight,
-      })
-    }
-
-    // Detect alignment
-    const guides = this.uxEngine.detectAlignment(draggedPos, draggedSize, otherNodes)
-
-    // Render guide DOM elements into the scroll container
-    for (const guide of guides) {
-      const el = document.createElement('div')
-      el.classList.add('alignment-guide')
-      if (guide.axis === 'x') {
-        el.classList.add('alignment-guide--x')
-        // Convert world X to screen position within the scroll container
-        const screenX = (guide.position + this.workspaceBounds.originX) * this.viewport.scale + this.viewport.x
-        el.style.left = `${screenX}px`
-      } else {
-        el.classList.add('alignment-guide--y')
-        // Convert world Y to screen position within the scroll container
-        const screenY = (guide.position + this.workspaceBounds.originY) * this.viewport.scale + this.viewport.y
-        el.style.top = `${screenY}px`
-      }
-      el.setAttribute('data-alignment-guide', '')
-      scroll.appendChild(el)
-    }
-  }
-
-  private clearAlignmentGuides(): void {
+  clearAlignmentGuides(): void {
     const guides = this.rootEl.querySelectorAll<HTMLElement>('[data-alignment-guide]')
     for (const el of guides) {
       el.remove()
     }
   }
 
-  private longPressActionForButton(button: number): GestureAction {
+  longPressActionForButton(button: number): GestureAction {
     switch (button) {
       case 0:
         return this.state.preferences.interaction.leftLongPressAction
@@ -2101,7 +415,7 @@ export class MindMapApp {
     }
   }
 
-  private canvasDragActionForButton(button: number): CanvasDragAction {
+  canvasDragActionForButton(button: number): CanvasDragAction {
     switch (button) {
       case 0:
         return this.state.preferences.interaction.canvasLeftDragAction
@@ -2114,29 +428,7 @@ export class MindMapApp {
     }
   }
 
-  private startCanvasDragAction(action: CanvasDragAction, event: PointerEvent): void {
-    if (event.button === 2) {
-      this.suppressContextMenuOnce = true
-    }
-
-    switch (action) {
-      case 'pan-canvas':
-        this.suppressClickOnce = true
-        this.startCanvasPan(event.pointerId, event.clientX, event.clientY)
-        return
-      case 'marquee-select':
-        this.startMarqueeSelection(event.pointerId, event.button, event.clientX, event.clientY)
-        return
-      case 'cutting':
-        this.startCuttingMode(event.pointerId, event.clientX, event.clientY)
-        return
-      case 'none':
-      default:
-        return
-    }
-  }
-
-  private startCuttingMode(pointerId: number, clientX: number, clientY: number): void {
+  startCuttingMode(pointerId: number, clientX: number, clientY: number): void {
     const canvasPoint = this.clientToCanvasPosition(clientX, clientY)
     this.state.cutting = {
       pointerId,
@@ -2149,164 +441,7 @@ export class MindMapApp {
     this.refs?.scroll?.classList.add('is-cutting')
   }
 
-  private updateCuttingLine(clientX: number, clientY: number): void {
-    const cutting = this.state.cutting
-    if (!cutting) {
-      return
-    }
-
-    // Convert client coordinates to canvas coordinates and update current point
-    const canvasPoint = this.clientToCanvasPosition(clientX, clientY)
-    cutting.currentPoint = canvasPoint
-
-    const startPoint = cutting.startPoint
-    const endPoint = cutting.currentPoint
-
-    // Convert cutting line to workspace coordinates for comparison with SVG paths
-    // SVG paths are rendered in workspace coords (canvas coords + originX/originY offset)
-    const wsStart = this.toWorkspacePosition(startPoint)
-    const wsEnd = this.toWorkspacePosition(endPoint)
-
-    // Clear warning sets for rebuild
-    cutting.warningNodeIds.clear()
-    cutting.warningHierarchyEdgeKeys.clear()
-    cutting.warningRelationIds.clear()
-
-    // Get visible node IDs (excludes collapsed hidden descendants)
-    const visibleIds = visibleNodeIds(this.state.document)
-    const root = findRoot(this.state.document)
-
-    // --- Node intersection detection ---
-    for (const node of this.state.document.nodes) {
-      // Skip non-visible nodes
-      if (!visibleIds.has(node.id)) {
-        continue
-      }
-      // Skip root node (not cuttable)
-      if (root && node.id === root.id) {
-        continue
-      }
-
-      const childCount = childrenOf(this.state.document, node.id).length
-      const metrics = this.resolveNodeRenderMetrics(node, childCount)
-      const rectCenter = metrics.position
-      const rectWidth = metrics.width
-      const rectHeight = metrics.height
-
-      if (segmentIntersectsAABB(startPoint, endPoint, rectCenter, rectWidth, rectHeight)) {
-        cutting.warningNodeIds.add(node.id)
-      }
-    }
-
-    // --- Hierarchy edge intersection detection ---
-    if (this.refs?.edgeLayer) {
-      const hierarchyPaths = this.refs.edgeLayer.querySelectorAll<SVGPathElement>('.edge-hierarchy')
-      for (const pathEl of hierarchyPaths) {
-        const sourceId = pathEl.getAttribute('data-source-id')
-        const targetId = pathEl.getAttribute('data-target-id')
-        if (!sourceId || !targetId) {
-          continue
-        }
-
-        const d = pathEl.getAttribute('d')
-        if (!d) {
-          continue
-        }
-
-        // Try parsing as cubic Bézier (M...C... format)
-        const bezier = parseCubicBezierFromPath(d)
-        if (bezier) {
-          const polyline = sampleCubicBezier(bezier.start, bezier.cp1, bezier.cp2, bezier.end, 16)
-          if (segmentIntersectsPolyline(wsStart, wsEnd, polyline)) {
-            cutting.warningHierarchyEdgeKeys.add(`${sourceId}::${targetId}`)
-          }
-        } else {
-          // Fallback: parse as polyline (M...L...L... orthogonal format)
-          const polyline = parsePolylineFromPath(d)
-          if (polyline.length >= 2 && segmentIntersectsPolyline(wsStart, wsEnd, polyline)) {
-            cutting.warningHierarchyEdgeKeys.add(`${sourceId}::${targetId}`)
-          }
-        }
-      }
-    }
-
-    // --- Relation edge intersection detection ---
-    // Compute intersection directly from document data (not DOM) to avoid parsing issues
-    const edgeStyle = this.state.preferences.appearance.edgeStyle
-    const drawEdgeStyle: EdgeStyle = edgeStyle === 'hidden' ? 'curve' : edgeStyle
-    const childCountById = new Map(
-      this.state.document.nodes.map((n) => [n.id, childrenOf(this.state.document, n.id).length]),
-    )
-
-    for (const relation of this.state.document.relations) {
-      const source = this.findNode(relation.sourceId)
-      const target = this.findNode(relation.targetId)
-      if (!source || !target || !visibleIds.has(source.id) || !visibleIds.has(target.id)) {
-        continue
-      }
-
-      const sourceMetrics = this.resolveNodeRenderMetrics(source, childCountById.get(source.id) ?? 0)
-      const targetMetrics = this.resolveNodeRenderMetrics(target, childCountById.get(target.id) ?? 0)
-      const edgePoints = resolveRelationEdgeEndpoints(sourceMetrics, targetMetrics)
-
-      // Build the path string and parse it for intersection testing
-      const pathD = buildRelationSegmentPath(
-        this.toWorkspacePosition(edgePoints.source),
-        this.toWorkspacePosition(edgePoints.target),
-        drawEdgeStyle,
-      )
-
-      const bezier = parseCubicBezierFromPath(pathD)
-      if (bezier) {
-        const polyline = sampleCubicBezier(bezier.start, bezier.cp1, bezier.cp2, bezier.end, 16)
-        if (segmentIntersectsPolyline(wsStart, wsEnd, polyline)) {
-          cutting.warningRelationIds.add(relation.id)
-          continue
-        }
-      } else {
-        const polyline = parsePolylineFromPath(pathD)
-        if (polyline.length >= 2 && segmentIntersectsPolyline(wsStart, wsEnd, polyline)) {
-          cutting.warningRelationIds.add(relation.id)
-          continue
-        }
-      }
-
-      // Also check branch paths if the relation has midpoint/branches
-      if (relation.midpointOffset || (relation.branches?.length ?? 0) > 0) {
-        const midpointDoc = this.resolveRelationMidpointForEdge(relation, sourceMetrics, targetMetrics, drawEdgeStyle)
-        const wsMid = this.toWorkspacePosition(midpointDoc)
-        const wsSource = this.toWorkspacePosition(edgePoints.source)
-        const wsTarget = this.toWorkspacePosition(edgePoints.target)
-
-        // Check source-to-mid segment
-        const pathSrcMid = buildRelationSegmentPath(wsSource, wsMid, drawEdgeStyle)
-        const bezSrcMid = parseCubicBezierFromPath(pathSrcMid)
-        if (bezSrcMid) {
-          const poly = sampleCubicBezier(bezSrcMid.start, bezSrcMid.cp1, bezSrcMid.cp2, bezSrcMid.end, 16)
-          if (segmentIntersectsPolyline(wsStart, wsEnd, poly)) {
-            cutting.warningRelationIds.add(relation.id)
-            continue
-          }
-        }
-
-        // Check mid-to-target segment
-        const pathMidTgt = buildRelationSegmentPath(wsMid, wsTarget, drawEdgeStyle)
-        const bezMidTgt = parseCubicBezierFromPath(pathMidTgt)
-        if (bezMidTgt) {
-          const poly = sampleCubicBezier(bezMidTgt.start, bezMidTgt.cp1, bezMidTgt.cp2, bezMidTgt.end, 16)
-          if (segmentIntersectsPolyline(wsStart, wsEnd, poly)) {
-            cutting.warningRelationIds.add(relation.id)
-            continue
-          }
-        }
-      }
-    }
-
-    // Trigger re-render to show cutting line and warning highlights
-    renderWorkspace(this)
-  }
-
-  private cancelCutting(): void {
+  cancelCutting(): void {
     if (!this.state.cutting) {
       return
     }
@@ -2315,224 +450,12 @@ export class MindMapApp {
     renderWorkspace(this)
   }
 
-  private executeCutting(): void {
-    const cutting = this.state.cutting
-    if (!cutting) {
-      return
-    }
-
-    // If warning lists are all empty, just cancel without pushing history
-    if (
-      cutting.warningNodeIds.size === 0 &&
-      cutting.warningHierarchyEdgeKeys.size === 0 &&
-      cutting.warningRelationIds.size === 0
-    ) {
-      this.cancelCutting()
-      return
-    }
-
-    // If cutting line has zero length (start === end), just cancel
-    if (cutting.startPoint.x === cutting.currentPoint.x && cutting.startPoint.y === cutting.currentPoint.y) {
-      this.cancelCutting()
-      return
-    }
-
-    // Capture history snapshot BEFORE making any changes
-    this.captureHistory()
-
-    // Capture originalParentIds snapshot before any mutations
-    const originalParentIds = new Map<string, string | undefined>()
-    for (const node of this.state.document.nodes) {
-      originalParentIds.set(node.id, node.parentId)
-    }
-
-    const root = findRoot(this.state.document)
-
-    // Phase 1: Delete all Relation Edges in the warning list
-    if (cutting.warningRelationIds.size > 0) {
-      this.state.document.relations = this.state.document.relations.filter(
-        (relation) => !cutting.warningRelationIds.has(relation.id),
-      )
-    }
-
-    // Phase 2: Sever all Hierarchy Edges in the warning list
-    // Format of warningHierarchyEdgeKeys: "parentId::childId"
-    for (const edgeKey of cutting.warningHierarchyEdgeKeys) {
-      const separatorIndex = edgeKey.indexOf('::')
-      if (separatorIndex === -1) continue
-      const childId = edgeKey.substring(separatorIndex + 2)
-      const childNode = this.state.document.nodes.find((n) => n.id === childId)
-      if (childNode) {
-        childNode.kind = 'floating'
-        childNode.parentId = undefined
-      }
-    }
-
-    // Phase 3: Delete all Nodes in the warning list (skip root)
-    // First, promote children of nodes being deleted using originalParentIds
-    const nodeIdsToDelete = new Set<string>()
-    for (const nodeId of cutting.warningNodeIds) {
-      // Skip root node
-      if (root && nodeId === root.id) continue
-      nodeIdsToDelete.add(nodeId)
-    }
-
-    // Promote children: reassign each child's parentId to the deleted node's original parentId
-    for (const nodeId of nodeIdsToDelete) {
-      const originalParentId = originalParentIds.get(nodeId)
-      for (const node of this.state.document.nodes) {
-        if (node.parentId === nodeId && !nodeIdsToDelete.has(node.id)) {
-          node.parentId = originalParentId
-          // If promoted to undefined (was a root-level child), make it floating
-          if (!originalParentId) {
-            node.kind = 'floating'
-          }
-        }
-      }
-    }
-
-    // Remove the nodes
-    if (nodeIdsToDelete.size > 0) {
-      this.state.document.nodes = this.state.document.nodes.filter((node) => !nodeIdsToDelete.has(node.id))
-      // Also clean up any relations that reference deleted nodes
-      this.state.document.relations = this.state.document.relations
-        .filter((relation) => !nodeIdsToDelete.has(relation.sourceId) && !nodeIdsToDelete.has(relation.targetId))
-        .map((relation) => ({
-          ...relation,
-          branches: (relation.branches ?? []).filter((branch) => !nodeIdsToDelete.has(branch.targetId)),
-        }))
-    }
-
-    // Mark document as modified
-    touchDocument(this.state.document)
-
-    // Clean up cutting state, restore cursor, and re-render
-    this.cancelCutting()
-    scheduleAutosave(this, 'status.saved')
-  }
-
-  private startMarqueeSelection(
-    pointerId: number,
-    button: number,
-    startClientX: number,
-    startClientY: number,
-    currentClientX = startClientX,
-    currentClientY = startClientY,
-  ): void {
-    this.state.contextMenu = null
-    this.state.marquee = {
-      pointerId,
-      button,
-      startClientX,
-      startClientY,
-      currentClientX,
-      currentClientY,
-      active: Math.hypot(currentClientX - startClientX, currentClientY - startClientY) > 8,
-    }
-    renderOverlay(this)
-  }
-
-  private armNodeLongPress(nodeId: string, dragNodeIds: string[], event: PointerEvent): void {
-    this.clearNodeLongPress()
-    this.longPressState = {
-      pointerId: event.pointerId,
-      nodeId,
-      button: event.button,
-      startClientX: event.clientX,
-      startClientY: event.clientY,
-      clientX: event.clientX,
-      clientY: event.clientY,
-      dragNodeIds,
-      activated: false,
-    }
-    this.longPressHandle = window.setTimeout(() => {
-      if (!this.longPressState || this.longPressState.nodeId !== nodeId) {
-        return
-      }
-      const action = this.longPressActionForButton(this.longPressState.button)
-      if (action === 'none') {
-        this.clearNodeLongPress()
-        return
-      }
-      this.longPressState.activated = true
-      this.clearDropTargetHighlights()
-      this.state.drag = null
-      this.suppressClickOnce = true
-      if (this.longPressState.button === 2) {
-        this.suppressContextMenuOnce = true
-      }
-      void this.runNodeGestureAction(action, nodeId, {
-        clientX: this.longPressState.clientX,
-        clientY: this.longPressState.clientY,
-        pointerId: this.longPressState.pointerId,
-      })
-    }, NODE_LONG_PRESS_DELAY_MS)
-  }
-
-  private clearNodeLongPress(): void {
+  clearNodeLongPress(): void {
     if (this.longPressHandle !== null) {
       window.clearTimeout(this.longPressHandle)
       this.longPressHandle = null
     }
     this.longPressState = null
-  }
-
-  private async runNodeGestureAction(
-    action: GestureAction,
-    nodeId: string,
-    origin?: { clientX?: number; clientY?: number; pointerId?: number },
-  ): Promise<void> {
-    const node = this.findNode(nodeId)
-    if (!node) {
-      return
-    }
-
-    this.setSelection([nodeId], nodeId)
-
-    switch (action) {
-      case 'rename':
-        this.openNodeEditor(nodeId, { selection: 'all' })
-        return
-      case 'edit-tail':
-        this.openNodeEditor(nodeId, { selection: 'end' })
-        return
-      case 'pan-canvas':
-        if (
-          typeof origin?.pointerId === 'number' &&
-          typeof origin.clientX === 'number' &&
-          typeof origin.clientY === 'number'
-        ) {
-          this.startCanvasPan(origin.pointerId, origin.clientX, origin.clientY)
-        }
-        return
-      case 'ai-quick':
-        await applyAIQuickAssist(this, nodeId)
-        return
-      case 'ai-suggest-children':
-        await applyAISuggestNodes(this, nodeId, 'children')
-        return
-      case 'ai-suggest-siblings':
-        await applyAISuggestNodes(this, nodeId, 'siblings')
-        return
-      case 'ai-wheel':
-        openAIWheel(this, nodeId, origin?.clientX, origin?.clientY)
-        return
-      case 'new-child':
-        this.createChildNode(nodeId)
-        return
-      case 'new-sibling':
-        this.createSiblingNode(nodeId)
-        return
-      case 'new-floating':
-        this.createFloatingNode(nodeId)
-        return
-      case 'toggle-collapse':
-        this.toggleNodeCollapse(nodeId)
-        return
-      case 'none':
-      default:
-        return
-    }
   }
 
   nodeClientCenter(nodeId: string): { x: number; y: number } {
@@ -2547,153 +470,11 @@ export class MindMapApp {
     }
   }
 
-  private readonly handleFocusOut = (event: FocusEvent): void => {
-    const target = event.target
-    if (!(target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement)) {
-      return
-    }
+  private readonly handleFocusOut = (event: FocusEvent): void => commands.handleFocusOut(this, event)
 
-    if ((target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) && target.dataset.nodeEditor) {
-      const nodeId = target.dataset.nodeEditor
-      queueMicrotask(() => {
-        const currentEditor = this.nodeEditor(nodeId)
-        if (this.state.editingNodeId === nodeId && currentEditor && currentEditor !== target) {
-          return
-        }
-        this.commitNodeEditor(nodeId, target.value)
-      })
-      return
-    }
+  private readonly handleInput = (event: Event): void => commands.handleInput(this, event)
 
-    if (target instanceof HTMLInputElement && target.dataset.relationLabel) {
-      this.commitRelationLabel(target.dataset.relationLabel, target.value)
-      return
-    }
-
-    if (target instanceof HTMLTextAreaElement && target.dataset.nodeNote) {
-      this.commitNodeNote(target.dataset.nodeNote, target.value)
-    }
-  }
-
-  private readonly handleInput = (event: Event): void => {
-    const target = event.target
-    if (
-      !(
-        target instanceof HTMLInputElement ||
-        target instanceof HTMLTextAreaElement ||
-        target instanceof HTMLSelectElement
-      )
-    ) {
-      return
-    }
-
-    if ((target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) && target.dataset.nodeEditor) {
-      target.classList.remove('is-all-selected')
-      if (target instanceof HTMLTextAreaElement) {
-        this.syncNodeEditorPreview(target)
-      }
-      return
-    }
-
-    if (target instanceof HTMLTextAreaElement && target.dataset.nodeNote) {
-      this.syncInspectorNoteInputHeight(target)
-      return
-    }
-
-    const aiField = target.dataset.aiField
-    if (aiField) {
-      switch (aiField) {
-        case 'topic':
-          this.state.ai.topic = target.value
-          break
-        case 'template':
-          this.state.ai.template = normalizeAITemplateId(target.value)
-          break
-        case 'generationInstructions':
-          this.state.ai.generationInstructions = target.value
-          break
-        case 'importInstructions':
-          this.state.ai.importInstructions = target.value
-          break
-        case 'noteInstructions':
-          this.state.ai.noteInstructions = target.value
-          break
-        case 'relationInstructions':
-          this.state.ai.relationInstructions = target.value
-          break
-        case 'generateRawRequest':
-          this.state.ai.generateRawRequest = target.value
-          break
-        case 'importRawRequest':
-          this.state.ai.importRawRequest = target.value
-          break
-        case 'noteRawRequest':
-          this.state.ai.noteRawRequest = target.value
-          break
-        case 'relationRawRequest':
-          this.state.ai.relationRawRequest = target.value
-          break
-        default:
-          break
-      }
-      return
-    }
-
-    if (target.dataset.graphSearch !== undefined) {
-      this.state.graph.search = target.value
-      const matchedNode = this.findGraphMatches(target.value)[0]
-      if (matchedNode) {
-        this.state.graph.selectedNodeId = matchedNode.id
-      }
-      updateGraphSummaryPanel(this)
-      drawGraphScene(this)
-      return
-    }
-
-    if (target instanceof HTMLInputElement && target.dataset.snapshotName !== undefined) {
-      this.state.snapshotDraftName = target.value
-    }
-  }
-
-  private readonly handleChange = (event: Event): void => {
-    const target = event.target
-    if (
-      !(
-        target instanceof HTMLInputElement ||
-        target instanceof HTMLSelectElement ||
-        target instanceof HTMLTextAreaElement
-      )
-    ) {
-      return
-    }
-
-    if (target instanceof HTMLInputElement && target.dataset.importInput) {
-      const file = target.files?.[0]
-      if (!file) {
-        return
-      }
-
-      void this.importFile(file, this.pendingImportMode)
-      this.pendingImportMode = 'auto'
-      target.value = ''
-      return
-    }
-
-    const field = target.dataset.settingField
-    if (field) {
-      this.commitSettingField(field, target.value)
-      return
-    }
-
-    if (target instanceof HTMLTextAreaElement && target.dataset.nodeNote) {
-      this.commitNodeNote(target.dataset.nodeNote, target.value)
-      return
-    }
-
-    if (target.dataset.aiField === 'template') {
-      this.state.ai.template = normalizeAITemplateId(target.value)
-    }
-  }
+  private readonly handleChange = (event: Event): void => commands.handleChange(this, event)
 
   render(): void {
     this.flushLiveNodeUpdate()
@@ -2719,8 +500,8 @@ export class MindMapApp {
     renderCanvasGuide(this)
     this.initializeViewportIfNeeded()
     this.syncFloatingLayout()
-    this.syncInspectorDrag()
-    this.focusEditorIfNeeded()
+    pointer.syncInspectorDrag(this)
+    editor.focusEditorIfNeeded(this)
     this.updateContextToolbar()
   }
 
@@ -2853,7 +634,7 @@ export class MindMapApp {
     this.initMinimap()
   }
 
-  private toggleFixedMenu(menuId: FixedMenuId): void {
+  toggleFixedMenu(menuId: FixedMenuId): void {
     if (this.state.preferences.appearance.chromeLayout !== 'fixed') {
       return
     }
@@ -2895,177 +676,14 @@ export class MindMapApp {
     }
   }
 
-  private syncInspectorDrag(): void {
-    if (!this.refs) {
-      return
-    }
+  private readonly handleInspectorPointerDown = (event: PointerEvent): void =>
+    pointer.handleInspectorPointerDown(this, event)
 
-    const inspector = this.refs.inspector
+  private readonly handleInspectorPointerMove = (event: PointerEvent): void =>
+    pointer.handleInspectorPointerMove(this, event)
 
-    // On mobile, clear any drag state styles
-    if (window.innerWidth <= 980) {
-      inspector.classList.remove('is-dragged')
-      inspector.style.left = ''
-      inspector.style.right = ''
-      inspector.style.bottom = ''
-      inspector.style.width = ''
-      return
-    }
-
-    // Ensure resize handle exists
-    if (!inspector.querySelector('.inspector-resize-handle')) {
-      const handle = document.createElement('div')
-      handle.className = 'inspector-resize-handle'
-      handle.dataset.inspectorResize = '1'
-      inspector.insertBefore(handle, inspector.firstChild)
-    }
-
-    // Apply dragged state
-    if (this.inspectorDrag.dragged) {
-      inspector.classList.add('is-dragged')
-      inspector.style.left = `${this.inspectorDrag.x}px`
-      inspector.style.top = `${this.inspectorDrag.y}px`
-      inspector.style.right = 'auto'
-      inspector.style.bottom = 'auto'
-      inspector.style.width = `${this.inspectorDrag.width}px`
-    } else {
-      inspector.classList.remove('is-dragged')
-      inspector.style.left = ''
-      inspector.style.right = ''
-      inspector.style.bottom = ''
-      inspector.style.width = ''
-    }
-  }
-
-  private handleInspectorPointerDown = (event: PointerEvent): void => {
-    if (!this.refs || window.innerWidth <= 980) {
-      return
-    }
-
-    const target = event.target
-    if (!(target instanceof HTMLElement)) {
-      return
-    }
-
-    const inspector = this.refs.inspector
-
-    // Resize handle
-    if (target.closest('[data-inspector-resize]')) {
-      event.preventDefault()
-      event.stopPropagation()
-      const rect = inspector.getBoundingClientRect()
-      const stageRect = inspector.parentElement?.getBoundingClientRect()
-      const currentWidth = rect.width
-      const rightEdge = stageRect ? rect.right - stageRect.left : rect.right
-      this.inspectorResizeActive = {
-        pointerId: event.pointerId,
-        startX: event.clientX,
-        startWidth: this.inspectorDrag.dragged ? this.inspectorDrag.width : currentWidth,
-        rightEdge,
-      }
-      inspector.setPointerCapture(event.pointerId)
-      return
-    }
-
-    // Drag via header or collapsed handle card
-    const header = target.closest('.inspector-header') || target.closest('.inspector-handle-card')
-    if (header && event.button === 0) {
-      // Don't drag if clicking a button inside the header
-      if (target.closest('button')) {
-        return
-      }
-      event.preventDefault()
-      event.stopPropagation()
-
-      const rect = inspector.getBoundingClientRect()
-      const stageRect = inspector.parentElement?.getBoundingClientRect()
-      if (!stageRect) {
-        return
-      }
-
-      const currentLeft = rect.left - stageRect.left
-      const currentTop = rect.top - stageRect.top
-
-      this.inspectorDragActive = {
-        pointerId: event.pointerId,
-        startX: event.clientX,
-        startY: event.clientY,
-        startLeft: this.inspectorDrag.dragged ? this.inspectorDrag.x : currentLeft,
-        startTop: this.inspectorDrag.dragged ? this.inspectorDrag.y : currentTop,
-      }
-      inspector.setPointerCapture(event.pointerId)
-    }
-  }
-
-  private handleInspectorPointerMove = (event: PointerEvent): void => {
-    if (!this.refs) {
-      return
-    }
-
-    const inspector = this.refs.inspector
-
-    // Handle drag
-    if (this.inspectorDragActive && event.pointerId === this.inspectorDragActive.pointerId) {
-      const dx = event.clientX - this.inspectorDragActive.startX
-      const dy = event.clientY - this.inspectorDragActive.startY
-      this.inspectorDrag.x = this.inspectorDragActive.startLeft + dx
-      this.inspectorDrag.y = this.inspectorDragActive.startTop + dy
-      this.inspectorDrag.dragged = true
-
-      if (!this.inspectorDrag.width || this.inspectorDrag.width < 240) {
-        this.inspectorDrag.width = inspector.getBoundingClientRect().width
-      }
-
-      inspector.classList.add('is-dragged')
-      inspector.style.left = `${this.inspectorDrag.x}px`
-      inspector.style.top = `${this.inspectorDrag.y}px`
-      inspector.style.right = 'auto'
-      inspector.style.bottom = 'auto'
-      inspector.style.width = `${this.inspectorDrag.width}px`
-      return
-    }
-
-    // Handle resize
-    if (this.inspectorResizeActive && event.pointerId === this.inspectorResizeActive.pointerId) {
-      const dx = event.clientX - this.inspectorResizeActive.startX
-      const newWidth = clamp(this.inspectorResizeActive.startWidth - dx, 240, 600)
-
-      if (!this.inspectorDrag.dragged) {
-        // Switch to dragged mode to allow explicit width
-        const stageRect = inspector.parentElement?.getBoundingClientRect()
-        if (stageRect) {
-          const rect = inspector.getBoundingClientRect()
-          this.inspectorDrag.y = rect.top - stageRect.top
-          this.inspectorDrag.dragged = true
-        }
-      }
-
-      // Right edge stays fixed, left edge moves
-      this.inspectorDrag.width = newWidth
-      this.inspectorDrag.x = this.inspectorResizeActive.rightEdge - newWidth
-
-      this.syncInspectorDrag()
-      return
-    }
-  }
-
-  private handleInspectorPointerUp = (event: PointerEvent): void => {
-    if (!this.refs) {
-      return
-    }
-
-    if (this.inspectorDragActive && event.pointerId === this.inspectorDragActive.pointerId) {
-      this.refs.inspector.releasePointerCapture(event.pointerId)
-      this.inspectorDragActive = null
-      return
-    }
-
-    if (this.inspectorResizeActive && event.pointerId === this.inspectorResizeActive.pointerId) {
-      this.refs.inspector.releasePointerCapture(event.pointerId)
-      this.inspectorResizeActive = null
-      return
-    }
-  }
+  private readonly handleInspectorPointerUp = (event: PointerEvent): void =>
+    pointer.handleInspectorPointerUp(this, event)
 
   syncContextMenuPosition(): void {
     if (!this.refs || !this.state.contextMenu) {
@@ -3123,141 +741,6 @@ export class MindMapApp {
   }
 
   /** Renders snapshot section content without the wrapping <section> card (for collapsible Inspector sections) */
-  private nodeEditor(nodeId = this.state.editingNodeId): HTMLTextAreaElement | null {
-    if (!nodeId) {
-      return null
-    }
-
-    return this.rootEl.querySelector<HTMLTextAreaElement>(`[data-node-editor="${nodeId}"]`)
-  }
-
-  captureActiveNodeEditorDraft(): {
-    nodeId: string
-    value: string
-    selectionStart: number
-    selectionEnd: number
-    anchorLeft: number | null
-    preview: ActiveEditorPreviewState | null
-  } | null {
-    const nodeId = this.state.editingNodeId
-    const editor = this.nodeEditor(nodeId)
-    if (!nodeId || !editor) {
-      return null
-    }
-
-    return {
-      nodeId,
-      value: editor.value,
-      selectionStart: editor.selectionStart ?? editor.value.length,
-      selectionEnd: editor.selectionEnd ?? editor.value.length,
-      anchorLeft: this.activeEditorAnchorLeft,
-      preview: this.activeEditorPreview,
-    }
-  }
-
-  restoreActiveNodeEditorDraft(
-    draft: {
-      nodeId: string
-      value: string
-      selectionStart: number
-      selectionEnd: number
-      anchorLeft: number | null
-      preview: ActiveEditorPreviewState | null
-    } | null,
-  ): void {
-    if (!draft || !this.findNode(draft.nodeId)) {
-      return
-    }
-
-    this.state.editingNodeId = draft.nodeId
-    this.activeEditorAnchorLeft = draft.anchorLeft
-    this.activeEditorPreview = draft.preview
-    this.pendingEditorOptions = {
-      value: draft.value,
-      selectionStart: draft.selectionStart,
-      selectionEnd: draft.selectionEnd,
-    }
-  }
-
-  private syncNodeEditorPreview(editor: HTMLTextAreaElement): void {
-    const node = this.findNode(editor.dataset.nodeEditor ?? '')
-    if (!node) {
-      return
-    }
-
-    const computed = window.getComputedStyle(editor)
-    const minWidth = Math.max(MIN_NODE_WIDTH, parsePixelValue(computed.minWidth))
-    const maxWidth = Math.max(minWidth, parsePixelValue(computed.maxWidth) || AUTO_NODE_EDITOR_MAX_WIDTH)
-    const minHeight = Math.max(MIN_NODE_HEIGHT, parsePixelValue(computed.minHeight))
-    let previewWidth: number
-    const previewAnchorLeft: number | null = this.activeEditorAnchorLeft
-
-    if (node.width) {
-      // Fixed-width node: use the user-set width
-      previewWidth = Math.max(node.width, MIN_NODE_WIDTH)
-      editor.style.width = `${previewWidth}px`
-      editor.style.maxWidth = 'none'
-    } else {
-      // Auto-width node: width can only grow (never shrink) during editing.
-      // This prevents left-right jumping while still allowing expansion for long text.
-      const horizontalPadding = parsePixelValue(computed.paddingLeft) + parsePixelValue(computed.paddingRight) + 2
-      const longestLineWidth = editor.value
-        .split(/\r?\n/)
-        .reduce(
-          (maxWidthSoFar, line) => Math.max(maxWidthSoFar, this.measureNodeEditorLineWidth(line || ' ', computed.font)),
-          0,
-        )
-      const contentWidth = clamp(Math.ceil(longestLineWidth + horizontalPadding), minWidth, maxWidth)
-
-      if (this.activeEditorLockedWidth !== null) {
-        // Only allow width to grow, never shrink
-        previewWidth = Math.max(this.activeEditorLockedWidth, contentWidth)
-      } else {
-        previewWidth = contentWidth
-      }
-      this.activeEditorLockedWidth = previewWidth
-
-      editor.style.width = `${previewWidth}px`
-      editor.style.maxWidth = `${maxWidth}px`
-    }
-
-    editor.style.height = 'auto'
-    let previewHeight: number
-    if (node.height) {
-      previewHeight = Math.max(node.height, minHeight)
-      editor.style.height = `${previewHeight}px`
-    } else {
-      previewHeight = Math.max(editor.scrollHeight, minHeight)
-      editor.style.height = `${previewHeight}px`
-    }
-
-    if (!node.width && previewAnchorLeft !== null) {
-      this.activeEditorPreview = {
-        nodeId: node.id,
-        anchorLeft: previewAnchorLeft,
-        width: previewWidth,
-        height: previewHeight,
-      }
-      const article = this.rootEl.querySelector<HTMLElement>(`[data-node-id="${node.id}"]`)
-      if (article) {
-        article.classList.add('is-editing-auto-width')
-        article.style.left = `${previewAnchorLeft + this.workspaceBounds.originX}px`
-        article.style.top = `${node.position.y + this.workspaceBounds.originY}px`
-      }
-      if (this.refs?.edgeLayer) {
-        this.refs.edgeLayer.innerHTML = renderEdges(this)
-      }
-      return
-    }
-
-    if (this.activeEditorPreview?.nodeId === node.id) {
-      this.activeEditorPreview = null
-      if (this.refs?.edgeLayer) {
-        this.refs.edgeLayer.innerHTML = renderEdges(this)
-      }
-    }
-  }
-
   private syncInspectorNoteInputs(): void {
     if (!this.refs) {
       return
@@ -3268,7 +751,7 @@ export class MindMapApp {
     }
   }
 
-  private syncInspectorNoteInputHeight(input: HTMLTextAreaElement): void {
+  syncInspectorNoteInputHeight(input: HTMLTextAreaElement): void {
     const computed = window.getComputedStyle(input)
     const minHeight = Math.max(124, parsePixelValue(computed.minHeight))
     const maxHeight = Math.max(minHeight, parsePixelValue(computed.maxHeight) || 320)
@@ -3277,130 +760,6 @@ export class MindMapApp {
     const nextHeight = clamp(input.scrollHeight, minHeight, maxHeight)
     input.style.height = `${nextHeight}px`
     input.style.overflowY = input.scrollHeight > maxHeight ? 'auto' : 'hidden'
-  }
-
-  private measureNodeEditorLineWidth(text: string, font: string): number {
-    if (!this.nodeEditorMeasureCanvas) {
-      this.nodeEditorMeasureCanvas = document.createElement('canvas')
-    }
-
-    const context = this.nodeEditorMeasureCanvas.getContext('2d')
-    if (!context) {
-      return Math.max(text.length, 1) * 8.6
-    }
-
-    context.font = font || '16px sans-serif'
-    return context.measureText(text || ' ').width
-  }
-
-  private finishActiveNodeEditing(renderAfter = false): void {
-    const nodeId = this.state.editingNodeId
-    if (!nodeId) {
-      return
-    }
-
-    const editor = this.nodeEditor(nodeId)
-    const fallbackTitle = this.findNode(nodeId)?.title ?? ''
-    this.commitNodeEditor(nodeId, editor?.value ?? fallbackTitle, {
-      allowInactive: true,
-      preserveSelection: true,
-      renderAfter,
-    })
-  }
-
-  private focusEditorIfNeeded(): void {
-    if (!this.state.editingNodeId || this.overlayBlocksCanvas()) {
-      return
-    }
-
-    const editor = this.nodeEditor(this.state.editingNodeId)
-    if (!editor) {
-      return
-    }
-
-    const pendingOptions = this.pendingEditorOptions
-    this.pendingEditorOptions = null
-    queueMicrotask(() => {
-      if (pendingOptions?.value !== undefined && pendingOptions.value !== null) {
-        editor.value = pendingOptions.value
-      }
-      this.syncNodeEditorPreview(editor)
-      this.restoreEditorSelection(editor, pendingOptions)
-      window.setTimeout(() => {
-        this.syncNodeEditorPreview(editor)
-        this.restoreEditorSelection(editor, pendingOptions)
-      }, 0)
-    })
-  }
-
-  private restoreEditorSelection(
-    editor: HTMLInputElement | HTMLTextAreaElement,
-    options: EditorLaunchOptions | null | undefined,
-    attempt = 0,
-  ): void {
-    if (!editor.isConnected || this.state.editingNodeId !== editor.dataset.nodeEditor) {
-      return
-    }
-
-    try {
-      editor.focus({ preventScroll: true })
-    } catch {
-      editor.focus()
-    }
-
-    if (typeof options?.selectionStart === 'number') {
-      const start = clamp(Math.round(options.selectionStart), 0, editor.value.length)
-      const end = clamp(Math.round(options.selectionEnd ?? options.selectionStart), start, editor.value.length)
-      editor.classList.toggle('is-all-selected', start === 0 && end === editor.value.length)
-      editor.setSelectionRange(start, end)
-    } else {
-      const selectionMode = options?.selection ?? 'all'
-      editor.classList.toggle('is-all-selected', selectionMode === 'all')
-      if (selectionMode === 'end') {
-        const cursor = editor.value.length
-        editor.setSelectionRange(cursor, cursor)
-      } else {
-        editor.select()
-        editor.setSelectionRange(0, editor.value.length)
-      }
-    }
-
-    if (this.editorSelectionSettled(editor, options) || attempt >= 4) {
-      return
-    }
-
-    window.requestAnimationFrame(() => {
-      this.restoreEditorSelection(editor, options, attempt + 1)
-    })
-  }
-
-  private editorSelectionSettled(
-    editor: HTMLInputElement | HTMLTextAreaElement,
-    options: EditorLaunchOptions | null | undefined,
-  ): boolean {
-    if (document.activeElement !== editor) {
-      return false
-    }
-
-    const selectionStart = editor.selectionStart ?? -1
-    const selectionEnd = editor.selectionEnd ?? -1
-    if (typeof options?.selectionStart === 'number') {
-      const expectedStart = clamp(Math.round(options.selectionStart), 0, editor.value.length)
-      const expectedEnd = clamp(
-        Math.round(options.selectionEnd ?? options.selectionStart),
-        expectedStart,
-        editor.value.length,
-      )
-      return selectionStart === expectedStart && selectionEnd === expectedEnd
-    }
-
-    const selectionMode = options?.selection ?? 'all'
-    if (selectionMode === 'end') {
-      const cursor = editor.value.length
-      return selectionStart === cursor && selectionEnd === cursor
-    }
-
-    return selectionStart === 0 && selectionEnd === editor.value.length
   }
 
   selectedNode(): MindNode | undefined {
@@ -3425,37 +784,22 @@ export class MindMapApp {
     return orderedIds
   }
 
-  private applySelectionState(
-    nodeIds: string[],
-    primaryNodeId: string | null = nodeIds[nodeIds.length - 1] ?? null,
-  ): void {
-    const normalizedIds = nodeIds.filter((nodeId, index) => {
-      return nodeIds.indexOf(nodeId) === index && Boolean(this.findNode(nodeId))
-    })
-    const nextIds = normalizedIds
-    const nextPrimary =
-      primaryNodeId && nextIds.includes(primaryNodeId) ? primaryNodeId : (nextIds[nextIds.length - 1] ?? null)
-
-    this.state.selectedNodeIds = nextIds
-    this.state.selectedNodeId = nextPrimary
-  }
-
   setSelection(nodeIds: string[], primaryNodeId: string | null = nodeIds[nodeIds.length - 1] ?? null): void {
-    this.finishActiveNodeEditing()
-    this.applySelectionState(nodeIds, primaryNodeId)
+    editor.finishActiveNodeEditing(this)
+    ops.applySelectionState(this, nodeIds, primaryNodeId)
     this.state.selectedRegionId = null
-    this.clearNodeEditorState()
+    editor.clearNodeEditorState(this)
   }
 
-  private selectRegion(regionId: string): void {
-    this.finishActiveNodeEditing()
-    this.applySelectionState([], null)
+  selectRegion(regionId: string): void {
+    editor.finishActiveNodeEditing(this)
+    ops.applySelectionState(this, [], null)
     this.state.selectedRelationId = null
     this.state.selectedRegionId = regionId
-    this.clearNodeEditorState()
+    editor.clearNodeEditorState(this)
   }
 
-  private clearSelection(): void {
+  clearSelection(): void {
     const hadRelation = this.state.selectedRelationId !== null
     const hadRegion = this.state.selectedRegionId !== null
     this.state.selectedRelationId = null
@@ -3468,303 +812,9 @@ export class MindMapApp {
     this.render()
   }
 
-  private moveSelectionByArrow(key: 'ArrowUp' | 'ArrowDown' | 'ArrowLeft' | 'ArrowRight' | string): void {
-    const currentNode = this.selectedNode()
-    if (!currentNode) {
-      return
-    }
-
-    const nextNode = this.findDirectionalNode(currentNode, key)
-    if (!nextNode || nextNode.id === currentNode.id) {
-      return
-    }
-
-    this.setSelection([nextNode.id], nextNode.id)
-    this.render()
-  }
-
-  private extendSelectionByArrow(key: 'ArrowUp' | 'ArrowDown' | 'ArrowLeft' | 'ArrowRight' | string): void {
-    const currentNode = this.selectedNode()
-    if (!currentNode) {
-      return
-    }
-
-    const nextNode = this.findDirectionalNode(currentNode, key)
-    if (!nextNode || nextNode.id === currentNode.id) {
-      return
-    }
-
-    const nextIds = [...this.selectedNodeIds()]
-    if (!nextIds.includes(nextNode.id)) {
-      nextIds.push(nextNode.id)
-    }
-    this.setSelection(nextIds, nextNode.id)
-    this.render()
-  }
-
-  private findDirectionalNode(currentNode: MindNode, direction: string): MindNode | null {
-    const visibleIds = visibleNodeIds(this.state.document)
-    const currentCenter = nodeCenter(currentNode)
-    let bestNode: MindNode | null = null
-    let bestScore = Number.POSITIVE_INFINITY
-
-    for (const candidate of this.state.document.nodes) {
-      if (candidate.id === currentNode.id || !visibleIds.has(candidate.id)) {
-        continue
-      }
-
-      const candidateCenter = nodeCenter(candidate)
-      const deltaX = candidateCenter.x - currentCenter.x
-      const deltaY = candidateCenter.y - currentCenter.y
-      const primaryDelta = directionalPrimaryDelta(direction, deltaX, deltaY)
-      if (primaryDelta <= 0) {
-        continue
-      }
-
-      const crossDelta = directionalCrossDelta(direction, deltaX, deltaY)
-      const score = primaryDelta + Math.abs(crossDelta) * 0.45 + Math.hypot(deltaX, deltaY) * 0.12
-      if (score < bestScore) {
-        bestScore = score
-        bestNode = candidate
-      }
-    }
-
-    return bestNode
-  }
-
-  private copySelectedSubtree(): void {
-    // Support multi-selection: collect all selected nodes' subtrees
-    const selectedIds = this.selectedNodeIds()
-    if (selectedIds.length === 0) {
-      const selectedNode = this.selectedNode()
-      if (selectedNode) {
-        selectedIds.push(selectedNode.id)
-      }
-    }
-    if (selectedIds.length === 0) {
-      return
-    }
-
-    // Use the primary selected node as the anchor for offset calculation
-    const primaryNode = this.findNode(selectedIds[0])
-    if (!primaryNode) {
-      return
-    }
-
-    // Collect all nodes from all selected subtrees, deduplicating
-    const allSubtreeIds = new Set<string>()
-    for (const nodeId of selectedIds) {
-      allSubtreeIds.add(nodeId)
-      for (const descId of descendantIds(this.state.document, nodeId)) {
-        allSubtreeIds.add(descId)
-      }
-    }
-
-    const nodes = [...allSubtreeIds]
-      .map((nodeId) => this.findNode(nodeId))
-      .filter((node): node is MindNode => Boolean(node))
-      .map((node) => {
-        return {
-          id: node.id,
-          parentId: node.parentId,
-          kind: node.kind,
-          title: node.title,
-          note: normalizeNodeNote(node.note),
-          priority: node.priority,
-          color: normalizeNodeColor(node.color) || undefined,
-          collapsed: node.collapsed,
-          width: node.width,
-          height: node.height,
-          offset: {
-            x: node.position.x - primaryNode.position.x,
-            y: node.position.y - primaryNode.position.y,
-          },
-        }
-      })
-
-    if (nodes.length === 0) {
-      return
-    }
-
-    this.copiedSubtree = {
-      rootId: primaryNode.id,
-      nodes,
-    }
-    this.setStatus('status.subtreeCopied', { count: nodes.length })
-    renderHeader(this)
-  }
-
-  private cutSelectedSubtree(): void {
-    // Support multi-selection: cut all selected nodes
-    const selectedIds = this.selectedNodeIds()
-    if (selectedIds.length === 0) {
-      const selectedNode = this.selectedNode()
-      if (selectedNode && selectedNode.kind !== 'root') {
-        selectedIds.push(selectedNode.id)
-      }
-    }
-
-    // Filter out root node — cannot cut root
-    const cuttableIds = selectedIds.filter((id) => {
-      const node = this.findNode(id)
-      return node && node.kind !== 'root'
-    })
-
-    if (cuttableIds.length === 0) {
-      return
-    }
-
-    // Copy first (uses selectedNodeIds internally)
-    this.copySelectedSubtree()
-
-    // Then delete all selected subtrees
-    this.captureHistory()
-    const allSubtreeIds = new Set<string>()
-    for (const nodeId of cuttableIds) {
-      allSubtreeIds.add(nodeId)
-      for (const descId of descendantIds(this.state.document, nodeId)) {
-        allSubtreeIds.add(descId)
-      }
-    }
-
-    // Remove relations referencing deleted nodes
-    this.state.document.relations = this.state.document.relations
-      .filter((r) => !allSubtreeIds.has(r.sourceId) && !allSubtreeIds.has(r.targetId))
-      .map((r) => ({
-        ...r,
-        branches: (r.branches ?? []).filter((b) => !allSubtreeIds.has(b.targetId)),
-      }))
-
-    // Remove nodes
-    this.state.document.nodes = this.state.document.nodes.filter((n) => !allSubtreeIds.has(n.id))
-
-    touchDocument(this.state.document)
-    this.selectNode(findRoot(this.state.document)?.id ?? 'root')
-    this.setStatus('status.subtreeCut', { count: allSubtreeIds.size })
-    scheduleAutosave(this, 'status.saved')
-  }
-
-  private pasteCopiedSubtree(): void {
-    if (!this.copiedSubtree) {
-      this.setStatus('status.clipboardEmpty')
-      this.render()
-      return
-    }
-
-    const targetNode = this.selectedNode()
-    if (!targetNode) {
-      return
-    }
-
-    const rootSnapshot = this.copiedSubtree.nodes.find((node) => node.id === this.copiedSubtree?.rootId)
-    if (!rootSnapshot) {
-      this.setStatus('status.clipboardEmpty')
-      this.render()
-      return
-    }
-
-    const now = new Date().toISOString()
-    const idMap = new Map<string, string>()
-    const parent = this.findNode(targetNode.id)
-    if (!parent) {
-      return
-    }
-
-    this.captureHistory()
-    parent.collapsed = false
-    parent.updatedAt = now
-
-    const anchor = nextChildPosition(
-      this.state.document,
-      targetNode.id,
-      this.state.preferences.appearance.layoutMode,
-      this.state.preferences.appearance.childGapX,
-    )
-    const insertedNodes: MindNode[] = []
-
-    for (const snapshot of this.copiedSubtree.nodes) {
-      const nextId = createId('node')
-      idMap.set(snapshot.id, nextId)
-      const isClipboardRoot = snapshot.id === this.copiedSubtree.rootId
-      // For multi-select paste: if a node's parent wasn't copied (not in idMap),
-      // treat it as a top-level node and attach to the paste target.
-      const parentId = isClipboardRoot
-        ? targetNode.id
-        : snapshot.parentId
-          ? (idMap.get(snapshot.parentId) ?? targetNode.id)
-          : targetNode.id
-      const isTopLevel = isClipboardRoot || parentId === targetNode.id
-      const nodeKind: MindNode['kind'] = isTopLevel ? 'topic' : snapshot.kind === 'root' ? 'topic' : snapshot.kind
-      const position = {
-        x: anchor.x + snapshot.offset.x,
-        y: anchor.y + snapshot.offset.y,
-      }
-      insertedNodes.push({
-        id: nextId,
-        parentId,
-        kind: nodeKind,
-        title: snapshot.title,
-        note: snapshot.note,
-        priority: snapshot.priority,
-        color: snapshot.color,
-        collapsed: snapshot.collapsed,
-        width: snapshot.width,
-        height: snapshot.height,
-        position,
-        createdAt: now,
-        updatedAt: now,
-      })
-    }
-
-    this.state.document.nodes.push(...insertedNodes)
-    const pastedRootId = idMap.get(this.copiedSubtree.rootId) ?? insertedNodes[0]?.id
-    if (!pastedRootId) {
-      return
-    }
-
-    this.setSelection([pastedRootId], pastedRootId)
-    touchDocument(this.state.document)
-    this.setStatus('status.subtreePasted', { count: insertedNodes.length })
-    this.render()
-    scheduleAutosave(this, 'status.layoutSaveScheduled')
-    this.showToast(`已粘贴 ${insertedNodes.length} 个节点`)
-  }
-
-  private toggleNodeSelection(nodeId: string): void {
+  selectNode(nodeId: string): void {
     if (this.state.connectSourceNodeId && this.state.connectSourceNodeId !== nodeId) {
-      this.createRelation(this.state.connectSourceNodeId, nodeId)
-      return
-    }
-
-    const currentIds = this.selectedNodeIds()
-    if (currentIds.includes(nodeId)) {
-      if (currentIds.length === 1) {
-        this.setSelection([nodeId], nodeId)
-      } else {
-        const nextIds = currentIds.filter((candidateId) => candidateId !== nodeId)
-        this.setSelection(nextIds, nextIds[nextIds.length - 1])
-      }
-    } else {
-      this.setSelection([...currentIds, nodeId], nodeId)
-    }
-
-    this.render()
-  }
-
-  private selectNodeSubtree(nodeId: string): void {
-    if (this.state.connectSourceNodeId && this.state.connectSourceNodeId !== nodeId) {
-      this.createRelation(this.state.connectSourceNodeId, nodeId)
-      return
-    }
-
-    const subtreeIds = [nodeId, ...descendantIds(this.state.document, nodeId)]
-    this.setSelection(subtreeIds, nodeId)
-    this.render()
-  }
-
-  private selectNode(nodeId: string): void {
-    if (this.state.connectSourceNodeId && this.state.connectSourceNodeId !== nodeId) {
-      this.createRelation(this.state.connectSourceNodeId, nodeId)
+      ops.createRelation(this, this.state.connectSourceNodeId, nodeId)
       return
     }
 
@@ -3778,277 +828,7 @@ export class MindMapApp {
     this.render()
   }
 
-  private createChildNode(parentId: string): void {
-    const parent = this.findNode(parentId)
-    if (!parent) {
-      return
-    }
-
-    this.captureHistory()
-    parent.collapsed = false
-    parent.updatedAt = new Date().toISOString()
-    const newNode = createNode({
-      parentId,
-      kind: 'topic',
-      position: nextChildPosition(
-        this.state.document,
-        parentId,
-        this.state.preferences.appearance.layoutMode,
-        this.state.preferences.appearance.childGapX,
-      ),
-      title: this.t('node.newChild'),
-      color: normalizeNodeColor(parent.color) || undefined,
-    })
-
-    this.state.document.nodes.push(newNode)
-    this.relayoutHierarchyAfterInsert(newNode)
-    this.setSelection([newNode.id], newNode.id)
-    this.state.editingNodeId = newNode.id
-    this.editingOriginalTitle = newNode.title
-    // Set anchor left so the editor uses left-anchored positioning (no left-right expansion)
-    const initWidth = estimateNodeWidth(newNode, 0)
-    this.activeEditorAnchorLeft = newNode.position.x - initWidth / 2
-    this.activeEditorLockedWidth = initWidth
-    this.activeEditorPreview = {
-      nodeId: newNode.id,
-      anchorLeft: this.activeEditorAnchorLeft,
-      width: initWidth,
-      height: estimateNodeHeight(newNode, 0, initWidth),
-    }
-    touchDocument(this.state.document)
-    this.render()
-    this.applyNodeCreateAnimation(newNode.id)
-    this.dismissCanvasGuide()
-    scheduleAutosave(this, 'status.childSaveScheduled')
-  }
-
-  private createSiblingNode(nodeId: string): void {
-    const node = this.findNode(nodeId)
-    if (!node) {
-      return
-    }
-
-    this.captureHistory()
-    let newNode: MindNode
-    if (node.kind === 'root') {
-      newNode = createNode({
-        kind: 'floating',
-        position: nextFloatingPosition(this.state.document),
-        title: this.t('node.newFloating'),
-        color: normalizeNodeColor(node.color) || undefined,
-      })
-    } else if (node.parentId) {
-      newNode = createNode({
-        parentId: node.parentId,
-        kind: 'topic',
-        position: nextSiblingPosition(
-          this.state.document,
-          node,
-          this.state.preferences.appearance.layoutMode,
-          this.state.preferences.appearance.childGapX,
-        ),
-        title: this.t('node.newSibling'),
-        color: normalizeNodeColor(node.color) || undefined,
-      })
-    } else {
-      newNode = createNode({
-        kind: 'floating',
-        position: nextFloatingPosition(this.state.document),
-        title: this.t('node.newFloating'),
-        color: normalizeNodeColor(node.color) || undefined,
-      })
-    }
-
-    this.state.document.nodes.push(newNode)
-    this.relayoutHierarchyAfterInsert(newNode)
-    this.setSelection([newNode.id], newNode.id)
-    this.state.editingNodeId = newNode.id
-    this.editingOriginalTitle = newNode.title
-    const sibInitWidth = estimateNodeWidth(newNode, 0)
-    this.activeEditorAnchorLeft = newNode.position.x - sibInitWidth / 2
-    this.activeEditorLockedWidth = sibInitWidth
-    this.activeEditorPreview = {
-      nodeId: newNode.id,
-      anchorLeft: this.activeEditorAnchorLeft,
-      width: sibInitWidth,
-      height: estimateNodeHeight(newNode, 0, sibInitWidth),
-    }
-    touchDocument(this.state.document)
-    this.render()
-    this.applyNodeCreateAnimation(newNode.id)
-    scheduleAutosave(this, 'status.siblingSaveScheduled')
-  }
-
-  private createFloatingNode(nodeId: string): void {
-    const node = this.findNode(nodeId)
-    if (!node) {
-      return
-    }
-
-    this.captureHistory()
-    const newNode = createNode({
-      kind: 'floating',
-      position: nextFloatingPosition(this.state.document),
-      title: this.t('node.newFloating'),
-      color: normalizeNodeColor(node.color) || undefined,
-    })
-
-    this.state.document.nodes.push(newNode)
-    this.setSelection([newNode.id], newNode.id)
-    this.state.editingNodeId = newNode.id
-    this.editingOriginalTitle = newNode.title
-    const floatInitWidth = estimateNodeWidth(newNode, 0)
-    this.activeEditorAnchorLeft = newNode.position.x - floatInitWidth / 2
-    this.activeEditorLockedWidth = floatInitWidth
-    this.activeEditorPreview = {
-      nodeId: newNode.id,
-      anchorLeft: this.activeEditorAnchorLeft,
-      width: floatInitWidth,
-      height: estimateNodeHeight(newNode, 0, floatInitWidth),
-    }
-    touchDocument(this.state.document)
-    this.render()
-    scheduleAutosave(this, 'status.siblingSaveScheduled')
-  }
-
-  private createRelation(sourceId: string, targetId: string): void {
-    if (sourceId === targetId) {
-      this.state.connectSourceNodeId = null
-      this.setStatus('status.relationNeedsDifferentNodes')
-      this.render()
-      return
-    }
-
-    const exists = this.state.document.relations.some((edge) => {
-      return (
-        (edge.sourceId === sourceId && edge.targetId === targetId) ||
-        (edge.sourceId === targetId && edge.targetId === sourceId)
-      )
-    })
-
-    if (exists) {
-      this.state.connectSourceNodeId = null
-      this.setStatus('status.relationAlreadyExists')
-      this.render()
-      return
-    }
-
-    const relation: RelationEdge = {
-      id: createId('rel'),
-      sourceId,
-      targetId,
-      label: '',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    }
-
-    this.captureHistory()
-    this.state.document.relations.push(relation)
-    this.state.connectSourceNodeId = null
-    this.setSelection([targetId], targetId)
-    touchDocument(this.state.document)
-    this.setStatus('status.relationCreated')
-    this.render()
-    scheduleAutosave(this, 'status.relationSaveScheduled')
-  }
-
-  private deleteSelectedNode(): void {
-    const selectedIds = this.selectedNodeIds()
-    const removableIds = selectedIds.filter((nodeId) => this.findNode(nodeId)?.kind !== 'root')
-    if (removableIds.length === 0) {
-      this.setStatus('status.rootCannotDelete')
-      this.render()
-      return
-    }
-
-    const primaryNode = this.selectedNode()
-    const removeIds = new Set<string>()
-    for (const nodeId of removableIds) {
-      removeIds.add(nodeId)
-      for (const descendantId of descendantIds(this.state.document, nodeId)) {
-        removeIds.add(descendantId)
-      }
-    }
-
-    // Apply deletion animation to visible node elements before removing from data model
-    // Use stagger delays for subtree deletion (depth-first order, 40ms per node)
-    const orderedRemoveIds = Array.from(removeIds)
-    const staggerDelays = this.uxEngine.computeStaggerDelays(orderedRemoveIds, 40)
-    const animatingElements: HTMLElement[] = []
-    for (const nodeId of orderedRemoveIds) {
-      const el = this.rootEl.querySelector<HTMLElement>(`[data-node-id="${nodeId}"]`)
-      if (el) {
-        const delay = staggerDelays.get(nodeId) ?? 0
-        el.style.animationDelay = `${delay}ms`
-        el.classList.add('node-deleting')
-        animatingElements.push(el)
-      }
-    }
-
-    const fallbackNodeId =
-      primaryNode?.parentId && !removeIds.has(primaryNode.parentId)
-        ? primaryNode.parentId
-        : findRoot(this.state.document).id
-
-    // Perform actual deletion after animation completes (or immediately if no elements to animate)
-    const performDeletion = (): void => {
-      const relationCountBefore = this.state.document.relations.length
-      const nodeCountBefore = this.state.document.nodes.length
-
-      this.captureHistory()
-      this.state.document.nodes = this.state.document.nodes.filter((node) => !removeIds.has(node.id))
-      this.state.document.relations = this.state.document.relations
-        .filter((relation) => !removeIds.has(relation.sourceId) && !removeIds.has(relation.targetId))
-        .map((relation) => ({
-          ...relation,
-          branches: (relation.branches ?? []).filter((branch) => !removeIds.has(branch.targetId)),
-        }))
-
-      const removedNodes = nodeCountBefore - this.state.document.nodes.length
-      const removedRelations = relationCountBefore - this.state.document.relations.length
-      if (removedNodes === 0) {
-        return
-      }
-
-      autoLayoutHierarchy(
-        this.state.document,
-        this.state.preferences.appearance.layoutMode,
-        this.state.preferences.appearance.childGapX,
-      )
-      this.setSelection([fallbackNodeId], fallbackNodeId)
-      this.state.editingNodeId = null
-      this.state.connectSourceNodeId = null
-      touchDocument(this.state.document)
-      this.setStatus('status.deletedSummary', {
-        nodes: removedNodes,
-        relations: removedRelations,
-      })
-      this.render()
-      scheduleAutosave(this, 'status.deletionSaveScheduled')
-      this.showToast(`已删除 ${removedNodes} 个节点`)
-    }
-
-    if (animatingElements.length > 0) {
-      // Wait for the last element's animation to end (accounting for stagger), then remove all
-      const maxStaggerDelay = (orderedRemoveIds.length - 1) * 40
-      let completed = false
-      const onComplete = (): void => {
-        if (completed) return
-        completed = true
-        performDeletion()
-      }
-      // Listen on the last animated element (longest delay)
-      const lastEl = animatingElements[animatingElements.length - 1]
-      lastEl.addEventListener('animationend', onComplete, { once: true })
-      // Safety timeout: max stagger delay + animation duration (200ms) + buffer
-      setTimeout(onComplete, maxStaggerDelay + 250)
-    } else {
-      performDeletion()
-    }
-  }
-
-  /** Apply node-creating animation class to a newly created node element after render */
-  private applyNodeCreateAnimation(nodeId: string): void {
+  applyNodeCreateAnimation(nodeId: string): void {
     requestAnimationFrame(() => {
       const el = this.rootEl.querySelector<HTMLElement>(`[data-node-id="${nodeId}"]`)
       if (el) {
@@ -4064,34 +844,7 @@ export class MindMapApp {
     })
   }
 
-  private setPriority(priority: Priority): void {
-    const targetIds = this.selectedNodeIds().filter((nodeId) => Boolean(this.findNode(nodeId)))
-    if (targetIds.length === 0) {
-      return
-    }
-
-    const nextPriority = priority || undefined
-    const targetNodes = targetIds
-      .map((nodeId) => this.findNode(nodeId))
-      .filter((node): node is MindNode => Boolean(node))
-
-    if (targetNodes.every((node) => (node.priority ?? undefined) === nextPriority)) {
-      return
-    }
-
-    this.captureHistory()
-    for (const node of targetNodes) {
-      this.updateNode(node.id, (draft) => {
-        draft.priority = nextPriority
-      })
-    }
-    touchDocument(this.state.document)
-    this.setStatus(priority ? 'status.priorityApplied' : 'status.priorityCleared', priority ? { priority } : undefined)
-    this.render()
-    scheduleAutosave(this, 'status.prioritySaveScheduled')
-  }
-
-  private cycleSelectedNodePriority(): void {
+  cycleSelectedNodePriority(): void {
     const node = this.selectedNode()
     if (!node) {
       return
@@ -4099,37 +852,7 @@ export class MindMapApp {
 
     const currentIndex = PRIORITY_VALUES.indexOf(node.priority || '')
     const nextIndex = (currentIndex + 1) % PRIORITY_VALUES.length
-    this.setPriority(PRIORITY_VALUES[nextIndex])
-  }
-
-  private setNodeColor(color: NodeColor): void {
-    const targetIds = this.selectedNodeIds().filter((nodeId) => Boolean(this.findNode(nodeId)))
-    if (targetIds.length === 0) {
-      return
-    }
-
-    const nextColor = normalizeNodeColor(color) || undefined
-    const targetNodes = targetIds
-      .map((nodeId) => this.findNode(nodeId))
-      .filter((node): node is MindNode => Boolean(node))
-
-    if (targetNodes.every((node) => (normalizeNodeColor(node.color) || undefined) === nextColor)) {
-      return
-    }
-
-    this.captureHistory()
-    for (const node of targetNodes) {
-      this.updateNode(node.id, (draft) => {
-        draft.color = nextColor
-      })
-    }
-    touchDocument(this.state.document)
-    this.setStatus(
-      color ? 'status.colorApplied' : 'status.colorCleared',
-      color ? { color: nodeColorLabel(this.state.preferences.locale, color) } : undefined,
-    )
-    this.render()
-    scheduleAutosave(this, 'status.colorSaveScheduled')
+    ops.setPriority(this, PRIORITY_VALUES[nextIndex])
   }
 
   updateNode(nodeId: string, updater: (node: MindNode) => void): void {
@@ -4142,236 +865,16 @@ export class MindMapApp {
     node.updatedAt = new Date().toISOString()
   }
 
-  private startEditingSelected(options: EditorLaunchOptions = {}): void {
+  toggleSelectedCollapse(): void {
     const selectedNode = this.selectedNode()
     if (!selectedNode) {
       return
     }
 
-    this.setSelection([selectedNode.id], selectedNode.id)
-    this.openNodeEditor(selectedNode.id, options)
+    ops.toggleNodeCollapse(this, selectedNode.id)
   }
 
-  private openNodeEditor(nodeId: string, options: EditorLaunchOptions = {}): void {
-    this.editingOriginalTitle = this.findNode(nodeId)?.title ?? null
-    this.state.editingNodeId = nodeId
-    this.activeEditorAnchorLeft = this.resolveNodeEditorAnchorLeft(nodeId)
-    this.activeEditorPreview = this.resolveNodeEditorPreviewState(nodeId)
-    this.pendingEditorOptions = options
-    this.render()
-  }
-
-  private resolveNodeEditorAnchorLeft(nodeId: string): number | null {
-    const node = this.findNode(nodeId)
-    if (!node || node.width) {
-      return null
-    }
-
-    const element = this.rootEl.querySelector<HTMLElement>(
-      `[data-node-id="${nodeId}"] .node-shell, [data-node-id="${nodeId}"] .node-editor`,
-    )
-    if (!element) {
-      return node.position.x - estimateNodeWidth(node, childrenOf(this.state.document, node.id).length) / 2
-    }
-
-    const measuredWidth = element.getBoundingClientRect().width / this.viewport.scale
-    return node.position.x - measuredWidth / 2
-  }
-
-  private resolveNodeEditorPreviewState(nodeId: string): ActiveEditorPreviewState | null {
-    const node = this.findNode(nodeId)
-    const anchorLeft = this.activeEditorAnchorLeft
-    if (!node || node.width || anchorLeft === null) {
-      return null
-    }
-
-    const element = this.rootEl.querySelector<HTMLElement>(
-      `[data-node-id="${nodeId}"] .node-shell, [data-node-id="${nodeId}"] .node-editor`,
-    )
-    if (!element) {
-      return null
-    }
-
-    const rect = element.getBoundingClientRect()
-    return {
-      nodeId,
-      anchorLeft,
-      width: Math.max(rect.width / this.viewport.scale, MIN_NODE_WIDTH),
-      height: Math.max(rect.height / this.viewport.scale, MIN_NODE_HEIGHT),
-    }
-  }
-
-  private clearNodeEditorState(): void {
-    this.state.editingNodeId = null
-    this.pendingEditorOptions = null
-    this.activeEditorAnchorLeft = null
-    this.activeEditorPreview = null
-    this.activeEditorLockedWidth = null
-    this.editingOriginalTitle = null
-  }
-
-  private cancelNodeEditor(): void {
-    const nodeId = this.state.editingNodeId
-    if (!nodeId) {
-      return
-    }
-    const node = this.findNode(nodeId)
-    if (node && this.editingOriginalTitle !== null) {
-      node.title = this.editingOriginalTitle
-    }
-    this.clearNodeEditorState()
-    this.render()
-  }
-
-  private commitNodeEditor(
-    nodeId: string,
-    rawTitle: string,
-    options: {
-      allowInactive?: boolean
-      preserveSelection?: boolean
-      renderAfter?: boolean
-    } = {},
-  ): void {
-    if (!options.allowInactive && this.state.editingNodeId !== nodeId) {
-      return
-    }
-
-    const title = rawTitle.trim() || this.t('node.untitled')
-    const existingNode = this.findNode(nodeId)
-    const preservedAnchorLeft = this.activeEditorAnchorLeft
-    if (!existingNode) {
-      this.clearNodeEditorState()
-      if (options.renderAfter !== false) {
-        this.render()
-      }
-      return
-    }
-
-    this.clearNodeEditorState()
-    if (existingNode.title === title) {
-      if (options.renderAfter !== false) {
-        this.render()
-      }
-      return
-    }
-
-    this.captureHistory()
-    this.updateNode(nodeId, (node) => {
-      node.title = title
-      if (!node.width && preservedAnchorLeft !== null) {
-        const nextWidth = estimateNodeWidth({ ...node, title }, childrenOf(this.state.document, node.id).length)
-        node.position = {
-          ...node.position,
-          x: Math.round(preservedAnchorLeft + nextWidth / 2),
-        }
-      }
-    })
-    if (!options.preserveSelection) {
-      this.applySelectionState([nodeId], nodeId)
-    }
-    touchDocument(this.state.document)
-    this.setStatus('status.nodeTitleUpdated')
-    if (options.renderAfter !== false) {
-      this.render()
-    }
-    scheduleAutosave(this, 'status.titleSaveScheduled')
-  }
-
-  private commitNodeNote(nodeId: string, rawNote: string): void {
-    const existingNode = this.findNode(nodeId)
-    if (!existingNode) {
-      return
-    }
-
-    const nextNote = normalizeNodeNote(rawNote)
-    const currentNote = normalizeNodeNote(existingNode.note)
-    if (currentNote === nextNote) {
-      return
-    }
-
-    this.captureHistory()
-    this.updateNode(nodeId, (node) => {
-      node.note = nextNote
-    })
-    touchDocument(this.state.document)
-    this.setStatus('status.noteUpdated')
-    this.render()
-    scheduleAutosave(this, 'status.noteSaveScheduled')
-  }
-
-  private commitRelationLabel(relationId: string, rawLabel: string): void {
-    const relation = this.state.document.relations.find((item) => item.id === relationId)
-    const nextLabel = rawLabel.trim()
-    if (!relation || (relation.label ?? '') === nextLabel) {
-      return
-    }
-
-    this.captureHistory()
-    updateRelationLabel(this.state.document, relationId, rawLabel)
-    touchDocument(this.state.document)
-    this.setStatus('status.relationLabelUpdated')
-    this.render()
-    scheduleAutosave(this, 'status.labelSaveScheduled')
-  }
-
-  private toggleSelectedCollapse(): void {
-    const selectedNode = this.selectedNode()
-    if (!selectedNode) {
-      return
-    }
-
-    this.toggleNodeCollapse(selectedNode.id)
-  }
-
-  private autoLayout(): void {
-    const snapshot = this.createHistorySnapshot()
-    const movedNodes = autoLayoutHierarchy(
-      this.state.document,
-      this.state.preferences.appearance.layoutMode,
-      this.state.preferences.appearance.childGapX,
-    )
-    if (movedNodes === 0) {
-      this.setStatus('status.layoutUpdated', { count: 0 })
-      this.render()
-      return
-    }
-
-    this.pushHistorySnapshot(snapshot)
-    touchDocument(this.state.document)
-    this.setStatus('status.layoutUpdated', { count: movedNodes })
-    this.render()
-    scheduleAutosave(this, 'status.layoutSaveScheduled')
-  }
-
-  private tidySubtreeCommand(nodeId: string): void {
-    const node = this.findNode(nodeId)
-    if (!node) {
-      return
-    }
-
-    const children = childrenOf(this.state.document, nodeId)
-    if (children.length === 0) {
-      this.setStatus('status.subtreeNoChildren')
-      this.render()
-      return
-    }
-
-    const snapshot = this.createHistorySnapshot()
-    const movedNodes = tidySubtree(this.state.document, nodeId, this.state.preferences.appearance.childGapX)
-    if (movedNodes === 0) {
-      this.setStatus('status.subtreeNoChildren')
-      this.render()
-      return
-    }
-
-    this.pushHistorySnapshot(snapshot)
-    touchDocument(this.state.document)
-    this.setStatus('status.subtreeTidied', { count: movedNodes })
-    this.render()
-    scheduleAutosave(this, 'status.layoutSaveScheduled')
-  }
-
-  private relayoutHierarchyAfterInsert(insertedNode: MindNode): void {
+  relayoutHierarchyAfterInsert(insertedNode: MindNode): void {
     if (!insertedNode.parentId) {
       return
     }
@@ -4383,509 +886,9 @@ export class MindMapApp {
     )
   }
 
-  private toggleNodeCollapse(nodeId: string): void {
-    const node = this.findNode(nodeId)
-    if (!node) {
-      return
-    }
-
-    if (childrenOf(this.state.document, nodeId).length === 0) {
-      this.setStatus('status.noBranchToCollapse')
-      this.render()
-      return
-    }
-
-    const isCollapsing = !node.collapsed
-    // Collect descendant IDs before toggling (depth-first order via BFS from descendantIds)
-    const childNodeIds = descendantIds(this.state.document, nodeId)
-
-    if (isCollapsing) {
-      // --- Collapse: animate children out with stagger, then toggle state ---
-      const staggerDelays = this.uxEngine.computeStaggerDelays(childNodeIds, 40)
-
-      // Apply stagger animation to each visible child node element
-      requestAnimationFrame(() => {
-        for (const childId of childNodeIds) {
-          const el = this.rootEl.querySelector<HTMLElement>(`[data-node-id="${childId}"]`)
-          if (el) {
-            const delay = staggerDelays.get(childId) ?? 0
-            el.style.animationDelay = `${delay}ms`
-            el.classList.add('node-collapsing')
-          }
-        }
-
-        // Also mark hierarchy edges as collapsing for smooth fade (only subtree edges)
-        const childNodeIdSet = new Set(childNodeIds)
-        const edgeLayer = this.rootEl.querySelector<SVGElement>('[data-edge-layer]')
-        if (edgeLayer) {
-          const edges = edgeLayer.querySelectorAll<SVGElement>('.edge-hierarchy')
-          edges.forEach((edge) => {
-            const sourceId = edge.getAttribute('data-source-id')
-            const targetId = edge.getAttribute('data-target-id')
-            if ((sourceId && childNodeIdSet.has(sourceId)) || (targetId && childNodeIdSet.has(targetId))) {
-              edge.classList.add('edge-collapsing')
-            }
-          })
-        }
-      })
-
-      // After the longest animation completes, toggle state and re-render
-      const maxDelay = (childNodeIds.length - 1) * 40
-      const animDuration = 350 // --duration-slow
-      setTimeout(() => {
-        const snapshot = this.createHistorySnapshot()
-        this.setSelection([nodeId], nodeId)
-        const changed = toggleCollapse(this.state.document, nodeId)
-        if (!changed) {
-          this.setStatus('status.noBranchToCollapse')
-          this.render()
-          return
-        }
-
-        if (this.state.preferences.interaction.autoLayoutOnCollapse) {
-          autoLayoutHierarchy(
-            this.state.document,
-            this.state.preferences.appearance.layoutMode,
-            this.state.preferences.appearance.childGapX,
-          )
-        }
-
-        this.pushHistorySnapshot(snapshot)
-        touchDocument(this.state.document)
-        this.setStatus('status.branchCollapsed')
-        this.render()
-        scheduleAutosave(this, 'status.layoutSaveScheduled')
-      }, maxDelay + animDuration)
-    } else {
-      // --- Expand: toggle state first, then animate children in with reverse stagger ---
-      const snapshot = this.createHistorySnapshot()
-      this.setSelection([nodeId], nodeId)
-      const changed = toggleCollapse(this.state.document, nodeId)
-      if (!changed) {
-        this.setStatus('status.noBranchToCollapse')
-        this.render()
-        return
-      }
-
-      if (this.state.preferences.interaction.autoLayoutOnCollapse) {
-        autoLayoutHierarchy(
-          this.state.document,
-          this.state.preferences.appearance.layoutMode,
-          this.state.preferences.appearance.childGapX,
-        )
-      }
-
-      this.pushHistorySnapshot(snapshot)
-      touchDocument(this.state.document)
-      this.setStatus('status.branchExpanded')
-      this.render()
-      scheduleAutosave(this, 'status.layoutSaveScheduled')
-
-      // After render, apply expand stagger animation (parent-to-leaf order)
-      const expandNodeIds = descendantIds(this.state.document, nodeId)
-      const staggerDelays = this.uxEngine.computeStaggerDelays(expandNodeIds, 40)
-
-      requestAnimationFrame(() => {
-        for (const childId of expandNodeIds) {
-          const el = this.rootEl.querySelector<HTMLElement>(`[data-node-id="${childId}"]`)
-          if (el) {
-            const delay = staggerDelays.get(childId) ?? 0
-            el.style.animationDelay = `${delay}ms`
-            el.classList.add('node-expanding')
-            el.addEventListener(
-              'animationend',
-              () => {
-                el.classList.remove('node-expanding')
-                el.style.animationDelay = ''
-              },
-              { once: true },
-            )
-          }
-        }
-
-        // Mark hierarchy edges as expanding for smooth fade-in (only subtree edges)
-        const expandNodeIdSet = new Set(expandNodeIds)
-        const edgeLayer = this.rootEl.querySelector<SVGElement>('[data-edge-layer]')
-        if (edgeLayer) {
-          const edges = edgeLayer.querySelectorAll<SVGElement>('.edge-hierarchy')
-          edges.forEach((edge) => {
-            const sourceId = edge.getAttribute('data-source-id')
-            const targetId = edge.getAttribute('data-target-id')
-            if ((sourceId && expandNodeIdSet.has(sourceId)) || (targetId && expandNodeIdSet.has(targetId))) {
-              edge.classList.add('edge-expanding')
-              edge.addEventListener(
-                'animationend',
-                () => {
-                  edge.classList.remove('edge-expanding')
-                },
-                { once: true },
-              )
-            }
-          })
-        }
-      })
-    }
-  }
-
-  private async runCommand(rawCommand: string): Promise<void> {
-    const colonIdx = rawCommand.indexOf(':')
-    const command = colonIdx === -1 ? rawCommand : rawCommand.slice(0, colonIdx)
-    const argument = colonIdx === -1 ? '' : rawCommand.slice(colonIdx + 1)
-
-    try {
-      switch (command) {
-        case 'create-map':
-          await createMap(this)
-          return
-        case 'open-map':
-          if (argument) {
-            await openMap(this, argument)
-          }
-          return
-        case 'go-home':
-          await goHome(this)
-          return
-        case 'rename-map':
-          await renameMap(this, argument || this.state.currentMapId || this.state.document.id)
-          return
-        case 'delete-map':
-          await deleteMap(this, argument || this.state.currentMapId || this.state.document.id)
-          return
-        case 'toggle-top-panel':
-          this.toggleTopPanel()
-          return
-        case 'toggle-inspector':
-          this.toggleInspector()
-          return
-        case 'toggle-inspector-section':
-          this.toggleInspectorSection(argument)
-          return
-        case 'toggle-settings':
-          this.toggleSettings()
-          return
-        case 'platform-help':
-          await this.showPlatformHelp()
-          return
-        case 'open-ai-workspace':
-          openAIWorkspace(this)
-          return
-        case 'close-ai-workspace':
-          closeAIWorkspace(this)
-          return
-        case 'toggle-ai-debug':
-          toggleAIDebug(this)
-          return
-        case 'toggle-ai-raw-mode':
-          toggleAIRawMode(this)
-          return
-        case 'open-graph-overlay':
-          this.openGraphOverlay()
-          return
-        case 'close-graph-overlay':
-          this.closeGraphOverlay()
-          return
-        case 'toggle-graph-autorotate':
-          this.toggleGraphAutoRotate()
-          return
-        case 'reset-graph-view':
-          this.resetGraphView()
-          return
-        case 'graph-zoom-in':
-          this.nudgeGraphZoom(1)
-          return
-        case 'graph-zoom-out':
-          this.nudgeGraphZoom(-1)
-          return
-        case 'close-settings':
-          this.closeSettings()
-          return
-        case 'complete-onboarding':
-          this.completeOnboarding()
-          return
-        case 'theme-toggle':
-          this.toggleTheme()
-          return
-        case 'undo':
-          this.undo()
-          return
-        case 'redo':
-          this.redo()
-          return
-        case 'save':
-          await saveDocument(this, 'status.saved')
-          return
-        case 'save-snapshot':
-          saveSnapshot(this, 'manual')
-          return
-        case 'restore-snapshot':
-          if (argument) {
-            this.restoreSnapshot(argument)
-          }
-          return
-        case 'auto-layout':
-          this.autoLayout()
-          return
-        case 'tidy-subtree':
-          if (argument) {
-            this.tidySubtreeCommand(argument)
-          }
-          return
-        case 'zoom-in':
-          this.zoomBy(1.25)
-          return
-        case 'zoom-out':
-          this.zoomBy(0.8)
-          return
-        case 'zoom-reset':
-          this.zoomReset()
-          return
-        case 'zoom-fit':
-          this.zoomFit()
-          return
-        case 'export-markdown':
-          await exportMarkdown(this)
-          return
-        case 'import-file':
-          this.pendingImportMode = 'auto'
-          this.refs?.importInput.click()
-          return
-        case 'new-floating':
-          this.createFloatingNode(this.selectedNode()?.id ?? 'root')
-          return
-        case 'connect-selected':
-          this.startRelationMode()
-          return
-        case 'ai-connect-relations':
-          await applyAIRelations(this)
-          return
-        case 'ai-complete-node-notes':
-          await applyAINodeNotes(this)
-          return
-        case 'ai-complete-node-notes-as-children':
-          await applyAINodeNotes(this, 'children')
-          return
-        case 'ai-generate-map':
-          await generateAIMap(this)
-          return
-        case 'ai-expand-map':
-          await expandAIMap(this)
-          return
-        case 'ai-import-file':
-          this.pendingImportMode = 'ai'
-          this.refs?.importInput.click()
-          return
-        case 'ai-suggest-children':
-          await applyAISuggestNodes(this, this.selectedNode()?.id ?? '', 'children')
-          return
-        case 'ai-suggest-siblings':
-          await applyAISuggestNodes(this, this.selectedNode()?.id ?? '', 'siblings')
-          return
-        case 'ai-wheel-children': {
-          const targetNodeId = this.state.aiWheel.nodeId ?? this.selectedNode()?.id ?? ''
-          closeAIWheel(this)
-          await applyAISuggestNodes(this, targetNodeId, 'children')
-          return
-        }
-        case 'ai-wheel-notes': {
-          const targetNodeId = this.state.aiWheel.nodeId ?? this.selectedNode()?.id ?? ''
-          closeAIWheel(this)
-          await applyAINodeNotesForTargets(this, [targetNodeId], 'replace')
-          return
-        }
-        case 'ai-wheel-relations': {
-          const targetNodeId = this.state.aiWheel.nodeId ?? this.selectedNode()?.id ?? ''
-          closeAIWheel(this)
-          await applyAIRelationsForFocus(this, [targetNodeId])
-          return
-        }
-        case 'ai-wheel-siblings': {
-          const targetNodeId = this.state.aiWheel.nodeId ?? this.selectedNode()?.id ?? ''
-          closeAIWheel(this)
-          await applyAISuggestNodes(this, targetNodeId, 'siblings')
-          return
-        }
-        case 'close-ai-wheel':
-          closeAIWheel(this)
-          renderOverlay(this)
-          return
-        case 'create-template-map':
-          await this.createTemplateMap(normalizeAITemplateId(argument))
-          return
-        case 'toggle-fixed-menu':
-          this.toggleFixedMenu((argument as FixedMenuId) || '')
-          return
-        case 'focus-graph-selected':
-          if (this.state.graph.selectedNodeId) {
-            this.focusNodeFromGraph(this.state.graph.selectedNodeId)
-          }
-          return
-        case 'test-ai-connection':
-          await testAIConnection(this)
-          return
-        case 'collab-generate-key':
-          this.generateCollabApiKey()
-          return
-        case 'collab-copy-key':
-          await this.copyCollabApiKey()
-          return
-        case 'collab-clear-key':
-          this.clearCollabApiKey()
-          return
-        case 'collab-save-key':
-          await saveCollabApiKey(this)
-          return
-        case 'new-child':
-          this.createChildNode(this.selectedNode()?.id ?? 'root')
-          return
-        case 'new-sibling':
-          this.createSiblingNode(this.selectedNode()?.id ?? 'root')
-          return
-        case 'rename-selected':
-          this.startEditingSelected()
-          return
-        case 'set-priority':
-          this.setPriority((argument.toUpperCase() as Priority) || '')
-          return
-        case 'toggle-collapse':
-          this.toggleSelectedCollapse()
-          return
-        case 'toggle-node-collapse':
-          if (argument) {
-            this.toggleNodeCollapse(argument)
-          }
-          return
-        case 'delete-selected':
-          this.deleteSelectedNode()
-          return
-        case 'cycle-priority':
-          this.cycleSelectedNodePriority()
-          return
-        case 'open-ai-wheel': {
-          const targetId = this.state.selectedNodeId
-          if (targetId) {
-            const center = this.nodeClientCenter(targetId)
-            openAIWheel(this, targetId, center.x, center.y)
-            renderOverlay(this)
-          }
-          return
-        }
-        case 'focus-node':
-          if (argument) {
-            this.selectNode(argument)
-          }
-          return
-        case 'delete-relation':
-          if (argument) {
-            this.removeRelation(argument)
-          }
-          return
-        case 'create-region':
-          this.startRegionDraw()
-          return
-        case 'delete-region':
-          if (argument) {
-            this.deleteRegion(argument)
-          }
-          return
-        case 'set-region-color': {
-          const [color, regionId] = argument.split(':')
-          if (regionId) {
-            this.setRegionColor(regionId, normalizeNodeColor(color))
-          }
-          return
-        }
-        case 'set-arrow': {
-          const parts = argument.split(':')
-          const direction = parts[0] as ArrowDirection
-          const relationId = parts.slice(1).join(':')
-          if (relationId) {
-            this.setRelationArrowDirection(relationId, direction)
-          }
-          return
-        }
-        case 'branch-connection': {
-          if (argument) {
-            this.branchConnectionAtMidpoint(argument)
-          }
-          return
-        }
-        default:
-          break
-      }
-    } catch (error) {
-      this.setStatus('status.mapListFailed', { reason: getErrorMessage(error) })
-      this.render()
-    }
-  }
-
-  private removeRelation(relationId: string): void {
-    const snapshot = this.createHistorySnapshot()
-    const removed = deleteRelation(this.state.document, relationId)
-    if (!removed) {
-      return
-    }
-
-    if (this.state.selectedRelationId === relationId) {
-      this.state.selectedRelationId = null
-    }
-    this.pushHistorySnapshot(snapshot)
-    touchDocument(this.state.document)
-    this.setStatus('status.relationRemoved')
-    this.render()
-    scheduleAutosave(this, 'status.relationRemovalSaveScheduled')
-  }
-
-  // ---- Region Box methods ----
-
-  private startRegionDraw(): void {
-    this.state.contextMenu = null
-    this.state.regionDraw = {
-      pointerId: -1,
-      startCanvasX: 0,
-      startCanvasY: 0,
-      currentCanvasX: 0,
-      currentCanvasY: 0,
-      color: 'blue',
-    }
-    this.refs?.scroll?.classList.add('is-region-drawing')
-    this.setStatus('status.regionDrawHint')
-    this.render()
-  }
-
-  private finishRegionDraw(x: number, y: number, w: number, h: number): void {
-    if (w < 30 || h < 30) {
-      this.state.regionDraw = null
-      this.refs?.scroll?.classList.remove('is-region-drawing')
-      this.render()
-      return
-    }
-    if (!this.state.document.regions) {
-      this.state.document.regions = []
-    }
-    const now = new Date().toISOString()
-    const region: RegionBox = {
-      id: createId('region'),
-      label: '',
-      color: this.state.regionDraw?.color ?? 'blue',
-      position: { x: x + w / 2, y: y + h / 2 },
-      width: w,
-      height: h,
-      createdAt: now,
-      updatedAt: now,
-    }
-    this.captureHistory()
-    this.state.document.regions.push(region)
-    this.state.regionDraw = null
-    this.refs?.scroll?.classList.remove('is-region-drawing')
-    touchDocument(this.state.document)
-    this.setStatus('status.regionCreated')
-    this.render()
-    scheduleAutosave(this, 'status.relationSaveScheduled')
-  }
-
-  private deleteRegion(regionId: string): void {
+  deleteRegion(regionId: string): void {
     if (!this.state.document.regions) return
-    this.captureHistory()
+    ops.captureHistory(this)
     this.state.document.regions = this.state.document.regions.filter((r) => r.id !== regionId)
     touchDocument(this.state.document)
     this.setStatus('status.regionDeleted')
@@ -4893,11 +896,11 @@ export class MindMapApp {
     scheduleAutosave(this, 'status.deletionSaveScheduled')
   }
 
-  private setRegionColor(regionId: string, color: NodeColor): void {
+  setRegionColor(regionId: string, color: NodeColor): void {
     if (!this.state.document.regions) return
     const region = this.state.document.regions.find((r) => r.id === regionId)
     if (!region) return
-    this.captureHistory()
+    ops.captureHistory(this)
     region.color = color || 'blue'
     region.updatedAt = new Date().toISOString()
     touchDocument(this.state.document)
@@ -4929,18 +932,18 @@ export class MindMapApp {
     )
   }
 
-  private nodesInRegion(region: RegionBox): MindNode[] {
+  nodesInRegion(region: RegionBox): MindNode[] {
     return this.state.document.nodes.filter((node) => this.nodeOverlapsRegion(node, region))
   }
 
-  private applyLiveRegionDrag(_region: RegionBox, _movedNodeIds: string[]): void {
+  applyLiveRegionDrag(_region: RegionBox, _movedNodeIds: string[]): void {
     renderWorkspace(this)
   }
 
-  private setRelationArrowDirection(relationId: string, direction: ArrowDirection): void {
+  setRelationArrowDirection(relationId: string, direction: ArrowDirection): void {
     const relation = this.state.document.relations.find((r) => r.id === relationId)
     if (!relation) return
-    this.captureHistory()
+    ops.captureHistory(this)
     relation.arrowDirection = direction
     relation.updatedAt = new Date().toISOString()
     touchDocument(this.state.document)
@@ -4951,7 +954,7 @@ export class MindMapApp {
 
   // ---- Connection branching ----
 
-  private branchConnectionAtMidpoint(relationId: string): void {
+  branchConnectionAtMidpoint(relationId: string): void {
     const relation = this.state.document.relations.find((r) => r.id === relationId)
     if (!relation) return
     this.state.selectedRelationId = relationId
@@ -4959,7 +962,7 @@ export class MindMapApp {
     renderWorkspace(this)
   }
 
-  private clearMidpointDragLongPress(dragState: MidpointDragState | null): void {
+  clearMidpointDragLongPress(dragState: MidpointDragState | null): void {
     if (!dragState || dragState.longPressHandle === null) {
       return
     }
@@ -4967,15 +970,15 @@ export class MindMapApp {
     dragState.longPressHandle = null
   }
 
-  private relationIncludesTarget(relation: RelationEdge, targetNodeId: string): boolean {
+  relationIncludesTarget(relation: RelationEdge, targetNodeId: string): boolean {
     if (relation.sourceId === targetNodeId || relation.targetId === targetNodeId) {
       return true
     }
     return (relation.branches ?? []).some((branch) => branch.targetId === targetNodeId)
   }
 
-  private moveRelationMidpoint(relation: RelationEdge, midpoint: Position): void {
-    this.captureHistory()
+  moveRelationMidpoint(relation: RelationEdge, midpoint: Position): void {
+    ops.captureHistory(this)
     relation.midpointOffset = midpoint
     relation.updatedAt = new Date().toISOString()
     touchDocument(this.state.document)
@@ -4983,33 +986,7 @@ export class MindMapApp {
     scheduleAutosave(this, 'status.relationSaveScheduled')
   }
 
-  private addBranchTargetToRelation(relation: RelationEdge, targetNodeId: string): void {
-    if (this.relationIncludesTarget(relation, targetNodeId)) {
-      this.setStatus('status.relationAlreadyExists')
-      renderWorkspace(this)
-      return
-    }
-
-    if (!this.findNode(targetNodeId)) {
-      renderWorkspace(this)
-      return
-    }
-
-    this.captureHistory()
-    if (!relation.branches) {
-      relation.branches = []
-    }
-    relation.branches.push({
-      targetId: targetNodeId,
-    })
-    relation.updatedAt = new Date().toISOString()
-    touchDocument(this.state.document)
-    this.setStatus('status.connectionBranched')
-    renderWorkspace(this)
-    scheduleAutosave(this, 'status.relationSaveScheduled')
-  }
-
-  private resolveRelationMidpointPosition(relationId: string): Position | null {
+  resolveRelationMidpointPosition(relationId: string): Position | null {
     const relation = this.state.document.relations.find((edge) => edge.id === relationId)
     if (!relation) {
       return null
@@ -5057,16 +1034,16 @@ export class MindMapApp {
     return { x: canvasX, y: canvasY }
   }
 
-  private toggleTheme(): void {
+  toggleTheme(): void {
     this.setTheme(this.state.document.theme === 'dark' ? 'light' : 'dark')
   }
 
-  private setTheme(theme: Theme): void {
+  setTheme(theme: Theme): void {
     if (this.state.document.theme === theme) {
       return
     }
 
-    this.captureHistory()
+    ops.captureHistory(this)
     this.state.document.theme = theme
     touchDocument(this.state.document)
     this.applyTheme()
@@ -5075,7 +1052,7 @@ export class MindMapApp {
     scheduleAutosave(this, 'status.themeSaveScheduled')
   }
 
-  private startRelationMode(): void {
+  startRelationMode(): void {
     const selectedNode = this.selectedNode()
     if (!selectedNode) {
       return
@@ -5105,66 +1082,7 @@ export class MindMapApp {
       : this.t('snapshot.defaultAutoName', { title: normalizedTitle })
   }
 
-  private restoreSnapshot(snapshotId: string): void {
-    const mapId = this.state.currentMapId
-    if (!mapId) {
-      return
-    }
-
-    const restoredDocument = loadLocalSnapshot(mapId, snapshotId)
-    if (!restoredDocument) {
-      this.setStatus('status.snapshotRestoreFailed')
-      this.render()
-      return
-    }
-
-    this.captureHistory()
-    restoredDocument.id = mapId
-    this.state.document = restoredDocument
-    this.state.snapshotDraftName = ''
-    this.setSelection([findRoot(restoredDocument).id], findRoot(restoredDocument).id)
-    this.state.connectSourceNodeId = null
-    touchDocument(this.state.document)
-    this.applyTheme()
-    this.setStatus('status.snapshotRestored')
-    this.render()
-    scheduleAutosave(this, 'status.saved')
-  }
-
-  private async importFile(file: File, mode: PendingImportMode = 'auto'): Promise<void> {
-    const extension = file.name.split('.').pop()?.toLowerCase() ?? ''
-    const isRuleFormat = ['md', 'markdown', 'txt'].includes(extension)
-
-    if (mode === 'ai' || (!isRuleFormat && mode === 'auto')) {
-      await importFileWithAI(this, file)
-      return
-    }
-
-    const format = extension === 'md' || extension === 'markdown' ? 'markdown' : 'text'
-
-    try {
-      const content = await file.text()
-      const importedDocument = await api.importDocument(content, format)
-      if (this.state.currentMapId) {
-        importedDocument.id = this.state.currentMapId
-      }
-      this.captureHistory()
-      this.state.document = importedDocument
-      this.setSelection([findRoot(importedDocument).id], findRoot(importedDocument).id)
-      this.state.connectSourceNodeId = null
-      this.viewport.scale = 1
-      this.didInitializeViewport = false
-      this.setStatus('status.imported', { filename: file.name })
-      this.applyTheme()
-      this.render()
-      await saveDocument(this, 'status.importedSaved')
-    } catch (error) {
-      this.setStatus('status.importFailed', { reason: getErrorMessage(error) })
-      this.render()
-    }
-  }
-
-  private openGraphOverlay(): void {
+  openGraphOverlay(): void {
     this.state.graph.open = true
     this.state.graph.selectedNodeId = this.state.graph.selectedNodeId ?? this.state.selectedNodeId
     this.state.ai.open = false
@@ -5172,7 +1090,7 @@ export class MindMapApp {
     this.render()
   }
 
-  private closeGraphOverlay(): void {
+  closeGraphOverlay(): void {
     if (!this.state.graph.open) {
       return
     }
@@ -5183,14 +1101,14 @@ export class MindMapApp {
     this.render()
   }
 
-  private toggleGraphAutoRotate(): void {
+  toggleGraphAutoRotate(): void {
     this.state.graph.autoRotate = !this.state.graph.autoRotate
     this.syncGraphAnimation()
     this.setStatus(this.state.graph.autoRotate ? 'status.graphAutoRotateOn' : 'status.graphAutoRotateOff')
     this.render()
   }
 
-  private resetGraphView(): void {
+  resetGraphView(): void {
     this.state.graph.rotation = 0.72
     this.state.graph.tilt = 0.18
     this.state.graph.zoom = GRAPH_DEFAULT_ZOOM
@@ -5199,12 +1117,12 @@ export class MindMapApp {
     renderHeader(this)
   }
 
-  private nudgeGraphZoom(direction: -1 | 1): void {
+  nudgeGraphZoom(direction: -1 | 1): void {
     const factor = direction > 0 ? 1.14 : 1 / 1.14
     this.setGraphZoom(this.state.graph.zoom * factor)
   }
 
-  private setGraphZoom(nextZoom: number): void {
+  setGraphZoom(nextZoom: number): void {
     const clampedZoom = Math.round(clamp(nextZoom, GRAPH_MIN_ZOOM, GRAPH_MAX_ZOOM) * 100) / 100
     if (Math.abs(clampedZoom - this.state.graph.zoom) < 0.001) {
       return
@@ -5233,7 +1151,7 @@ export class MindMapApp {
     }
   }
 
-  private async createTemplateMap(templateId: AITemplateId): Promise<void> {
+  async createTemplateMap(templateId: AITemplateId): Promise<void> {
     const templateDocument = createTemplateDocument(templateId, this.state.preferences.locale)
     await persistGeneratedDocument(this, templateDocument)
     this.state.ai.lastSummary = promptTemplateCopy(templateId, this.state.preferences.locale)
@@ -5242,7 +1160,7 @@ export class MindMapApp {
     this.render()
   }
 
-  private focusNodeFromGraph(nodeId: string): void {
+  focusNodeFromGraph(nodeId: string): void {
     this.state.graph.selectedNodeId = nodeId
     this.state.graph.open = false
     this.stopGraphAnimation()
@@ -5266,338 +1184,6 @@ export class MindMapApp {
     this.updateCanvasViewportView()
   }
 
-  private handleCanvasPan(event: PointerEvent): void {
-    if (!this.pan || event.pointerId !== this.pan.pointerId) {
-      return
-    }
-
-    const deltaX = event.clientX - this.pan.startX
-    const deltaY = event.clientY - this.pan.startY
-    event.preventDefault()
-    this.viewport.x = this.pan.startViewportX + deltaX
-    this.viewport.y = this.pan.startViewportY + deltaY
-    this.uxEngine.syncViewport(this.viewport)
-    this.updateCanvasViewportView()
-
-    // Track velocity for inertia: compute instantaneous velocity in px/frame (~16.67ms)
-    const now = performance.now()
-    const dt = now - this.pan.lastMoveTime
-    if (dt > 0) {
-      const frameTime = 16.67 // ~60fps frame duration
-      const moveDx = event.clientX - this.pan.lastClientX
-      const moveDy = event.clientY - this.pan.lastClientY
-      // Smooth velocity with exponential moving average
-      const alpha = Math.min(1, dt / 100)
-      this.pan.velocityX = this.pan.velocityX * (1 - alpha) + (moveDx / dt) * frameTime * alpha
-      this.pan.velocityY = this.pan.velocityY * (1 - alpha) + (moveDy / dt) * frameTime * alpha
-    }
-    this.pan.lastClientX = event.clientX
-    this.pan.lastClientY = event.clientY
-    this.pan.lastMoveTime = now
-  }
-
-  private startCanvasPan(pointerId: number, clientX: number, clientY: number): void {
-    // Cancel any ongoing inertia when a new pan gesture starts
-    this.uxEngine.cancelInertia()
-
-    this.pan = {
-      pointerId,
-      startX: clientX,
-      startY: clientY,
-      startViewportX: this.viewport.x,
-      startViewportY: this.viewport.y,
-      lastClientX: clientX,
-      lastClientY: clientY,
-      lastMoveTime: performance.now(),
-      velocityX: 0,
-      velocityY: 0,
-    }
-    this.setCanvasPanning(true)
-  }
-
-  private commitSettingField(field: string, value: string): void {
-    switch (field) {
-      case 'locale':
-        this.setLocale(value === 'zh-CN' ? 'zh-CN' : 'en', true)
-        return
-      case 'theme':
-        this.setTheme(value === 'light' ? 'light' : 'dark')
-        return
-      case 'appearance.edgeStyle':
-        this.updatePreferences((preferences) => {
-          preferences.appearance.edgeStyle = normalizeEdgeStyle(value)
-        })
-        this.setStatus('status.appearanceUpdated')
-        this.render()
-        return
-      case 'appearance.layoutMode': {
-        const nextLayoutMode = normalizeLayoutMode(value)
-        const layoutModeChanged = this.state.preferences.appearance.layoutMode !== nextLayoutMode
-        this.updatePreferences((preferences) => {
-          preferences.appearance.layoutMode = nextLayoutMode
-        })
-        if (layoutModeChanged && this.state.view === 'map') {
-          const movedNodes = autoLayoutHierarchy(
-            this.state.document,
-            this.state.preferences.appearance.layoutMode,
-            this.state.preferences.appearance.childGapX,
-          )
-          touchDocument(this.state.document)
-          this.setStatus('status.layoutUpdated', { count: movedNodes })
-          this.render()
-          scheduleAutosave(this, 'status.layoutSaveScheduled')
-          return
-        }
-        this.setStatus('status.appearanceUpdated')
-        this.render()
-        return
-      }
-      case 'appearance.childGapX': {
-        const nextChildGapX = normalizeChildGapX(value)
-        const childGapChanged = this.state.preferences.appearance.childGapX !== nextChildGapX
-        this.updatePreferences((preferences) => {
-          preferences.appearance.childGapX = nextChildGapX
-        })
-        if (childGapChanged && this.state.view === 'map') {
-          const movedNodes = autoLayoutHierarchy(
-            this.state.document,
-            this.state.preferences.appearance.layoutMode,
-            this.state.preferences.appearance.childGapX,
-          )
-          touchDocument(this.state.document)
-          this.setStatus('status.layoutUpdated', { count: movedNodes })
-          this.render()
-          scheduleAutosave(this, 'status.layoutSaveScheduled')
-          return
-        }
-        this.setStatus('status.appearanceUpdated')
-        this.render()
-        return
-      }
-      case 'appearance.chromeLayout':
-        this.updatePreferences((preferences) => {
-          preferences.appearance.chromeLayout = normalizeChromeLayout(value)
-        })
-        if (value !== 'fixed') {
-          this.state.fixedMenu = ''
-        }
-        this.setStatus('status.appearanceUpdated')
-        this.render()
-        return
-      case 'appearance.topPanelPosition':
-        this.updatePreferences((preferences) => {
-          preferences.appearance.topPanelPosition = normalizeTopPanelPosition(value)
-        })
-        this.setStatus('status.appearanceUpdated')
-        this.render()
-        return
-      case 'interaction.dragSubtreeWithParent':
-        this.updatePreferences((preferences) => {
-          preferences.interaction.dragSubtreeWithParent = value === 'true'
-        })
-        this.setStatus('status.interactionUpdated')
-        this.render()
-        return
-      case 'interaction.dragSnap':
-        this.updatePreferences((preferences) => {
-          preferences.interaction.dragSnap = value === 'true'
-        })
-        this.setStatus('status.interactionUpdated')
-        this.render()
-        return
-      case 'interaction.autoLayoutOnCollapse':
-        this.updatePreferences((preferences) => {
-          preferences.interaction.autoLayoutOnCollapse = value === 'true'
-        })
-        this.setStatus('status.interactionUpdated')
-        this.render()
-        return
-      case 'interaction.autoSnapshots':
-        this.updatePreferences((preferences) => {
-          preferences.interaction.autoSnapshots = value === 'true'
-        })
-        this.setStatus('status.interactionUpdated')
-        this.render()
-        return
-      case 'interaction.aiQuickChildren':
-        this.updatePreferences((preferences) => {
-          preferences.interaction.aiQuickChildren = value === 'true'
-        })
-        this.setStatus('status.interactionUpdated')
-        this.render()
-        return
-      case 'interaction.aiQuickSiblings':
-        this.updatePreferences((preferences) => {
-          preferences.interaction.aiQuickSiblings = value === 'true'
-        })
-        this.setStatus('status.interactionUpdated')
-        this.render()
-        return
-      case 'interaction.aiQuickNotes':
-        this.updatePreferences((preferences) => {
-          preferences.interaction.aiQuickNotes = value === 'true'
-        })
-        this.setStatus('status.interactionUpdated')
-        this.render()
-        return
-      case 'interaction.aiQuickRelations':
-        this.updatePreferences((preferences) => {
-          preferences.interaction.aiQuickRelations = value === 'true'
-        })
-        this.setStatus('status.interactionUpdated')
-        this.render()
-        return
-      case 'interaction.doubleClickAction':
-        this.updatePreferences((preferences) => {
-          preferences.interaction.doubleClickAction = normalizeGestureAction(
-            value,
-            preferences.interaction.doubleClickAction,
-          )
-        })
-        this.setStatus('status.interactionUpdated')
-        this.render()
-        return
-      case 'interaction.tripleClickAction':
-        this.updatePreferences((preferences) => {
-          preferences.interaction.tripleClickAction = normalizeGestureAction(
-            value,
-            preferences.interaction.tripleClickAction,
-          )
-        })
-        this.setStatus('status.interactionUpdated')
-        this.render()
-        return
-      case 'interaction.longPressAction':
-        this.updatePreferences((preferences) => {
-          preferences.interaction.longPressAction = normalizeGestureAction(
-            value,
-            preferences.interaction.longPressAction,
-          )
-          preferences.interaction.rightLongPressAction = preferences.interaction.longPressAction
-        })
-        this.setStatus('status.interactionUpdated')
-        this.render()
-        return
-      case 'interaction.leftLongPressAction':
-        this.updatePreferences((preferences) => {
-          preferences.interaction.leftLongPressAction = normalizeGestureAction(
-            value,
-            preferences.interaction.leftLongPressAction,
-          )
-        })
-        this.setStatus('status.interactionUpdated')
-        this.render()
-        return
-      case 'interaction.middleLongPressAction':
-        this.updatePreferences((preferences) => {
-          preferences.interaction.middleLongPressAction = normalizeGestureAction(
-            value,
-            preferences.interaction.middleLongPressAction,
-          )
-        })
-        this.setStatus('status.interactionUpdated')
-        this.render()
-        return
-      case 'interaction.rightLongPressAction':
-        this.updatePreferences((preferences) => {
-          preferences.interaction.rightLongPressAction = normalizeGestureAction(
-            value,
-            preferences.interaction.rightLongPressAction,
-          )
-          preferences.interaction.longPressAction = preferences.interaction.rightLongPressAction
-        })
-        this.setStatus('status.interactionUpdated')
-        this.render()
-        return
-      case 'interaction.canvasLeftDragAction':
-        this.updatePreferences((preferences) => {
-          preferences.interaction.canvasLeftDragAction = normalizeCanvasDragAction(
-            value,
-            preferences.interaction.canvasLeftDragAction,
-          )
-        })
-        this.setStatus('status.interactionUpdated')
-        this.render()
-        return
-      case 'interaction.canvasMiddleDragAction':
-        this.updatePreferences((preferences) => {
-          preferences.interaction.canvasMiddleDragAction = normalizeCanvasDragAction(
-            value,
-            preferences.interaction.canvasMiddleDragAction,
-          )
-        })
-        this.setStatus('status.interactionUpdated')
-        this.render()
-        return
-      case 'interaction.canvasRightDragAction':
-        this.updatePreferences((preferences) => {
-          preferences.interaction.canvasRightDragAction = normalizeCanvasDragAction(
-            value,
-            preferences.interaction.canvasRightDragAction,
-          )
-        })
-        this.setStatus('status.interactionUpdated')
-        this.render()
-        return
-      case 'interaction.spaceAction':
-        this.updatePreferences((preferences) => {
-          preferences.interaction.spaceAction = normalizeGestureAction(value, preferences.interaction.spaceAction)
-        })
-        this.setStatus('status.interactionUpdated')
-        this.render()
-        return
-      case 'ai.provider':
-        this.updatePreferences((preferences) => {
-          preferences.ai.provider = value === 'openai-compatible' ? 'openai-compatible' : 'lmstudio'
-        })
-        resetAIConnectionFeedback(this)
-        this.setStatus('status.aiSettingsSaved')
-        this.render()
-        return
-      case 'ai.baseUrl':
-        this.updatePreferences((preferences) => {
-          preferences.ai.baseUrl = value.trim() || DEFAULT_LM_STUDIO_URL
-        })
-        resetAIConnectionFeedback(this)
-        this.setStatus('status.aiSettingsSaved')
-        this.render()
-        return
-      case 'ai.apiKey':
-        this.updatePreferences((preferences) => {
-          preferences.ai.apiKey = value.trim()
-        })
-        resetAIConnectionFeedback(this)
-        this.setStatus('status.aiSettingsSaved')
-        this.render()
-        return
-      case 'ai.model':
-        this.updatePreferences((preferences) => {
-          preferences.ai.model = value.trim()
-        })
-        resetAIConnectionFeedback(this)
-        this.setStatus('status.aiSettingsSaved')
-        this.render()
-        return
-      case 'ai.maxTokens':
-        this.updatePreferences((preferences) => {
-          preferences.ai.maxTokens = normalizeAIMaxTokens(value)
-        })
-        this.setStatus('status.aiSettingsSaved')
-        this.render()
-        return
-      case 'ai.timeoutSeconds':
-        this.updatePreferences((preferences) => {
-          preferences.ai.timeoutSeconds = normalizeAITimeoutSeconds(value)
-        })
-        resetAIConnectionFeedback(this)
-        this.setStatus('status.aiSettingsSaved')
-        this.render()
-        return
-      default:
-        break
-    }
-  }
-
   collabApiKeyMasked(): string {
     if (!this.collabApiKey) {
       return this.t('settings.collabApiKeyEmpty')
@@ -5606,7 +1192,7 @@ export class MindMapApp {
     return '•'.repeat(this.collabApiKey.length - 4) + last4
   }
 
-  private generateCollabApiKey(): void {
+  generateCollabApiKey(): void {
     const bytes = new Uint8Array(16)
     crypto.getRandomValues(bytes)
     this.collabApiKey = Array.from(bytes)
@@ -5616,7 +1202,7 @@ export class MindMapApp {
     renderSettings(this)
   }
 
-  private async copyCollabApiKey(): Promise<void> {
+  async copyCollabApiKey(): Promise<void> {
     if (!this.collabApiKey) {
       return
     }
@@ -5628,64 +1214,7 @@ export class MindMapApp {
     }
   }
 
-  private async showPlatformHelp(): Promise<void> {
-    const mapId = this.state.currentMapId || this.state.document.id
-    if (!this.collabApiKey) {
-      this.generateCollabApiKey()
-      await saveCollabApiKey(this)
-    }
-    const token = await api.createShareToken({
-      mapId,
-      accessLevel: 'viewer',
-      displayName: 'Web Viewer',
-      expiresIn: '168h',
-      ownerApiKey: this.collabApiKey,
-    })
-    const encodedMapId = encodeURIComponent(mapId)
-    const encodedSecret = encodeURIComponent(token.secret)
-    const wsURL = `ws://127.0.0.1:34118/ws?mapId=${encodedMapId}&token=${encodedSecret}`
-    const localDebugURL = `http://127.0.0.1:34117/share/${encodedMapId}?token=${encodedSecret}`
-    const wssURL = `wss://your-domain.example/ws?mapId=${encodedMapId}&token=${encodedSecret}`
-    const shareBlock = [
-      '已一键开启 viewer 分享，有效期 7 天。',
-      `当前 mapId：${mapId}`,
-      `Token ID：${token.id}`,
-      `本地调试网页：${localDebugURL}`,
-      `WebSocket 客户端地址：${wsURL}`,
-      `公网反代后地址：${wssURL}`,
-      '注意：WebSocket 地址不是普通网页地址，不能直接粘到浏览器地址栏打开；需要由网页协作客户端或反向代理后的协作页面连接。',
-    ].join('\n')
-
-    const content = [
-      'Code Mind 平台功能入口',
-      '',
-      '1. MCP 化',
-      '构建：go build -o codemind-mcp.exe ./cmd/mcp',
-      '配置：CODEMIND_API_URL=http://127.0.0.1:34117',
-      this.collabApiKey
-        ? '配置：CODEMIND_API_KEY=当前设置页中的协作 API Key'
-        : '配置：如启用 API Key，请到设置页生成并复制。',
-      '',
-      '2. VS Code 插件调用',
-      '打开 VS Code 左侧 Code Mind 面板，配置 codeMind.apiUrl 与 codeMind.apiKey。',
-      '命令面板运行：Code Mind: Getting Started',
-      '',
-      '3. 网页协作/互联网分享',
-      shareBlock,
-      '公网分享建议将 HTTPS 代理到 34117，将 WSS /ws 代理到 34118。',
-      '',
-      '完整说明见 docs/platform-usage.md',
-    ].join('\n')
-
-    try {
-      await navigator.clipboard.writeText(content)
-      this.showToast('平台调用说明已复制到剪贴板')
-    } catch {
-      window.alert(content)
-    }
-  }
-
-  private clearCollabApiKey(): void {
+  clearCollabApiKey(): void {
     this.collabApiKey = ''
     this.setStatus('settings.collabApiKeyCleared')
     renderSettings(this)
@@ -5731,7 +1260,7 @@ export class MindMapApp {
     return container
   }
 
-  private showToast(message: string): void {
+  showToast(message: string): void {
     const id = `toast-${++this.toastIdCounter}-${Date.now()}`
     const item: ToastItem = {
       id,
@@ -5771,7 +1300,7 @@ export class MindMapApp {
     window.setTimeout(onAnimEnd, 250)
   }
 
-  private setLocale(locale: Locale, announce: boolean): void {
+  setLocale(locale: Locale, announce: boolean): void {
     this.updatePreferences((preferences) => {
       preferences.locale = locale
     })
@@ -5782,7 +1311,7 @@ export class MindMapApp {
     this.render()
   }
 
-  private toggleSettings(): void {
+  toggleSettings(): void {
     if (this.state.settingsOpen) {
       this.closeSettings()
     } else {
@@ -5800,13 +1329,13 @@ export class MindMapApp {
     this.animatePanelIn('settings', this.refs?.settingsLayer?.querySelector('.settings-drawer') as HTMLElement | null)
   }
 
-  private toggleTopPanel(): void {
+  toggleTopPanel(): void {
     this.state.topPanelCollapsed = !this.state.topPanelCollapsed
     this.setStatus(this.state.topPanelCollapsed ? 'status.topPanelClosed' : 'status.topPanelOpened')
     this.render()
   }
 
-  private toggleInspector(): void {
+  toggleInspector(): void {
     if (this.state.panelAnimating.has('inspector')) {
       return
     }
@@ -5825,7 +1354,7 @@ export class MindMapApp {
   }
 
   /** Toggle an Inspector section between collapsed and expanded */
-  private toggleInspectorSection(sectionId: string): void {
+  toggleInspectorSection(sectionId: string): void {
     if (!sectionId) return
     if (this.inspectorSectionsCollapsed.has(sectionId)) {
       this.inspectorSectionsCollapsed.delete(sectionId)
@@ -5835,7 +1364,7 @@ export class MindMapApp {
     renderInspector(this)
   }
 
-  private closeSettings(): void {
+  closeSettings(): void {
     if (!this.state.settingsOpen) {
       return
     }
@@ -5899,7 +1428,7 @@ export class MindMapApp {
     }, safetyTimeout)
   }
 
-  private completeOnboarding(): void {
+  completeOnboarding(): void {
     this.updatePreferences((preferences) => {
       preferences.onboardingCompleted = true
     })
@@ -5908,7 +1437,7 @@ export class MindMapApp {
 
   // === Guide Overlay ===
 
-  private dismissCanvasGuide(): void {
+  dismissCanvasGuide(): void {
     if (!this.state.guideOverlay.canvasGuideVisible) {
       return
     }
@@ -5927,7 +1456,7 @@ export class MindMapApp {
     }
   }
 
-  private showShortcutOverlay(): void {
+  showShortcutOverlay(): void {
     if (this.state.guideOverlay.shortcutOverlayVisible) {
       return
     }
@@ -5951,7 +1480,7 @@ export class MindMapApp {
     }
   }
 
-  private updatePreferences(updater: (preferences: AppPreferences) => void): void {
+  updatePreferences(updater: (preferences: AppPreferences) => void): void {
     const nextPreferences: AppPreferences = {
       ...this.state.preferences,
       appearance: {
@@ -6042,7 +1571,7 @@ export class MindMapApp {
     return this.historyFuture.length > 0
   }
 
-  private createHistorySnapshot(): HistorySnapshot {
+  createHistorySnapshot(): HistorySnapshot {
     return {
       document: cloneDocument(this.state.document),
       selectedNodeId: this.state.selectedNodeId,
@@ -6051,7 +1580,7 @@ export class MindMapApp {
     }
   }
 
-  private pushHistorySnapshot(snapshot: HistorySnapshot): void {
+  pushHistorySnapshot(snapshot: HistorySnapshot): void {
     this.historyPast.push(snapshot)
     if (this.historyPast.length > HISTORY_LIMIT) {
       this.historyPast.shift()
@@ -6059,69 +1588,7 @@ export class MindMapApp {
     this.historyFuture = []
   }
 
-  captureHistory(): void {
-    this.pushHistorySnapshot(this.createHistorySnapshot())
-  }
-
-  resetHistory(): void {
-    this.historyPast = []
-    this.historyFuture = []
-  }
-
-  private applyHistorySnapshot(snapshot: HistorySnapshot): void {
-    this.state.document = cloneDocument(snapshot.document)
-    this.setSelection(snapshot.selectedNodeIds, snapshot.selectedNodeId)
-    this.state.connectSourceNodeId =
-      snapshot.connectSourceNodeId && findNode(this.state.document, snapshot.connectSourceNodeId)
-        ? snapshot.connectSourceNodeId
-        : null
-    this.clearNodeLongPress()
-    this.clearNodeEditorState()
-    this.clearDropTargetHighlights()
-    this.state.drag = null
-    this.pan = null
-    this.state.resize = null
-    this.state.regionResize = null
-    this.state.contextMenu = null
-    this.state.marquee = null
-    this.applyTheme()
-  }
-
-  private undo(): void {
-    if (!this.canUndo()) {
-      return
-    }
-
-    const snapshot = this.historyPast.pop()
-    if (!snapshot) {
-      return
-    }
-
-    this.historyFuture.push(this.createHistorySnapshot())
-    this.applyHistorySnapshot(snapshot)
-    this.setStatus('status.undoApplied')
-    this.render()
-    scheduleAutosave(this, 'status.saved')
-  }
-
-  private redo(): void {
-    if (!this.canRedo()) {
-      return
-    }
-
-    const snapshot = this.historyFuture.pop()
-    if (!snapshot) {
-      return
-    }
-
-    this.historyPast.push(this.createHistorySnapshot())
-    this.applyHistorySnapshot(snapshot)
-    this.setStatus('status.redoApplied')
-    this.render()
-    scheduleAutosave(this, 'status.saved')
-  }
-
-  private scheduleLiveNodeUpdate(nodeId: string, includeDimensions = false): void {
+  scheduleLiveNodeUpdate(nodeId: string, includeDimensions = false): void {
     this.liveNodeIds.add(nodeId)
     if (includeDimensions) {
       this.liveNodeDimensionIds.add(nodeId)
@@ -6143,7 +1610,7 @@ export class MindMapApp {
     })
   }
 
-  private flushLiveNodeUpdate(): void {
+  flushLiveNodeUpdate(): void {
     if (this.liveCanvasHandle === null) {
       return
     }
@@ -6202,38 +1669,11 @@ export class MindMapApp {
     this.refs.edgeLayer.innerHTML = renderEdges(this)
   }
 
-  private applyMarqueeSelection(marquee: MarqueeState): void {
-    const selectionRect = normalizeClientRect(
-      marquee.startClientX,
-      marquee.startClientY,
-      marquee.currentClientX,
-      marquee.currentClientY,
-    )
-    const matchedIds = this.state.document.nodes
-      .map((node) => {
-        const element = this.rootEl.querySelector<HTMLElement>(`[data-node-id="${node.id}"]`)
-        if (!element) {
-          return null
-        }
-
-        return rectanglesIntersect(selectionRect, element.getBoundingClientRect()) ? node.id : null
-      })
-      .filter((nodeId): nodeId is string => Boolean(nodeId))
-
-    if (matchedIds.length === 0) {
-      this.render()
-      return
-    }
-
-    this.setSelection(matchedIds, matchedIds[matchedIds.length - 1])
-    this.render()
-  }
-
   setStatus(key: TranslationKey, values?: Record<string, string | number>): void {
     this.state.status = { key, values }
   }
 
-  private setCanvasPanning(active: boolean): void {
+  setCanvasPanning(active: boolean): void {
     this.refs?.scroll.classList.toggle('is-panning', active)
   }
 
@@ -6259,7 +1699,7 @@ export class MindMapApp {
     }
   }
 
-  private zoomBy(factor: number): void {
+  zoomBy(factor: number): void {
     if (!this.refs) {
       return
     }
@@ -6272,7 +1712,7 @@ export class MindMapApp {
     this.uxEngine.animateZoom(this.viewport.scale, targetScale, centerX, centerY, this.viewport.x, this.viewport.y)
   }
 
-  private zoomReset(): void {
+  zoomReset(): void {
     if (!this.refs) {
       return
     }
@@ -6284,7 +1724,7 @@ export class MindMapApp {
     this.uxEngine.animateZoom(this.viewport.scale, 1, centerX, centerY, this.viewport.x, this.viewport.y)
   }
 
-  private zoomFit(): void {
+  zoomFit(): void {
     if (!this.refs) {
       return
     }
@@ -6412,7 +1852,7 @@ export class MindMapApp {
     this.graphHitNodes = []
   }
 
-  private selectGraphNodeAtPoint(clientX: number, clientY: number): string | null {
+  selectGraphNodeAtPoint(clientX: number, clientY: number): string | null {
     const canvas = this.rootEl.querySelector<HTMLCanvasElement>('[data-graph-canvas]')
     if (!canvas) {
       return null

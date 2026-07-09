@@ -382,3 +382,6 @@ export interface CopiedSubtree {
 }
 
 export const PRIORITY_VALUES: Priority[] = ['', 'P0', 'P1', 'P2', 'P3']
+
+export const MIN_ZOOM = 0.4
+export const MAX_ZOOM = 2.4
