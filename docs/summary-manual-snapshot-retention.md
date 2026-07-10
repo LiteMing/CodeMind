@@ -1,6 +1,6 @@
 # 手动快照保留策略修复总结
 
-日期：2026-07-10 ｜ 分支：feat/ai-rollback-visibility
+日期：2026-07-10 ｜ 分支：feat/ai-rollback-visibility ｜ 版本：1.10.1
 
 ## 完成内容
 
@@ -16,6 +16,7 @@
 - `cd frontend && npm run lint`：通过。
 - `cd frontend && npm run build`：通过。
 - `go test ./...`：通过。
+- `npm run build:desktop`：通过，生成 `build/bin/CodeMind-1.10.1.exe`，Windows 资源与 ProductVersion 校验通过。
 
 ## 遗留边界
 

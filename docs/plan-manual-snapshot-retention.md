@@ -1,6 +1,6 @@
 # 手动快照保留策略修复计划
 
-日期：2026-07-10 ｜ 分支：feat/ai-rollback-visibility
+日期：2026-07-10 ｜ 分支：feat/ai-rollback-visibility ｜ 版本：1.10.1
 
 ## 目标
 
@@ -21,3 +21,4 @@
 - `cd frontend && npm run lint`
 - `cd frontend && npm run build`
 - `go test ./...`
+- `npm run build:desktop`
