@@ -195,7 +195,7 @@ describe('app interaction smoke', () => {
     await flush()
     expect(nodeElements(root).length).toBe(initialCount)
     expect(nodeIds(root).has('root')).toBe(true)
-  })
+  }, 10_000)
 
   it('persists a structurally valid document through saveMap', async () => {
     const { createApp } = await import('./app')

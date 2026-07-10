@@ -27,6 +27,7 @@ function addChild(doc: MindMapDocument, parentId: string, title: string): MindNo
     title,
     kind: 'topic',
     parentId,
+    order: childrenOf(doc, parentId).length + 1,
     position: nextChildPosition(doc, parentId),
   })
   doc.nodes.push(node)

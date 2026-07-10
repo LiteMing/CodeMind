@@ -46,6 +46,14 @@
 取得当前 revision，再执行写入；成功响应会同时返回新的 revision。陈旧 revision 会得到冲突错误，
 必须重新读取后再决定如何合并，不能盲目重试覆盖。
 
+节点读写契约同时包含：
+
+- `order`：有父级节点的 1-based 同级语义顺序。create 省略时追加；update 可与 `parentId` 一起完成移动和插入。
+- `bindings`：代码绑定数组，每项包含全图唯一的 `id`、`type`、仓库相对 `path`，以及可选 `symbol`、`glob`、`contentHash`。
+- binding type 为 `file | directory | glob | symbol | asset`；`symbol`/`glob` 类型必须提供同名专属字段。
+- 路径使用 `/`，不得使用绝对路径、Windows 盘符、UNC 或 `..`。update 传入 `bindings` 时会替换整组，传 `[]` 可清空。
+- `batch_operations` 的 create/update payload 与单节点工具使用相同字段；`import_fragment` 的每个节点也可携带 order/bindings。
+
 ## 2. 在 VS Code 插件中调用
 
 ### 安装/开发运行

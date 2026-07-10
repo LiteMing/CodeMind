@@ -15,6 +15,7 @@ import type {
   ShareAccessLevel,
   ShareToken,
 } from './types'
+import { normalizeDocumentSemantics } from './document'
 
 const JSON_HEADERS = {
   'Content-Type': 'application/json',
@@ -395,7 +396,7 @@ export function isRevisionConflictError(error: unknown): error is APIError {
 }
 
 function normalizeDocument(document: MindMapDocument): MindMapDocument {
-  return {
+  return normalizeDocumentSemantics({
     ...document,
     meta: {
       ...document.meta,
@@ -416,7 +417,7 @@ function normalizeDocument(document: MindMapDocument): MindMapDocument {
       ),
     })),
     regions: document.regions ?? [],
-  }
+  })
 }
 
 function normalizeRevision(value: unknown): number {

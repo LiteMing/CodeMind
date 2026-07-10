@@ -1,5 +1,5 @@
 import type { AITemplateId, Locale, MindMapDocument, Priority, RelationEdge } from './types'
-import { createDefaultDocument, createId, createNode, findRoot, touchDocument } from './document'
+import { createDefaultDocument, createId, createNode, findRoot, nextSiblingOrder, touchDocument } from './document'
 
 export const AI_TEMPLATES: Array<{ id: AITemplateId }> = [
   { id: 'concept-graph' },
@@ -88,6 +88,7 @@ export function createTemplateDocument(templateId: AITemplateId, locale: Locale)
       position: { x, y },
       kind: parentId ? 'topic' : 'floating',
       parentId: parentId || undefined,
+      order: nextSiblingOrder(doc, parentId || undefined),
     })
     node.priority = priority
     node.createdAt = now

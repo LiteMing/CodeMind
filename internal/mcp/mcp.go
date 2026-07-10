@@ -358,7 +358,7 @@ func (s *MCPServer) buildHTTPRequest(name string, args map[string]any) (method s
 
 func buildCreatePayload(args map[string]any) map[string]any {
 	payload := map[string]any{}
-	for _, key := range []string{"parentId", "title", "note", "kind", "priority", "color"} {
+	for _, key := range []string{"parentId", "order", "title", "note", "kind", "priority", "color", "bindings"} {
 		if v, ok := args[key]; ok {
 			payload[key] = v
 		}
@@ -368,7 +368,7 @@ func buildCreatePayload(args map[string]any) map[string]any {
 
 func buildUpdatePayload(args map[string]any) map[string]any {
 	payload := map[string]any{}
-	for _, key := range []string{"title", "note", "priority", "color", "collapsed"} {
+	for _, key := range []string{"parentId", "order", "title", "note", "priority", "color", "bindings", "collapsed"} {
 		if v, ok := args[key]; ok {
 			payload[key] = v
 		}
@@ -378,12 +378,36 @@ func buildUpdatePayload(args map[string]any) map[string]any {
 
 func buildImportFragmentPayload(args map[string]any) map[string]any {
 	payload := map[string]any{}
-	if nodes, ok := args["nodes"]; ok {
-		payload["nodes"] = nodes
+	nodes, ok := args["nodes"]
+	if !ok {
+		return payload
 	}
-	if parentID, ok := args["parentId"]; ok {
-		payload["parentId"] = parentID
+
+	// The REST contract stores parentId on each top-level fragment node. Keep
+	// the MCP convenience argument by applying it only where a node omits one.
+	parentID, _ := args["parentId"].(string)
+	if strings.TrimSpace(parentID) != "" {
+		if nodeList, isList := nodes.([]any); isList {
+			withParent := make([]any, len(nodeList))
+			for index, item := range nodeList {
+				node, isObject := item.(map[string]any)
+				if !isObject {
+					withParent[index] = item
+					continue
+				}
+				copyOfNode := make(map[string]any, len(node)+1)
+				for key, value := range node {
+					copyOfNode[key] = value
+				}
+				if existing, hasParent := copyOfNode["parentId"].(string); !hasParent || strings.TrimSpace(existing) == "" {
+					copyOfNode["parentId"] = parentID
+				}
+				withParent[index] = copyOfNode
+			}
+			nodes = withParent
+		}
 	}
+	payload["nodes"] = nodes
 	return payload
 }
 
@@ -551,7 +575,7 @@ func getToolManifest() []mcpTool {
 		},
 		{
 			Name:        "create_node",
-			Description: "Create a new node using optimistic concurrency. Read the map revision first, then pass it as expectedRevision. Returns the new revision and created node.",
+			Description: "Create a new node using optimistic concurrency. Optional order inserts it at that sibling position; bindings attach repository-relative code anchors. Returns the new revision and created node.",
 			InputSchema: json.RawMessage(`{
 				"type": "object",
 				"properties": {
@@ -567,6 +591,11 @@ func getToolManifest() []mcpTool {
 					"parentId": {
 						"type": "string",
 						"description": "The ID of the parent node to attach the new node under"
+					},
+					"order": {
+						"type": "integer",
+						"minimum": 1,
+						"description": "Optional 1-based sibling position. Omit to append after existing siblings."
 					},
 					"title": {
 						"type": "string",
@@ -590,6 +619,22 @@ func getToolManifest() []mcpTool {
 						"type": "string",
 						"description": "Node color: '' (default), 'slate', 'blue', 'teal', 'green', 'amber', 'rose', 'violet'",
 						"enum": ["", "slate", "blue", "teal", "green", "amber", "rose", "violet"]
+					},
+					"bindings": {
+						"type": "array",
+						"description": "Repository-relative code bindings. Binding IDs must be unique across the map.",
+						"items": {
+							"type": "object",
+							"properties": {
+								"id": {"type": "string", "description": "Stable binding ID, unique across the map"},
+								"type": {"type": "string", "enum": ["file", "directory", "glob", "symbol", "asset"]},
+								"path": {"type": "string", "description": "Repository-relative path using forward slashes; absolute and '..' paths are rejected"},
+								"symbol": {"type": "string", "description": "Required only for symbol bindings"},
+								"glob": {"type": "string", "description": "Required only for glob bindings"},
+								"contentHash": {"type": "string", "description": "Optional content hash for future rename tracking"}
+							},
+							"required": ["id", "type", "path"]
+						}
 					}
 				},
 				"required": ["mapId", "expectedRevision", "parentId", "title"]
@@ -597,7 +642,7 @@ func getToolManifest() []mcpTool {
 		},
 		{
 			Name:        "update_node",
-			Description: "Update fields of an existing node using optimistic concurrency. Returns the new map revision and updated node.",
+			Description: "Update or move an existing node using optimistic concurrency. parentId and order change its semantic sibling placement; bindings replaces the node's binding list. Returns the new revision and updated node.",
 			InputSchema: json.RawMessage(`{
 				"type": "object",
 				"properties": {
@@ -613,6 +658,15 @@ func getToolManifest() []mcpTool {
 						"type": "integer",
 						"minimum": 1,
 						"description": "Current map revision returned by list_maps, get_tree, or get_node"
+					},
+					"parentId": {
+						"type": "string",
+						"description": "New parent node ID. Use with order to move and insert the node among the new parent's children."
+					},
+					"order": {
+						"type": "integer",
+						"minimum": 1,
+						"description": "New 1-based sibling position. Existing siblings are shifted and both sibling groups are compacted after a move."
 					},
 					"title": {
 						"type": "string",
@@ -635,6 +689,22 @@ func getToolManifest() []mcpTool {
 					"collapsed": {
 						"type": "boolean",
 						"description": "Whether the node's children should be collapsed/hidden"
+					},
+					"bindings": {
+						"type": "array",
+						"description": "Replacement repository binding list. Pass [] to clear all bindings.",
+						"items": {
+							"type": "object",
+							"properties": {
+								"id": {"type": "string", "description": "Stable binding ID, unique across the map"},
+								"type": {"type": "string", "enum": ["file", "directory", "glob", "symbol", "asset"]},
+								"path": {"type": "string", "description": "Repository-relative path using forward slashes; absolute and '..' paths are rejected"},
+								"symbol": {"type": "string", "description": "Required only for symbol bindings"},
+								"glob": {"type": "string", "description": "Required only for glob bindings"},
+								"contentHash": {"type": "string", "description": "Optional content hash for future rename tracking"}
+							},
+							"required": ["id", "type", "path"]
+						}
 					}
 				},
 				"required": ["mapId", "nodeId", "expectedRevision"]
@@ -699,7 +769,33 @@ func getToolManifest() []mcpTool {
 								},
 								"payload": {
 									"type": "object",
-									"description": "Operation payload (fields depend on action type)"
+									"description": "Operation payload. create accepts parentId/order/title/note/kind/priority/color/bindings; update also supports moving via parentId/order and replacing bindings; delete accepts cascade.",
+									"properties": {
+										"parentId": {"type": "string"},
+										"order": {"type": "integer", "minimum": 1},
+										"title": {"type": "string"},
+										"note": {"type": "string"},
+										"kind": {"type": "string", "enum": ["topic", "floating"]},
+										"priority": {"type": "string", "enum": ["", "P0", "P1", "P2", "P3"]},
+										"color": {"type": "string", "enum": ["", "slate", "blue", "teal", "green", "amber", "rose", "violet"]},
+										"collapsed": {"type": "boolean"},
+										"cascade": {"type": "boolean"},
+										"bindings": {
+											"type": "array",
+											"items": {
+												"type": "object",
+												"properties": {
+													"id": {"type": "string"},
+													"type": {"type": "string", "enum": ["file", "directory", "glob", "symbol", "asset"]},
+													"path": {"type": "string"},
+													"symbol": {"type": "string"},
+													"glob": {"type": "string"},
+													"contentHash": {"type": "string"}
+												},
+												"required": ["id", "type", "path"]
+											}
+										}
+									}
 								}
 							},
 							"required": ["action"]
@@ -711,7 +807,7 @@ func getToolManifest() []mcpTool {
 		},
 		{
 			Name:        "import_fragment",
-			Description: "Import a JSON subtree at an expected map revision. Returns the new revision and created nodes.",
+			Description: "Import a JSON subtree at an expected map revision. Nodes may include explicit sibling order and repository bindings. Returns the new revision and created nodes.",
 			InputSchema: json.RawMessage(`{
 				"type": "object",
 				"properties": {
@@ -726,7 +822,7 @@ func getToolManifest() []mcpTool {
 					},
 					"parentId": {
 						"type": "string",
-						"description": "The ID of the parent node to attach the imported subtree under. Defaults to root if omitted."
+						"description": "Convenience parent applied to each top-level fragment node that omits parentId. Defaults to root if omitted."
 					},
 					"nodes": {
 						"type": "array",
@@ -734,6 +830,15 @@ func getToolManifest() []mcpTool {
 						"items": {
 							"type": "object",
 							"properties": {
+								"parentId": {
+									"type": "string",
+									"description": "Parent override for this top-level fragment node; nested children attach to their containing fragment node"
+								},
+								"order": {
+									"type": "integer",
+									"minimum": 1,
+									"description": "Optional 1-based sibling insertion position"
+								},
 								"title": {
 									"type": "string",
 									"description": "Node title"
@@ -741,6 +846,23 @@ func getToolManifest() []mcpTool {
 								"note": {
 									"type": "string",
 									"description": "Optional node note"
+								},
+								"priority": {"type": "string", "enum": ["", "P0", "P1", "P2", "P3"]},
+								"color": {"type": "string", "enum": ["", "slate", "blue", "teal", "green", "amber", "rose", "violet"]},
+								"bindings": {
+									"type": "array",
+									"items": {
+										"type": "object",
+										"properties": {
+											"id": {"type": "string"},
+											"type": {"type": "string", "enum": ["file", "directory", "glob", "symbol", "asset"]},
+											"path": {"type": "string"},
+											"symbol": {"type": "string"},
+											"glob": {"type": "string"},
+											"contentHash": {"type": "string"}
+										},
+										"required": ["id", "type", "path"]
+									}
 								},
 								"children": {
 									"type": "array",

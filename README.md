@@ -24,6 +24,8 @@
 - **Compact 模式**：?compact=true 省略 43% 冗余字段，节省 AI token
 - **实时刷新**：API 写入后前端 2 秒内自动检测并刷新，新节点有淡入动画
 - **乐观并发**：真实 document revision + ETag/If-Match，陈旧写入返回 412，不再静默覆盖
+- **代码语义锚点**：节点可绑定仓库文件、目录、glob、symbol 或 asset，并以稳定 ID 持久化
+- **稳定同级顺序**：节点使用显式 order，树结构不再因画布拖动或坐标变化而重排
 
 ### 数据存储
 - 本地 JSON 文件，零云依赖
@@ -71,7 +73,7 @@
 - 3D 浮动图谱（搜索、拖拽旋转、跳转）
 - 本地 JSON 持久化
 - Markdown 导出、Markdown/TXT 导入
-- **协作 API**：节点级 CRUD、批量操作、片段导入、compact 模式
+- **协作 API**：节点级 CRUD、批量操作、片段导入、compact 模式、代码绑定与显式同级顺序
 - **实时刷新**：API 写入后前端自动检测并刷新
 - Wails 桌面打包
 

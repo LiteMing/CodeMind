@@ -2,7 +2,7 @@ import type { MindMapApp } from '../app'
 import { captureActiveNodeEditorDraft, restoreActiveNodeEditorDraft } from '../interaction/editor'
 import { resetHistory } from '../state/ops'
 import { api, isRevisionConflictError } from '../api'
-import { findRoot, tidySubtree, touchDocument } from '../document'
+import { findRoot, normalizeDocumentSemantics, tidySubtree, touchDocument } from '../document'
 import { downloadTextFile, getErrorMessage, slugify } from '../utils'
 import { listLocalSnapshots, saveLocalSnapshot } from '../snapshots'
 import type { TranslationKey } from '../i18n'
@@ -209,14 +209,15 @@ function setMapMutationErrorStatus(app: MindMapApp, error: unknown): void {
 }
 
 export function openLoadedDocument(app: MindMapApp, document: MindMapDocument, statusKey: TranslationKey): void {
-  app.state.document = document
-  app.state.currentMapId = document.id
+  const normalizedDocument = normalizeDocumentSemantics(document)
+  app.state.document = normalizedDocument
+  app.state.currentMapId = normalizedDocument.id
   app.state.snapshotDraftName = ''
   app.state.view = 'map'
   app.state.ai.open = false
   app.state.graph.open = false
   app.stopGraphAnimation()
-  app.setSelection([findRoot(document).id], findRoot(document).id)
+  app.setSelection([findRoot(normalizedDocument).id], findRoot(normalizedDocument).id)
   app.state.connectSourceNodeId = null
   app.state.resize = null
   app.state.regionResize = null

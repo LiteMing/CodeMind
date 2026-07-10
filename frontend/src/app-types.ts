@@ -7,6 +7,7 @@ import type {
   MindMapDocument,
   MindMapSummary,
   MindNode,
+  NodeBinding,
   NodeColor,
   Position,
   Priority,
@@ -385,10 +386,12 @@ export interface CopiedSubtreeNode {
   id: string
   parentId?: string
   kind: MindNode['kind']
+  order: number
   title: string
   note?: string
   priority?: Priority
   color?: NodeColor
+  bindings: NodeBinding[]
   collapsed?: boolean
   width?: number
   height?: number

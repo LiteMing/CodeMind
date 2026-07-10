@@ -1,5 +1,5 @@
 import { estimateNodeHeight, estimateNodeWidth, resolveNodeMinHeight, resolveNodeMinWidth } from './node-sizing'
-import type { LayoutMode, MindMapDocument, MindNode, Position, RelationEdge } from './types'
+import type { LayoutMode, MindMapDocument, MindNode, NodeBinding, Position, RelationEdge } from './types'
 
 const ROOT_POSITION: Position = { x: 820, y: 320 }
 const DEFAULT_CHILD_GAP_X = 220
@@ -20,7 +20,9 @@ export function createDefaultDocument(): MindMapDocument {
       {
         id: 'root',
         kind: 'root',
+        order: 0,
         title: 'New Mind Map',
+        bindings: [],
         position: ROOT_POSITION,
         createdAt: now,
         updatedAt: now,
@@ -42,7 +44,9 @@ export function createNode(input: {
   position: Position
   kind: MindNode['kind']
   parentId?: string
+  order: number
   color?: MindNode['color']
+  bindings?: NodeBinding[]
 }): MindNode {
   const now = new Date().toISOString()
   return {
@@ -50,7 +54,9 @@ export function createNode(input: {
     title: input.title,
     kind: input.kind,
     parentId: input.parentId,
+    order: input.parentId ? input.order : 0,
     color: input.color,
+    bindings: input.bindings?.map((binding) => ({ ...binding })) ?? [],
     position: input.position,
     createdAt: now,
     updatedAt: now,
@@ -73,11 +79,191 @@ export function childrenOf(document: MindMapDocument, parentId: string): MindNod
   return document.nodes
     .filter((node) => node.parentId === parentId)
     .sort((left, right) => {
+      if (left.order > 0 && right.order > 0 && left.order !== right.order) {
+        return left.order - right.order
+      }
       if (left.position.y !== right.position.y) {
         return left.position.y - right.position.y
       }
-      return left.position.x - right.position.x
+      if (left.position.x !== right.position.x) {
+        return left.position.x - right.position.x
+      }
+      return left.id.localeCompare(right.id)
     })
+}
+
+export function nextSiblingOrder(document: MindMapDocument, parentId?: string): number {
+  return parentId ? childrenOf(document, parentId).length + 1 : 0
+}
+
+export function normalizeDocumentSemantics(document: MindMapDocument): MindMapDocument {
+  for (const node of document.nodes) {
+    node.bindings = Array.isArray(node.bindings) ? node.bindings.map((binding) => ({ ...binding })) : []
+    if (!node.parentId) {
+      node.order = 0
+    }
+  }
+
+  const parentIds = new Set(
+    document.nodes.map((node) => node.parentId).filter((parentId): parentId is string => Boolean(parentId)),
+  )
+  for (const parentId of parentIds) {
+    normalizeLegacySiblingGroup(document, parentId)
+  }
+  return document
+}
+
+export function normalizeSiblingOrders(document: MindMapDocument, parentId: string): void {
+  childrenOf(document, parentId).forEach((node, index) => {
+    node.order = index + 1
+  })
+}
+
+export function normalizeAllSiblingOrders(document: MindMapDocument): void {
+  const parentIds = new Set<string>()
+  for (const node of document.nodes) {
+    if (!node.parentId) {
+      node.order = 0
+      continue
+    }
+    parentIds.add(node.parentId)
+  }
+  for (const parentId of parentIds) {
+    normalizeSiblingOrders(document, parentId)
+  }
+}
+
+export function setNodeParent(
+  document: MindMapDocument,
+  nodeId: string,
+  parentId?: string,
+  targetOrder?: number,
+): boolean {
+  const node = findNode(document, nodeId)
+  if (!node) {
+    return false
+  }
+
+  const normalizedParentId = parentId?.trim() || undefined
+  const previousParentId = node.parentId
+  if (previousParentId === normalizedParentId && targetOrder === undefined) {
+    node.order = normalizedParentId ? node.order : 0
+    return false
+  }
+
+  const destination = normalizedParentId
+    ? childrenOf(document, normalizedParentId).filter((candidate) => candidate.id !== node.id)
+    : []
+  node.parentId = normalizedParentId
+  node.order = normalizedParentId ? 1 : 0
+
+  if (previousParentId && previousParentId !== normalizedParentId) {
+    normalizeSiblingOrders(document, previousParentId)
+  }
+  if (normalizedParentId) {
+    const insertionIndex =
+      targetOrder === undefined
+        ? destination.length
+        : Math.max(0, Math.min(destination.length, Math.trunc(targetOrder) - 1))
+    destination.splice(insertionIndex, 0, node)
+    destination.forEach((sibling, index) => {
+      sibling.order = index + 1
+    })
+  }
+  return previousParentId !== normalizedParentId || targetOrder !== undefined
+}
+
+export function deleteNodesPromotingChildren(document: MindMapDocument, nodeIds: Set<string>): number {
+  const root = findRoot(document)
+  const removeIds = new Set(
+    [...nodeIds].filter((nodeId) => {
+      const node = findNode(document, nodeId)
+      return Boolean(node && node.id !== root.id)
+    }),
+  )
+  if (removeIds.size === 0) {
+    return 0
+  }
+
+  const childrenByParent = new Map<string, MindNode[]>()
+  for (const node of document.nodes) {
+    if (node.parentId) {
+      childrenByParent.set(node.parentId, childrenOf(document, node.parentId))
+    }
+  }
+  const expand = (node: MindNode): MindNode[] => {
+    if (!removeIds.has(node.id)) {
+      return [node]
+    }
+    return (childrenByParent.get(node.id) ?? []).flatMap(expand)
+  }
+
+  const affectedParentIds = new Set<string | undefined>()
+  for (const nodeId of removeIds) {
+    const node = findNode(document, nodeId)
+    if (node && (!node.parentId || !removeIds.has(node.parentId))) {
+      affectedParentIds.add(node.parentId)
+    }
+  }
+  for (const parentId of affectedParentIds) {
+    const siblings = parentId
+      ? childrenOf(document, parentId)
+      : document.nodes.filter((node) => !node.parentId && node.id !== root.id).sort(compareNodesByPosition)
+    const replacements = siblings.flatMap(expand)
+    replacements.forEach((node, index) => {
+      node.parentId = parentId
+      node.order = parentId ? index + 1 : 0
+      if (!parentId) {
+        node.kind = 'floating'
+      }
+    })
+  }
+
+  document.nodes = document.nodes.filter((node) => !removeIds.has(node.id))
+  normalizeAllSiblingOrders(document)
+  return removeIds.size
+}
+
+function normalizeLegacySiblingGroup(document: MindMapDocument, parentId: string): void {
+  const siblings = document.nodes.filter((node) => node.parentId === parentId)
+  const allPositiveOrders = siblings.every((node) => Number.isSafeInteger(node.order) && node.order > 0)
+  const uniquePositiveOrders = new Set(siblings.map((node) => node.order))
+  if (allPositiveOrders && uniquePositiveOrders.size === siblings.length) {
+    siblings
+      .sort((left, right) => left.order - right.order || left.id.localeCompare(right.id))
+      .forEach((node, index) => {
+        node.order = index + 1
+      })
+    return
+  }
+
+  const orderCounts = new Map<number, number>()
+  for (const node of siblings) {
+    if (Number.isSafeInteger(node.order) && node.order > 0 && node.order <= siblings.length) {
+      orderCounts.set(node.order, (orderCounts.get(node.order) ?? 0) + 1)
+    }
+  }
+
+  const reserved = new Map<number, MindNode>()
+  const missing: MindNode[] = []
+  for (const node of siblings) {
+    if (orderCounts.get(node.order) === 1) {
+      reserved.set(node.order, node)
+    } else {
+      missing.push(node)
+    }
+  }
+  missing.sort(compareNodesByPosition)
+
+  let missingIndex = 0
+  for (let order = 1; order <= siblings.length; order += 1) {
+    const node = reserved.get(order) ?? missing[missingIndex++]
+    node.order = order
+  }
+}
+
+function compareNodesByPosition(left: MindNode, right: MindNode): number {
+  return left.position.y - right.position.y || left.position.x - right.position.x || left.id.localeCompare(right.id)
 }
 
 export function connectedRelations(document: MindMapDocument, nodeId: string): RelationEdge[] {
@@ -418,6 +604,7 @@ export function deleteNodeTree(
       ...relation,
       branches: (relation.branches ?? []).filter((branch) => !removeIds.has(branch.targetId)),
     }))
+  normalizeAllSiblingOrders(document)
 
   return {
     removedNodes: nodeCountBefore - document.nodes.length,

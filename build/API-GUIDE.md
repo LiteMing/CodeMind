@@ -46,9 +46,10 @@ If-Match: "rev-7"
 ## 核心概念
 
 - **Map**：一个脑图文档，包含多个节点
-- **Node**：脑图中的一个节点，有 id、parentId（父节点）、title、note、kind、priority、color、position
+- **Node**：脑图中的一个节点，有 id、parentId（父节点）、order（同级语义顺序）、bindings（代码绑定）、title、note、kind、priority、color、position
 - **Root Node**：每个 map 有且仅有一个根节点（kind="root"），不可删除
 - **Position**：节点在画布上的坐标 {x, y}，创建时可省略（自动计算）
+- **Binding**：节点到仓库文件、目录、glob、symbol 或 asset 的稳定语义锚点
 
 ### 字段有效值
 
@@ -57,6 +58,17 @@ If-Match: "rev-7"
 | kind | `root`、`topic`、`floating` | `topic` |
 | priority | `""`、`P0`、`P1`、`P2`、`P3` | `""` |
 | color | `""`、`slate`、`blue`、`teal`、`green`、`amber`、`rose`、`violet` | `""` |
+| binding.type | `file`、`directory`、`glob`、`symbol`、`asset` | 无 |
+
+### Order 与代码绑定
+
+- 有父级的节点使用从 `1` 开始、同一父级内连续且唯一的 `order`；root 和无父级 floating 节点为 `0`。
+- 创建时省略 `order` 会追加到同级末尾；指定 order 会插入该位置并顺移后续节点。
+- PATCH 可用 `parentId` 与 `order` 移动节点；旧父级和新父级的 order 都会自动压紧。
+- 画布坐标只负责布局，拖动节点不会改变 order；树、compact 响应和 Agent 应以 order 为准。
+- `bindings` 每项必须包含全图唯一的 `id`、`type` 和仓库相对 `path`。路径统一为 `/`，拒绝绝对路径、盘符、UNC 和 `..`。
+- `symbol` 类型必须提供 `symbol`，`glob` 类型必须提供 `glob`；其他类型不得携带这两个专属字段。
+- 可选 `contentHash` 仅作为未来 rename-follow 的锚点，本阶段不会扫描仓库或自动跟踪重命名。
 
 ### 实时刷新行为
 
@@ -101,7 +113,11 @@ GET /api/maps/{mapId}/tree?compact=true   ← 推荐，省略 position/timestamp
   "children": [
     {
       "id": "node-xxx",
+      "order": 1,
       "title": "模块A",
+      "bindings": [
+        {"id": "binding-module-a", "type": "directory", "path": "internal/module-a"}
+      ],
       "children": [...]
     }
   ]
@@ -134,15 +150,24 @@ If-Match: "rev-7"
 
 {
   "parentId": "root",       // 必填：挂载到哪个父节点下
+  "order": 2,                // 可选：1-based 同级插入位置；省略则追加
   "title": "新节点标题",     // 必填
   "note": "详细说明",        // 可选
   "kind": "topic",          // 可选，默认 "topic"
   "priority": "P1",         // 可选：""、"P0"、"P1"、"P2"、"P3"
-  "color": "blue"           // 可选
+  "color": "blue",          // 可选
+  "bindings": [              // 可选：仓库语义绑定
+    {
+      "id": "binding-auth-handler",
+      "type": "symbol",
+      "path": "internal/auth/handler.go",
+      "symbol": "LoginHandler"
+    }
+  ]
 }
 ```
 
-后端自动补全：id、position、createdAt、updatedAt。返回完整节点。
+后端自动补全：id、未指定的 order、position、createdAt、updatedAt。返回完整节点。
 
 ### 修改节点（部分更新）
 
@@ -152,12 +177,15 @@ Content-Type: application/json
 If-Match: "rev-7"
 
 {
-  "title": "新标题",    // 只传要改的字段
-  "note": "新备注"
+  "parentId": "node-platform", // 可选：移动到新父节点
+  "order": 1,                    // 可选：在目标同级中的位置
+  "title": "新标题",             // 只传要改的字段
+  "note": "新备注",
+  "bindings": []                 // 传 [] 清空；非空数组整组替换
 }
 ```
 
-可更新字段：title、note、priority、color、collapsed。其他字段不可通过 PATCH 修改。
+可更新字段：parentId、order、title、note、priority、color、bindings、collapsed。`bindings` 是整组替换语义，不是增量合并。
 
 ### 删除节点
 
@@ -168,7 +196,8 @@ If-Match: "rev-7"
 ```
 
 - `cascade=true`（默认）：删除节点及所有后代
-- `cascade=false`：仅删除该节点，子节点自动挂到上级
+- `cascade=false`：仅删除该节点，子节点自动挂到上级并替换其原顺序位置
+- 删除后同级 order 自动压紧为连续整数
 - 根节点不可删除
 
 ### 批量操作（原子性）
@@ -180,8 +209,8 @@ If-Match: "rev-7"
 
 {
   "operations": [
-    {"action": "create", "payload": {"parentId": "root", "title": "节点1"}},
-    {"action": "update", "nodeId": "node-xxx", "payload": {"title": "改名"}},
+    {"action": "create", "payload": {"parentId": "root", "order": 1, "title": "节点1", "bindings": []}},
+    {"action": "update", "nodeId": "node-xxx", "payload": {"parentId": "node-yyy", "order": 2, "title": "改名"}},
     {"action": "delete", "nodeId": "node-yyy", "payload": {"cascade": true}}
   ]
 }
@@ -201,9 +230,13 @@ If-Match: "rev-7"
     {
       "title": "模块A",
       "note": "说明",
+      "order": 1,
+      "bindings": [
+        {"id": "binding-module-a", "type": "directory", "path": "internal/module-a"}
+      ],
       "children": [
-        {"title": "子模块1"},
-        {"title": "子模块2", "children": [{"title": "细节"}]}
+        {"title": "子模块1", "order": 1},
+        {"title": "子模块2", "order": 2, "children": [{"title": "细节"}]}
       ]
     }
   ]
@@ -211,7 +244,8 @@ If-Match: "rev-7"
 ```
 
 - `parentId` 省略时默认挂到 root 下
-- 递归创建整棵子树，自动补全所有字段
+- 每个 fragment 节点均可携带 `order` 和 `bindings`
+- 递归创建整棵子树，自动补全未指定字段并维护连续 order
 - 返回所有创建的节点（扁平数组）
 
 ### 版本检测（冲突检查）

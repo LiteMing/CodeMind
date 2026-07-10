@@ -18,12 +18,25 @@ export interface MapSummary {
   updatedAt?: string;
 }
 
+export type BindingType = 'file' | 'directory' | 'glob' | 'symbol' | 'asset';
+
+export interface NodeBinding {
+  id: string;
+  type: BindingType;
+  path: string;
+  symbol?: string;
+  glob?: string;
+  contentHash?: string;
+}
+
 export interface NodeData {
   id: string;
   title: string;
   revision?: number;
   note?: string;
   parentId?: string;
+  order?: number;
+  bindings?: NodeBinding[];
   childrenIds?: string[];
   children?: NodeData[];
   [k: string]: unknown;
@@ -33,11 +46,16 @@ export interface CreateNodeRequest {
   parentId: string;
   title: string;
   note?: string;
+  order?: number;
+  bindings?: NodeBinding[];
 }
 
 export interface UpdateNodeRequest {
+  parentId?: string;
+  order?: number;
   title?: string;
   note?: string;
+  bindings?: NodeBinding[];
 }
 
 export class CodeMindAPIError extends Error {
@@ -147,7 +165,7 @@ export class CodeMindAPI {
 
   async deleteNode(mapId: string, nodeId: string, cascade: boolean = true): Promise<void> {
     const expectedRevision = await this.currentRevision(mapId);
-    const query = cascade ? '?cascade=true' : '';
+    const query = cascade ? '?cascade=true' : '?cascade=false';
     await this.request<void>(
       'DELETE',
       `/api/maps/${encodeURIComponent(mapId)}/nodes/${encodeURIComponent(nodeId)}${query}`,

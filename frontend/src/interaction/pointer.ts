@@ -1,6 +1,15 @@
 import type { MindMapApp } from '../app'
 import { runNodeGestureAction } from './commands'
-import { childrenOf, createId, descendantIds, findRoot, touchDocument, visibleNodeIds } from '../document'
+import {
+  childrenOf,
+  createId,
+  deleteNodesPromotingChildren,
+  descendantIds,
+  findRoot,
+  setNodeParent,
+  touchDocument,
+  visibleNodeIds,
+} from '../document'
 import { clamp, clampMin, normalizeClientRect, rectanglesIntersect } from '../utils'
 import { estimateNodeHeight, estimateNodeWidth } from '../node-sizing'
 import { MIN_NODE_HEIGHT, MIN_NODE_WIDTH } from '../node-render'
@@ -672,7 +681,7 @@ export function handlePointerUp(app: MindMapApp, event: PointerEvent): void {
         }
         ops.captureHistory(app)
         childNode.kind = 'topic'
-        childNode.parentId = targetNodeId
+        setNodeParent(app.state.document, childNode.id, targetNodeId)
         touchDocument(app.state.document)
         app.setStatus('status.parentSet')
         scheduleAutosave(app, 'status.saved')
@@ -1502,12 +1511,6 @@ export function executeCutting(app: MindMapApp): void {
   // Capture history snapshot BEFORE making any changes
   ops.captureHistory(app)
 
-  // Capture originalParentIds snapshot before any mutations
-  const originalParentIds = new Map<string, string | undefined>()
-  for (const node of app.state.document.nodes) {
-    originalParentIds.set(node.id, node.parentId)
-  }
-
   const root = findRoot(app.state.document)
 
   // Phase 1: Delete all Relation Edges in the warning list
@@ -1526,12 +1529,11 @@ export function executeCutting(app: MindMapApp): void {
     const childNode = app.state.document.nodes.find((n) => n.id === childId)
     if (childNode) {
       childNode.kind = 'floating'
-      childNode.parentId = undefined
+      setNodeParent(app.state.document, childNode.id)
     }
   }
 
   // Phase 3: Delete all Nodes in the warning list (skip root)
-  // First, promote children of nodes being deleted using originalParentIds
   const nodeIdsToDelete = new Set<string>()
   for (const nodeId of cutting.warningNodeIds) {
     // Skip root node
@@ -1539,23 +1541,9 @@ export function executeCutting(app: MindMapApp): void {
     nodeIdsToDelete.add(nodeId)
   }
 
-  // Promote children: reassign each child's parentId to the deleted node's original parentId
-  for (const nodeId of nodeIdsToDelete) {
-    const originalParentId = originalParentIds.get(nodeId)
-    for (const node of app.state.document.nodes) {
-      if (node.parentId === nodeId && !nodeIdsToDelete.has(node.id)) {
-        node.parentId = originalParentId
-        // If promoted to undefined (was a root-level child), make it floating
-        if (!originalParentId) {
-          node.kind = 'floating'
-        }
-      }
-    }
-  }
-
   // Remove the nodes
   if (nodeIdsToDelete.size > 0) {
-    app.state.document.nodes = app.state.document.nodes.filter((node) => !nodeIdsToDelete.has(node.id))
+    deleteNodesPromotingChildren(app.state.document, nodeIdsToDelete)
     // Also clean up any relations that reference deleted nodes
     app.state.document.relations = app.state.document.relations
       .filter((relation) => !nodeIdsToDelete.has(relation.sourceId) && !nodeIdsToDelete.has(relation.targetId))

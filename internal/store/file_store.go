@@ -324,6 +324,9 @@ func (s *FileStore) saveLocked(doc mindmap.Document, revision uint64) (mindmap.D
 	}
 	doc.Meta.Revision = revision
 	doc.PrepareForSave(time.Now().UTC())
+	if err := doc.NormalizeSemantics(); err != nil {
+		return mindmap.Document{}, err
+	}
 	if err := doc.Validate(); err != nil {
 		return mindmap.Document{}, err
 	}
@@ -376,6 +379,9 @@ func (s *FileStore) readDocumentLocked(path string) (mindmap.Document, error) {
 		return mindmap.Document{}, err
 	}
 	doc.NormalizeMetadata()
+	if err := doc.NormalizeSemantics(); err != nil {
+		return mindmap.Document{}, fmt.Errorf("invalid document %s: %w", path, err)
+	}
 	if err := doc.Validate(); err != nil {
 		return mindmap.Document{}, fmt.Errorf("invalid document %s: %w", path, err)
 	}

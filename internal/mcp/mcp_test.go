@@ -289,6 +289,59 @@ func TestBuildHTTPRequest(t *testing.T) {
 	}
 }
 
+func TestBuildNodePayloadsPreserveSemanticFields(t *testing.T) {
+	bindings := []any{
+		map[string]any{
+			"id":     "binding-api-client",
+			"type":   "symbol",
+			"path":   "vscode-extension/src/api-client.ts",
+			"symbol": "CodeMindAPI",
+		},
+	}
+
+	create := buildCreatePayload(map[string]any{
+		"parentId": "root",
+		"order":    float64(2),
+		"title":    "API client",
+		"bindings": bindings,
+	})
+	if create["parentId"] != "root" || create["order"] != float64(2) || create["bindings"] == nil {
+		t.Fatalf("create payload lost semantic fields: %#v", create)
+	}
+
+	update := buildUpdatePayload(map[string]any{
+		"parentId": "node-platform",
+		"order":    float64(1),
+		"bindings": bindings,
+	})
+	if update["parentId"] != "node-platform" || update["order"] != float64(1) || update["bindings"] == nil {
+		t.Fatalf("update payload lost semantic fields: %#v", update)
+	}
+}
+
+func TestBuildImportFragmentPayloadAppliesConvenienceParent(t *testing.T) {
+	payload := buildImportFragmentPayload(map[string]any{
+		"parentId": "node-target",
+		"nodes": []any{
+			map[string]any{"title": "inherits"},
+			map[string]any{"title": "explicit", "parentId": "node-other", "order": float64(2)},
+		},
+	})
+
+	nodes := payload["nodes"].([]any)
+	first := nodes[0].(map[string]any)
+	second := nodes[1].(map[string]any)
+	if first["parentId"] != "node-target" {
+		t.Fatalf("expected convenience parent on first node, got %#v", first)
+	}
+	if second["parentId"] != "node-other" || second["order"] != float64(2) {
+		t.Fatalf("explicit fragment semantics were overwritten: %#v", second)
+	}
+	if _, ok := payload["parentId"]; ok {
+		t.Fatalf("parentId must be stored on fragment nodes, got %#v", payload)
+	}
+}
+
 func TestWriteToolsRequireExpectedRevision(t *testing.T) {
 	srv := newMCPServer()
 	for _, tool := range []string{"create_node", "update_node", "delete_node", "batch_operations", "import_fragment"} {
@@ -319,6 +372,71 @@ func TestWriteToolSchemasRequireExpectedRevision(t *testing.T) {
 		}
 		if !found {
 			t.Fatalf("%s schema does not require expectedRevision", tool.Name)
+		}
+	}
+}
+
+func TestNodeWriteToolSchemasExposeSemanticFields(t *testing.T) {
+	toolsByName := make(map[string]mcpTool)
+	for _, tool := range getToolManifest() {
+		toolsByName[tool.Name] = tool
+	}
+
+	for _, test := range []struct {
+		tool   string
+		fields []string
+	}{
+		{tool: "create_node", fields: []string{"parentId", "order", "bindings"}},
+		{tool: "update_node", fields: []string{"parentId", "order", "bindings"}},
+	} {
+		var schema struct {
+			Properties map[string]json.RawMessage `json:"properties"`
+		}
+		if err := json.Unmarshal(toolsByName[test.tool].InputSchema, &schema); err != nil {
+			t.Fatalf("%s schema is invalid: %v", test.tool, err)
+		}
+		for _, field := range test.fields {
+			if _, ok := schema.Properties[field]; !ok {
+				t.Errorf("%s schema does not expose %s", test.tool, field)
+			}
+		}
+	}
+
+	for _, toolName := range []string{"create_node", "update_node"} {
+		var schema map[string]any
+		if err := json.Unmarshal(toolsByName[toolName].InputSchema, &schema); err != nil {
+			t.Fatal(err)
+		}
+		properties := schema["properties"].(map[string]any)
+		bindings := properties["bindings"].(map[string]any)
+		items := bindings["items"].(map[string]any)
+		bindingProperties := items["properties"].(map[string]any)
+		for _, field := range []string{"id", "type", "path", "symbol", "glob", "contentHash"} {
+			if _, ok := bindingProperties[field]; !ok {
+				t.Errorf("%s binding schema does not expose %s", toolName, field)
+			}
+		}
+	}
+
+	var batchSchema map[string]any
+	if err := json.Unmarshal(toolsByName["batch_operations"].InputSchema, &batchSchema); err != nil {
+		t.Fatal(err)
+	}
+	batchPayloadProperties := batchSchema["properties"].(map[string]any)["operations"].(map[string]any)["items"].(map[string]any)["properties"].(map[string]any)["payload"].(map[string]any)["properties"].(map[string]any)
+	for _, field := range []string{"parentId", "order", "bindings"} {
+		if _, ok := batchPayloadProperties[field]; !ok {
+			t.Errorf("batch operation payload schema does not expose %s", field)
+		}
+	}
+
+	var fragmentSchema map[string]any
+	if err := json.Unmarshal(toolsByName["import_fragment"].InputSchema, &fragmentSchema); err != nil {
+		t.Fatal(err)
+	}
+	fragmentNodeProperties := fragmentSchema["properties"].(map[string]any)["nodes"].(map[string]any)["items"].(map[string]any)["properties"].(map[string]any)
+	for _, field := range []string{"parentId", "order", "bindings"} {
+		if _, ok := fragmentNodeProperties[field]; !ok {
+			t.Errorf("fragment node schema does not expose %s", field)
 		}
 	}
 }

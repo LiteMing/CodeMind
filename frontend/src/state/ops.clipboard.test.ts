@@ -6,14 +6,14 @@
  */
 import { describe, it, expect } from 'vitest'
 import { copySelectedSubtree, cutSelectedSubtree, pasteCopiedSubtree } from './ops'
-import { createDefaultDocument, createNode, findNode } from '../document'
+import { childrenOf, createDefaultDocument, createNode, findNode } from '../document'
 import type { MindMapApp } from '../app'
 import type { MindMapDocument, MindNode, RelationEdge } from '../types'
 
 function buildDocWithRelation(): { doc: MindMapDocument; a: MindNode; b: MindNode } {
   const doc = createDefaultDocument()
-  const a = createNode({ title: 'A', kind: 'topic', parentId: 'root', position: { x: 100, y: 100 } })
-  const b = createNode({ title: 'B', kind: 'topic', parentId: a.id, position: { x: 200, y: 200 } })
+  const a = createNode({ title: 'A', kind: 'topic', parentId: 'root', order: 1, position: { x: 100, y: 100 } })
+  const b = createNode({ title: 'B', kind: 'topic', parentId: a.id, order: 1, position: { x: 200, y: 200 } })
   doc.nodes.push(a, b)
   const relation: RelationEdge = {
     id: 'rel-1',
@@ -134,5 +134,24 @@ describe('clipboard relations round-trip (UX-09)', () => {
       expect(findNode(doc, rel.sourceId)).toBeDefined()
       expect(findNode(doc, rel.targetId)).toBeDefined()
     }
+  })
+
+  it('preserves sibling order and regenerates binding ids on paste', () => {
+    const { doc, a } = buildDocWithRelation()
+    a.bindings = [{ id: 'binding-source', type: 'file', path: 'frontend/src/app.ts' }]
+    const app = fakeApp(doc, [a.id])
+
+    copySelectedSubtree(app)
+    app.setSelection(['root'], 'root')
+    pasteCopiedSubtree(app)
+    clearAutosave(app)
+
+    const rootChildren = childrenOf(doc, 'root')
+    expect(rootChildren.map((node) => node.order)).toEqual([1, 2])
+    const pasted = rootChildren[1]
+    expect(pasted.bindings).toEqual([
+      { id: expect.not.stringMatching(/^binding-source$/), type: 'file', path: 'frontend/src/app.ts' },
+    ])
+    expect(childrenOf(doc, pasted.id).map((node) => node.order)).toEqual([1])
   })
 })
