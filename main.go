@@ -20,11 +20,12 @@ import (
 //go:embed all:frontend/dist
 var assets embed.FS
 
-// main dispatches between the three delivery modes of the single binary:
+// main dispatches between the delivery modes of the single binary:
 //
 //	codemind            → desktop GUI (Wails)
 //	codemind serve      → headless HTTP server (self-hosting / docker)
 //	codemind mcp        → stdio MCP adapter for AI agents
+//	codemind format     → import/export the deterministic project map format
 //
 // Dispatch must happen before any webview initialization.
 func main() {
@@ -37,12 +38,20 @@ func main() {
 		case "mcp":
 			mcp.Run()
 			return
+		case "format":
+			attachParentConsole()
+			if err := runFormatCLI(os.Args[2:], os.Stdout, os.Stderr); err != nil {
+				fmt.Fprintln(os.Stderr, "codemind format:", err)
+				os.Exit(2)
+			}
+			return
 		case "help", "-h", "--help":
 			attachParentConsole()
 			fmt.Println("Code Mind — usage:")
 			fmt.Println("  codemind         start the desktop GUI")
 			fmt.Println("  codemind serve   start the headless HTTP server (CODE_MIND_PORT, default 7979)")
 			fmt.Println("  codemind mcp     start the stdio MCP adapter for AI agents")
+			fmt.Println("  codemind format  import or export deterministic project map files")
 			return
 		}
 		// Unknown arguments fall through to the GUI so OS-level launches

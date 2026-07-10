@@ -1,0 +1,105 @@
+{
+  "format": "codemind.project-map.semantic",
+  "schemaVersion": 1,
+  "mapId": "project-map",
+  "nodes": [
+    {
+      "id": "root",
+      "kind": "root",
+      "order": 0,
+      "title": "Project <Map> & Plan",
+      "note": "Root notes stay semantic.\nSecond line.",
+      "bindings": []
+    },
+    {
+      "id": "child-a",
+      "parentId": "root",
+      "kind": "topic",
+      "order": 1,
+      "title": "Frontend",
+      "note": "UI workflow",
+      "color": "teal",
+      "bindings": [
+        {
+          "id": "binding-ui",
+          "type": "glob",
+          "path": ".",
+          "glob": "frontend/src/**/*.ts"
+        }
+      ]
+    },
+    {
+      "id": "child-b",
+      "parentId": "root",
+      "kind": "topic",
+      "order": 2,
+      "title": "Backend",
+      "priority": "P1",
+      "bindings": [
+        {
+          "id": "binding-a",
+          "type": "directory",
+          "path": "internal/server"
+        },
+        {
+          "id": "binding-z",
+          "type": "symbol",
+          "path": "internal/server/server.go",
+          "symbol": "Server.registerAPI"
+        }
+      ]
+    },
+    {
+      "id": "floating",
+      "kind": "floating",
+      "order": 0,
+      "title": "Scratchpad",
+      "color": "amber",
+      "bindings": [
+        {
+          "id": "asset-logo",
+          "type": "asset",
+          "path": "assets/logo.png",
+          "contentHash": "sha256:abc123"
+        }
+      ]
+    }
+  ],
+  "relations": [
+    {
+      "id": "relation-a",
+      "sourceId": "root",
+      "targetId": "floating",
+      "label": "captures",
+      "arrowDirection": "none",
+      "branches": []
+    },
+    {
+      "id": "relation-z",
+      "sourceId": "child-a",
+      "targetId": "child-b",
+      "label": "coordinates",
+      "arrowDirection": "both",
+      "branches": [
+        {
+          "targetId": "floating"
+        },
+        {
+          "targetId": "root"
+        }
+      ]
+    }
+  ],
+  "regions": [
+    {
+      "id": "region-a",
+      "label": "Notes",
+      "color": "amber"
+    },
+    {
+      "id": "region-z",
+      "label": "Delivery",
+      "color": "violet"
+    }
+  ]
+}

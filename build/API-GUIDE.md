@@ -43,6 +43,71 @@ If-Match: "rev-7"
 
 ---
 
+## Git 语义格式
+
+`codemind format` 可以把现有运行时脑图拆成两个职责明确的文件。这是离线 CLI 文件转换，不是 REST API 端点。
+
+### 字段归属
+
+| 文件 | 字段 | Git 建议 |
+|------|------|----------|
+| `semantic.json` | `mapId`；节点的 `id/parentId/kind/order/title/note/priority/color/bindings`；关系的端点、标签、箭头方向和 branches；区域的 `id/label/color` | 建议提交。内容采用稳定排序和固定 JSON 格式，布局、时间戳与 revision 变化不会污染语义 diff |
+| `layout.json` | theme；节点位置、尺寸、折叠和时间戳；关系 midpoint、waypoints 和时间戳；区域几何和时间戳；runtime schema、revision、打开/编辑时间 | 建议作为本地 companion，不提交并加入 `.gitignore` |
+
+顶层 map title 由 root node 的 title 派生，不会在 `semantic.json` 重复保存。两个文件都带 `format`、`schemaVersion` 和 `mapId`；导入时会校验格式版本与 ID。
+
+推荐仓库结构：
+
+```text
+project-map/
+  semantic.json    # 提交到 Git
+  layout.json      # 本地保留
+```
+
+```gitignore
+project-map/layout.json
+```
+
+### CLI 导出与导入
+
+```powershell
+# 导出：固定生成 semantic.json 和 layout.json
+codemind format export `
+  --input .\data\map.json `
+  --out-dir .\project-map
+
+# strict 导入：默认要求 semantic/layout 的 mapId 以及 node/relation/region ID 集合完全一致
+codemind format import `
+  --semantic .\project-map\semantic.json `
+  --layout .\project-map\layout.json `
+  --output .\data\restored-map.json
+
+# reconcile：按 ID 复用仍存在的布局，忽略 layout 中的孤立项，并为新增实体生成默认布局
+codemind format import `
+  --semantic .\project-map\semantic.json `
+  --layout .\project-map\layout.json `
+  --output .\data\branch-map.json `
+  --reconcile
+
+# 不提供 layout 时自动使用 reconcile，生成可打开的默认布局
+codemind format import `
+  --semantic .\project-map\semantic.json `
+  --output .\data\semantic-only-map.json
+```
+
+所有输出默认拒绝覆盖已有文件，避免误伤本地脑图或 companion。只有用户确认替换时才添加 `--force`；CLI 不允许输出覆盖输入，并先写入同目录临时文件再落盘。
+
+### Git 工作流建议
+
+1. 从运行时脑图导出到仓库目录。
+2. 提交并评审 `semantic.json`，不把纯画布移动混入语义变更。
+3. 切换 Git 分支后，用当前 `semantic.json` 和本地 `layout.json` 执行 `--reconcile`；若不需要旧布局，可省略 `--layout`。
+4. 导入到一个新的运行时文件，检查无误后再由用户决定如何使用，不要依靠 `--force` 自动覆盖工作副本。
+
+本阶段不改变 FileStore 主存储，不提供 REST/MCP 格式端点、桌面导出按钮、Git status/diff 高亮、自动 commit、三方 merge、CRDT、仓库扫描或云端托管。
+
+---
+
 ## 核心概念
 
 - **Map**：一个脑图文档，包含多个节点

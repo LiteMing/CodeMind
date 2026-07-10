@@ -153,3 +153,70 @@ wss://your-domain.example/ws?mapId=MAP_ID&token=TOKEN_SECRET
 ### 当前限制
 
 完整网页投影页面仍在后续任务中；目前后端协作通道已经可用，但还需要继续实现 `/view/{mapId}` 前端页面、只读模式、分享弹窗和公网部署指引。
+
+## 4. 将脑图语义纳入 Git
+
+Phase C 提供显式 CLI，把本地运行时脑图拆为稳定语义文件和本地布局 companion：
+
+- `semantic.json`：保存节点层级与 `order`、标题、备注、优先级、颜色、代码 `bindings`、关系语义、区域标签。它不包含主题、坐标、尺寸、折叠、路由、时间戳或 revision，适合提交、diff 和评审。
+- `layout.json`：保存主题、节点位置/尺寸/折叠、关系路由、区域几何、时间戳和 runtime meta。它用于恢复个人画布状态，建议加入 `.gitignore`。
+- map title 由 root node title 派生；两个文件用相同 `mapId` 关联。
+
+推荐目录：
+
+```text
+project-map/
+  semantic.json
+  layout.json
+```
+
+```gitignore
+project-map/layout.json
+```
+
+### 导出
+
+```powershell
+codemind format export `
+  --input .\data\map.json `
+  --out-dir .\project-map
+```
+
+导出固定写入 `semantic.json` 和 `layout.json`。再次导出时，如果任一输出已存在，命令默认失败；确认要替换时显式添加 `--force`。输入文件不会被修改，也不能同时作为输出文件。
+
+### strict 与 reconcile 导入
+
+默认 strict 适合完整还原和校验：
+
+```powershell
+codemind format import `
+  --semantic .\project-map\semantic.json `
+  --layout .\project-map\layout.json `
+  --output .\data\restored-map.json
+```
+
+strict 要求两个文件的 `mapId` 相同，node、relation、region 的 ID 集合也完全一致。布局缺失、多出旧实体或来自其他脑图时会拒绝导入。
+
+切换 Git 分支后，`semantic.json` 可能新增或删除实体，而本地 `layout.json` 仍是旧版本。此时使用 reconcile：
+
+```powershell
+codemind format import `
+  --semantic .\project-map\semantic.json `
+  --layout .\project-map\layout.json `
+  --output .\data\branch-map.json `
+  --reconcile
+```
+
+reconcile 会按 ID 保留仍有效的布局、忽略 layout 中的孤立项，并给 semantic 新增实体生成确定性默认布局。完全不需要旧布局时可省略 `--layout`，命令会自动进入 reconcile：
+
+```powershell
+codemind format import `
+  --semantic .\project-map\semantic.json `
+  --output .\data\semantic-only-map.json
+```
+
+导入同样默认拒绝覆盖；只有明确替换已有输出时使用 `--force`。日常建议导入到新文件，先在 Code Mind 中检查，再决定是否替换工作副本。
+
+### 当前阶段边界
+
+本阶段建立的是 Git 可评审的文件契约与手动 CLI 工作流。Code Mind 的主存储仍是本地运行时 JSON；`semantic.json` 尚未成为 FileStore 的直接存储，也没有 REST/MCP 格式端点、桌面导出 UI、Git 状态展示、自动提交、三方合并、云端数据库或云端脑图部署。云端 Git 稳定区和多人开发分支可以在此契约之上继续实现，但不是 Phase C 已交付能力。
