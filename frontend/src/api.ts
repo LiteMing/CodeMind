@@ -39,6 +39,14 @@ function jsonHeaders(extra?: Record<string, string>): Record<string, string> {
   }
 }
 
+function revisionHeaders(revision: number): Record<string, string> {
+  const normalized = Math.trunc(revision)
+  if (!Number.isSafeInteger(normalized) || normalized < 1) {
+    throw new Error('A positive document revision is required before saving.')
+  }
+  return { 'If-Match': `"rev-${normalized}"` }
+}
+
 export const api = {
   setOwnerApiKey(apiKey: string): void {
     ownerApiKey = apiKey.trim()
@@ -53,7 +61,10 @@ export const api = {
     }
 
     const payload = await readJSON<MindMapSummary[]>(response, '/api/maps')
-    return payload ?? []
+    return (payload ?? []).map((summary) => ({
+      ...summary,
+      revision: normalizeRevision(summary.revision),
+    }))
   },
 
   async createMap(title = ''): Promise<MindMapDocument> {
@@ -84,7 +95,7 @@ export const api = {
   async saveMap(document: MindMapDocument): Promise<MindMapDocument> {
     const response = await fetch(`${API_BASE}/maps/${encodeURIComponent(document.id)}`, {
       method: 'PUT',
-      headers: jsonHeaders(),
+      headers: jsonHeaders(revisionHeaders(document.meta.revision)),
       body: JSON.stringify(document),
     })
 
@@ -95,10 +106,10 @@ export const api = {
     return normalizeDocument(await readJSON<MindMapDocument>(response, `/api/maps/${encodeURIComponent(document.id)}`))
   },
 
-  async renameMap(mapId: string, title: string): Promise<MindMapDocument> {
+  async renameMap(mapId: string, title: string, expectedRevision: number): Promise<MindMapDocument> {
     const response = await fetch(`${API_BASE}/maps/${encodeURIComponent(mapId)}`, {
       method: 'PATCH',
-      headers: jsonHeaders(),
+      headers: jsonHeaders(revisionHeaders(expectedRevision)),
       body: JSON.stringify({ title }),
     })
 
@@ -109,10 +120,13 @@ export const api = {
     return normalizeDocument(await readJSON<MindMapDocument>(response, `/api/maps/${encodeURIComponent(mapId)}`))
   },
 
-  async deleteMap(mapId: string): Promise<void> {
+  async deleteMap(mapId: string, expectedRevision: number): Promise<void> {
     const response = await fetch(`${API_BASE}/maps/${encodeURIComponent(mapId)}`, {
       method: 'DELETE',
-      headers: authHeaders(),
+      headers: {
+        ...authHeaders(),
+        ...revisionHeaders(expectedRevision),
+      },
     })
 
     if (!response.ok) {
@@ -296,7 +310,7 @@ export const api = {
   async pollMap(
     mapId: string,
     since: string,
-  ): Promise<{ lastEditedAt: string; nodeCount: number; modifiedViaAPI: boolean }> {
+  ): Promise<{ revision: number; lastEditedAt: string; nodeCount: number; modifiedViaAPI: boolean }> {
     const response = await fetch(
       `${API_BASE}/maps/${encodeURIComponent(mapId)}/poll?since=${encodeURIComponent(since)}`,
       {
@@ -307,7 +321,7 @@ export const api = {
       throw await createAPIError(response)
     }
 
-    return await readJSON<{ lastEditedAt: string; nodeCount: number; modifiedViaAPI: boolean }>(
+    return await readJSON<{ revision: number; lastEditedAt: string; nodeCount: number; modifiedViaAPI: boolean }>(
       response,
       `/api/maps/${encodeURIComponent(mapId)}/poll`,
     )
@@ -357,17 +371,37 @@ export const api = {
 
 class APIError extends Error {
   debug?: AIDebugInfo
+  status: number
+  expectedRevision?: number
+  actualRevision?: number
 
-  constructor(message: string, debug?: AIDebugInfo) {
+  constructor(
+    message: string,
+    status: number,
+    debug?: AIDebugInfo,
+    revisions?: { expectedRevision?: number; actualRevision?: number },
+  ) {
     super(message)
     this.name = 'APIError'
+    this.status = status
     this.debug = debug
+    this.expectedRevision = revisions?.expectedRevision
+    this.actualRevision = revisions?.actualRevision
   }
+}
+
+export function isRevisionConflictError(error: unknown): error is APIError {
+  return error instanceof APIError && error.status === 412
 }
 
 function normalizeDocument(document: MindMapDocument): MindMapDocument {
   return {
     ...document,
+    meta: {
+      ...document.meta,
+      version: document.meta?.version || 1,
+      revision: normalizeRevision(document.meta?.revision),
+    },
     nodes: (document.nodes ?? []).map((node) => ({
       ...node,
       note: node.note?.trim() ? node.note : undefined,
@@ -383,6 +417,10 @@ function normalizeDocument(document: MindMapDocument): MindMapDocument {
     })),
     regions: document.regions ?? [],
   }
+}
+
+function normalizeRevision(value: unknown): number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0 ? value : 1
 }
 
 function resolveApiBase(): string {
@@ -427,10 +465,18 @@ async function createAPIError(response: Response): Promise<APIError> {
 
   if (contentType.includes('application/json')) {
     try {
-      const parsed = JSON.parse(payload) as { error?: string; debug?: unknown }
+      const parsed = JSON.parse(payload) as {
+        error?: string
+        debug?: unknown
+        expectedRevision?: unknown
+        actualRevision?: unknown
+      }
       debug = normalizeDebugInfo(parsed.debug)
       if (parsed.error) {
-        return new APIError(parsed.error, debug)
+        return new APIError(parsed.error, response.status, debug, {
+          expectedRevision: normalizeOptionalRevision(parsed.expectedRevision),
+          actualRevision: normalizeOptionalRevision(parsed.actualRevision),
+        })
       }
     } catch {
       // Ignore malformed error payloads and fall back to generic messaging below.
@@ -440,11 +486,16 @@ async function createAPIError(response: Response): Promise<APIError> {
   if (payload.trim().startsWith('<')) {
     return new APIError(
       `${response.status} ${response.statusText}: API 返回了 HTML 页面，通常表示你当前只启动了前端，或者 \`http://localhost:7979\` 的 Go API 没有正常运行。${DEV_BACKEND_HINT}`,
+      response.status,
       debug,
     )
   }
 
-  return new APIError(payload.trim() || `${response.status} ${response.statusText}`, debug)
+  return new APIError(payload.trim() || `${response.status} ${response.statusText}`, response.status, debug)
+}
+
+function normalizeOptionalRevision(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0 ? value : undefined
 }
 
 async function readJSON<T>(response: Response, endpoint: string): Promise<T> {

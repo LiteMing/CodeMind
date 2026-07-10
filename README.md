@@ -23,6 +23,7 @@
 - **API Key 认证**：设置面板一键生成，X-API-Key header 保护
 - **Compact 模式**：?compact=true 省略 43% 冗余字段，节省 AI token
 - **实时刷新**：API 写入后前端 2 秒内自动检测并刷新，新节点有淡入动画
+- **乐观并发**：真实 document revision + ETag/If-Match，陈旧写入返回 412，不再静默覆盖
 
 ### 数据存储
 - 本地 JSON 文件，零云依赖

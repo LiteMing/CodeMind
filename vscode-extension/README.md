@@ -16,4 +16,5 @@ Open and operate Code Mind from inside VS Code.
 - Start and stop a local Code Mind backend from VS Code.
 - Browse mindmaps and nodes from the activity bar.
 - Create, rename, delete nodes, and open notes.
+- Reject stale node writes with revision/`If-Match` checks instead of overwriting newer map changes.
 - Configure local API URL and API Key from commands.

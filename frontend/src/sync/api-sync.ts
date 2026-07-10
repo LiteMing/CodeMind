@@ -1,7 +1,7 @@
 import type { MindMapApp } from '../app'
 import { captureActiveNodeEditorDraft, restoreActiveNodeEditorDraft } from '../interaction/editor'
 import { resetHistory } from '../state/ops'
-import { api } from '../api'
+import { api, isRevisionConflictError } from '../api'
 import { findRoot, tidySubtree, touchDocument } from '../document'
 import { downloadTextFile, getErrorMessage, slugify } from '../utils'
 import { listLocalSnapshots, saveLocalSnapshot } from '../snapshots'
@@ -28,7 +28,12 @@ export async function saveDocument(
     app.setStatus(statusKey, values)
     restoreActiveNodeEditorDraft(app, editorDraft)
   } catch (error) {
-    app.setStatus('status.saveFailed', { reason: getErrorMessage(error) })
+    app.state.dirty = true
+    if (isRevisionConflictError(error)) {
+      app.setStatus('status.saveConflict', { revision: error.actualRevision ?? '?' })
+    } else {
+      app.setStatus('status.saveFailed', { reason: getErrorMessage(error) })
+    }
     restoreActiveNodeEditorDraft(app, editorDraft)
   }
 
@@ -139,13 +144,23 @@ export async function renameMap(app: MindMapApp, mapId: string): Promise<void> {
     return
   }
 
-  const doc = await api.renameMap(mapId, nextTitle)
-  await refreshMaps(app)
-  if (app.state.currentMapId === mapId) {
-    app.state.document = doc
-    resetHistory(app)
+  const revision = resolveMapRevision(app, mapId)
+  if (revision === null) {
+    app.setStatus('status.saveFailed', { reason: 'missing document revision' })
+    app.render()
+    return
   }
-  app.setStatus('status.mapRenamed')
+  try {
+    const doc = await api.renameMap(mapId, nextTitle, revision)
+    await refreshMaps(app)
+    if (app.state.currentMapId === mapId) {
+      app.state.document = doc
+      resetHistory(app)
+    }
+    app.setStatus('status.mapRenamed')
+  } catch (error) {
+    setMapMutationErrorStatus(app, error)
+  }
   app.render()
 }
 
@@ -154,18 +169,43 @@ export async function deleteMap(app: MindMapApp, mapId: string): Promise<void> {
     return
   }
 
-  await api.deleteMap(mapId)
-  await refreshMaps(app)
-
-  if (app.state.currentMapId === mapId || app.state.view === 'home') {
-    app.state.view = 'home'
-    app.state.currentMapId = null
-    app.refs = null
-    resetHistory(app)
+  const revision = resolveMapRevision(app, mapId)
+  if (revision === null) {
+    app.setStatus('status.saveFailed', { reason: 'missing document revision' })
+    app.render()
+    return
   }
+  try {
+    await api.deleteMap(mapId, revision)
+    await refreshMaps(app)
 
-  app.setStatus('status.mapDeleted')
+    if (app.state.currentMapId === mapId || app.state.view === 'home') {
+      app.state.view = 'home'
+      app.state.currentMapId = null
+      app.refs = null
+      resetHistory(app)
+    }
+
+    app.setStatus('status.mapDeleted')
+  } catch (error) {
+    setMapMutationErrorStatus(app, error)
+  }
   app.render()
+}
+
+function resolveMapRevision(app: MindMapApp, mapId: string): number | null {
+  if (app.state.currentMapId === mapId) {
+    return app.state.document.meta.revision
+  }
+  return app.findMapSummary(mapId)?.revision ?? null
+}
+
+function setMapMutationErrorStatus(app: MindMapApp, error: unknown): void {
+  if (isRevisionConflictError(error)) {
+    app.setStatus('status.saveConflict', { revision: error.actualRevision ?? '?' })
+    return
+  }
+  app.setStatus('status.saveFailed', { reason: getErrorMessage(error) })
 }
 
 export function openLoadedDocument(app: MindMapApp, document: MindMapDocument, statusKey: TranslationKey): void {

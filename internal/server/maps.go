@@ -39,6 +39,7 @@ func (s *Server) handleMaps(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, err)
 			return
 		}
+		setRevisionETag(w, doc.Meta.Revision)
 		writeJSON(w, http.StatusCreated, doc)
 	default:
 		w.Header().Set("Allow", "GET, POST")
@@ -96,36 +97,72 @@ func (s *Server) handleMapByID(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusNotFound, err)
 			return
 		}
+		setRevisionETag(w, doc.Meta.Revision)
 		writeJSON(w, http.StatusOK, doc)
 	case http.MethodPut:
+		expectedRevision, ok := requireExpectedRevision(w, r)
+		if !ok {
+			return
+		}
 		var doc mindmap.Document
 		if err := json.NewDecoder(r.Body).Decode(&doc); err != nil {
 			writeError(w, http.StatusBadRequest, err)
 			return
 		}
 		doc.ID = mapID
-		if err := s.store.Save(doc); err != nil {
-			writeError(w, http.StatusBadRequest, err)
+		persisted, err := s.store.SaveIfRevision(doc, expectedRevision)
+		if err != nil {
+			writeMapStoreError(w, http.StatusBadRequest, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, doc)
+		setRevisionETag(w, persisted.Meta.Revision)
+		s.recordAPIModification(mapID)
+		writeJSON(w, http.StatusOK, persisted)
 	case http.MethodPatch:
+		expectedRevision, ok := requireExpectedRevision(w, r)
+		if !ok {
+			return
+		}
 		var req renameMapRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeError(w, http.StatusBadRequest, err)
 			return
 		}
-		doc, err := s.store.Rename(mapID, req.Title)
+		trimmedTitle := strings.TrimSpace(req.Title)
+		if trimmedTitle == "" {
+			writeError(w, http.StatusBadRequest, errors.New("title is required"))
+			return
+		}
+		doc, err := s.store.LoadReadOnly(mapID)
 		if err != nil {
-			writeError(w, http.StatusBadRequest, err)
+			writeMapStoreError(w, http.StatusBadRequest, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, doc)
+		for index := range doc.Nodes {
+			if doc.Nodes[index].Kind == mindmap.NodeKindRoot {
+				doc.Nodes[index].Title = trimmedTitle
+				doc.Nodes[index].UpdatedAt = time.Now().UTC()
+			}
+		}
+		doc.Title = trimmedTitle
+		persisted, err := s.store.SaveIfRevision(doc, expectedRevision)
+		if err != nil {
+			writeMapStoreError(w, http.StatusBadRequest, err)
+			return
+		}
+		setRevisionETag(w, persisted.Meta.Revision)
+		s.recordAPIModification(mapID)
+		writeJSON(w, http.StatusOK, persisted)
 	case http.MethodDelete:
-		if err := s.store.Delete(mapID); err != nil {
-			writeError(w, http.StatusNotFound, err)
+		expectedRevision, ok := requireExpectedRevision(w, r)
+		if !ok {
 			return
 		}
+		if err := s.store.DeleteIfRevision(mapID, expectedRevision); err != nil {
+			writeMapStoreError(w, http.StatusNotFound, err)
+			return
+		}
+		setRevisionETag(w, expectedRevision)
 		writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 	default:
 		w.Header().Set("Allow", "GET, PUT, PATCH, DELETE")
@@ -160,6 +197,7 @@ func (s *Server) handleNodeTree(w http.ResponseWriter, r *http.Request, mapID st
 		return
 	}
 
+	setRevisionETag(w, doc.Meta.Revision)
 	if r.URL.Query().Get("compact") == "true" {
 		tree := buildCompactTree(doc)
 		writeJSON(w, http.StatusOK, tree)
@@ -203,7 +241,9 @@ func (s *Server) handleMapVersion(w http.ResponseWriter, r *http.Request, mapID 
 		return
 	}
 
+	setRevisionETag(w, doc.Meta.Revision)
 	writeJSON(w, http.StatusOK, mapVersionResponse{
+		Revision:     doc.Meta.Revision,
 		LastEditedAt: doc.Meta.LastEditedAt,
 		NodeCount:    len(doc.Nodes),
 	})
@@ -216,6 +256,7 @@ func (s *Server) recordAPIModification(mapID string) {
 
 // pollResponse is the response for GET /api/maps/{mapId}/poll.
 type pollResponse struct {
+	Revision       uint64    `json:"revision"`
 	LastEditedAt   time.Time `json:"lastEditedAt"`
 	NodeCount      int       `json:"nodeCount"`
 	ModifiedViaAPI bool      `json:"modifiedViaAPI"`
@@ -253,7 +294,9 @@ func (s *Server) handleMapPoll(w http.ResponseWriter, r *http.Request, mapID str
 		}
 	}
 
+	setRevisionETag(w, doc.Meta.Revision)
 	writeJSON(w, http.StatusOK, pollResponse{
+		Revision:       doc.Meta.Revision,
 		LastEditedAt:   doc.Meta.LastEditedAt,
 		NodeCount:      len(doc.Nodes),
 		ModifiedViaAPI: modifiedViaAPI,

@@ -5,6 +5,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
@@ -210,10 +212,10 @@ func TestBuildHTTPRequest(t *testing.T) {
 			wantPath:   "/api/maps/map-123/tree",
 		},
 		{
-			name:       "get_tree missing mapId",
-			tool:       "get_tree",
-			args:       map[string]any{},
-			wantErr:    true,
+			name:    "get_tree missing mapId",
+			tool:    "get_tree",
+			args:    map[string]any{},
+			wantErr: true,
 		},
 		{
 			name:       "get_node",
@@ -225,35 +227,35 @@ func TestBuildHTTPRequest(t *testing.T) {
 		{
 			name:       "create_node",
 			tool:       "create_node",
-			args:       map[string]any{"mapId": "map-123", "parentId": "root", "title": "Test"},
+			args:       map[string]any{"mapId": "map-123", "expectedRevision": float64(7), "parentId": "root", "title": "Test"},
 			wantMethod: "POST",
 			wantPath:   "/api/maps/map-123/nodes",
 		},
 		{
 			name:       "update_node",
 			tool:       "update_node",
-			args:       map[string]any{"mapId": "map-123", "nodeId": "node-456", "title": "Updated"},
+			args:       map[string]any{"mapId": "map-123", "nodeId": "node-456", "expectedRevision": float64(7), "title": "Updated"},
 			wantMethod: "PATCH",
 			wantPath:   "/api/maps/map-123/nodes/node-456",
 		},
 		{
 			name:       "delete_node",
 			tool:       "delete_node",
-			args:       map[string]any{"mapId": "map-123", "nodeId": "node-456"},
+			args:       map[string]any{"mapId": "map-123", "nodeId": "node-456", "expectedRevision": float64(7)},
 			wantMethod: "DELETE",
 			wantPath:   "/api/maps/map-123/nodes/node-456",
 		},
 		{
 			name:       "batch_operations",
 			tool:       "batch_operations",
-			args:       map[string]any{"mapId": "map-123", "operations": []any{}},
+			args:       map[string]any{"mapId": "map-123", "expectedRevision": float64(7), "operations": []any{}},
 			wantMethod: "POST",
 			wantPath:   "/api/maps/map-123/batch",
 		},
 		{
 			name:       "import_fragment",
 			tool:       "import_fragment",
-			args:       map[string]any{"mapId": "map-123", "nodes": []any{}},
+			args:       map[string]any{"mapId": "map-123", "expectedRevision": float64(7), "nodes": []any{}},
 			wantMethod: "POST",
 			wantPath:   "/api/maps/map-123/import-fragment",
 		},
@@ -284,6 +286,75 @@ func TestBuildHTTPRequest(t *testing.T) {
 				t.Errorf("expected path %s, got %s", tt.wantPath, path)
 			}
 		})
+	}
+}
+
+func TestWriteToolsRequireExpectedRevision(t *testing.T) {
+	srv := newMCPServer()
+	for _, tool := range []string{"create_node", "update_node", "delete_node", "batch_operations", "import_fragment"} {
+		_, _, _, err := srv.buildHTTPRequest(tool, map[string]any{"mapId": "map-123"})
+		if err == nil || !strings.Contains(err.Error(), "expectedRevision is required") {
+			t.Fatalf("%s should require expectedRevision, got %v", tool, err)
+		}
+	}
+}
+
+func TestWriteToolSchemasRequireExpectedRevision(t *testing.T) {
+	for _, tool := range getToolManifest() {
+		if !isWriteOp(tool.Name) {
+			continue
+		}
+		var schema struct {
+			Required []string `json:"required"`
+		}
+		if err := json.Unmarshal(tool.InputSchema, &schema); err != nil {
+			t.Fatalf("%s schema is invalid: %v", tool.Name, err)
+		}
+		found := false
+		for _, field := range schema.Required {
+			if field == "expectedRevision" {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("%s schema does not require expectedRevision", tool.Name)
+		}
+	}
+}
+
+func TestExecuteWriteSendsIfMatchAndReturnsNewRevision(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("If-Match"); got != `"rev-7"` {
+			t.Fatalf("expected If-Match rev-7, got %q", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ETag", `"rev-8"`)
+		_, _ = w.Write([]byte(`{"id":"node-1","title":"Test"}`))
+	}))
+	defer backend.Close()
+
+	srv := newMCPServer()
+	srv.apiURL = backend.URL
+	result, err := srv.executeToolCall("create_node", map[string]any{
+		"mapId":            "map-123",
+		"expectedRevision": float64(7),
+		"parentId":         "root",
+		"title":            "Test",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var payload struct {
+		Revision uint64         `json:"revision"`
+		Result   map[string]any `json:"result"`
+	}
+	if err := json.Unmarshal([]byte(result), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Revision != 8 || payload.Result["id"] != "node-1" {
+		t.Fatalf("unexpected wrapped result: %s", result)
 	}
 }
 

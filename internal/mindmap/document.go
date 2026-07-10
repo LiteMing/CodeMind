@@ -99,6 +99,7 @@ type RegionBox struct {
 
 type Meta struct {
 	Version      int       `json:"version"`
+	Revision     uint64    `json:"revision"`
 	LastEditedAt time.Time `json:"lastEditedAt"`
 	LastOpenedAt time.Time `json:"lastOpenedAt"`
 }
@@ -137,6 +138,7 @@ func NewDefaultDocument() Document {
 		Regions:   []RegionBox{},
 		Meta: Meta{
 			Version:      1,
+			Revision:     1,
 			LastEditedAt: now,
 			LastOpenedAt: now,
 		},
@@ -258,6 +260,7 @@ func (d *Document) Validate() error {
 }
 
 func (d *Document) PrepareForSave(now time.Time) {
+	d.NormalizeMetadata()
 	if d.Relations == nil {
 		d.Relations = []RelationEdge{}
 	}
@@ -277,10 +280,20 @@ func (d *Document) PrepareForSave(now time.Time) {
 	if strings.TrimSpace(root.Title) != "" {
 		d.Title = root.Title
 	}
-	d.Meta.Version = 1
 	d.Meta.LastEditedAt = now
 	if d.Meta.LastOpenedAt.IsZero() {
 		d.Meta.LastOpenedAt = now
+	}
+}
+
+// NormalizeMetadata upgrades legacy documents that predate explicit schema
+// and persistence revisions without treating a read as a document write.
+func (d *Document) NormalizeMetadata() {
+	if d.Meta.Version <= 0 {
+		d.Meta.Version = 1
+	}
+	if d.Meta.Revision == 0 {
+		d.Meta.Revision = 1
 	}
 }
 

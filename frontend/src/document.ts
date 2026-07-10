@@ -30,6 +30,7 @@ export function createDefaultDocument(): MindMapDocument {
     regions: [],
     meta: {
       version: 1,
+      revision: 1,
       lastEditedAt: now,
       lastOpenedAt: now,
     },

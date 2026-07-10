@@ -14,7 +14,7 @@ import (
 
 func TestHandleNodeTree_ReturnsNestedStructure(t *testing.T) {
 	server := newTestServer(t)
-	handler := server.Handler()
+	handler := withTestRevisionHeaders(server.Handler())
 
 	// Create a map
 	createReq := httptest.NewRequest(http.MethodPost, "/api/maps", strings.NewReader(`{"title":"Tree Test"}`))
@@ -136,7 +136,7 @@ func TestHandleNodeTree_ReturnsNestedStructure(t *testing.T) {
 
 func TestHandleNodeTree_AllNodesAppearExactlyOnce(t *testing.T) {
 	server := newTestServer(t)
-	handler := server.Handler()
+	handler := withTestRevisionHeaders(server.Handler())
 
 	// Create a map with some nodes
 	createReq := httptest.NewRequest(http.MethodPost, "/api/maps", strings.NewReader(`{"title":"Tree Count"}`))
@@ -202,7 +202,7 @@ func TestHandleNodeTree_Returns404ForNonExistentMap(t *testing.T) {
 
 func TestHandleMapVersion_ReturnsCorrectValues(t *testing.T) {
 	server := newTestServer(t)
-	handler := server.Handler()
+	handler := withTestRevisionHeaders(server.Handler())
 
 	// Create a map
 	createReq := httptest.NewRequest(http.MethodPost, "/api/maps", strings.NewReader(`{"title":"Version Test"}`))
@@ -269,7 +269,7 @@ func TestHandleMapVersion_Returns404ForNonExistentMap(t *testing.T) {
 
 func TestHandleNodeBatch_SuccessfulOperations(t *testing.T) {
 	server := newTestServer(t)
-	handler := server.Handler()
+	handler := withTestRevisionHeaders(server.Handler())
 
 	// Create a map
 	createReq := httptest.NewRequest(http.MethodPost, "/api/maps", strings.NewReader(`{"title":"Batch Test"}`))
@@ -331,7 +331,7 @@ func TestHandleNodeBatch_SuccessfulOperations(t *testing.T) {
 
 func TestHandleNodeBatch_AtomicityOnFailure(t *testing.T) {
 	server := newTestServer(t)
-	handler := server.Handler()
+	handler := withTestRevisionHeaders(server.Handler())
 
 	// Create a map
 	createReq := httptest.NewRequest(http.MethodPost, "/api/maps", strings.NewReader(`{"title":"Batch Atomic"}`))
@@ -378,7 +378,7 @@ func TestHandleNodeBatch_AtomicityOnFailure(t *testing.T) {
 
 func TestHandleNodeBatch_UpdateAndDelete(t *testing.T) {
 	server := newTestServer(t)
-	handler := server.Handler()
+	handler := withTestRevisionHeaders(server.Handler())
 
 	// Create a map
 	createReq := httptest.NewRequest(http.MethodPost, "/api/maps", strings.NewReader(`{"title":"Batch UD"}`))
@@ -458,7 +458,7 @@ func TestHandleNodeBatch_UpdateAndDelete(t *testing.T) {
 
 func TestHandleNodeBatch_DeletePrunesDanglingRelations(t *testing.T) {
 	server := newTestServer(t)
-	handler := server.Handler()
+	handler := withTestRevisionHeaders(server.Handler())
 
 	doc := mindmap.NewDefaultDocument()
 	doc.ID = "batch-relation-delete"
@@ -519,7 +519,7 @@ func TestHandleNodeBatch_Returns404ForNonExistentMap(t *testing.T) {
 
 func TestHandleImportFragment_CreatesNodesRecursively(t *testing.T) {
 	server := newTestServer(t)
-	handler := server.Handler()
+	handler := withTestRevisionHeaders(server.Handler())
 
 	// Create a map
 	createReq := httptest.NewRequest(http.MethodPost, "/api/maps", strings.NewReader(`{"title":"Fragment Test"}`))
@@ -589,7 +589,7 @@ func TestHandleImportFragment_CreatesNodesRecursively(t *testing.T) {
 
 func TestHandleImportFragment_DefaultsParentIdToRoot(t *testing.T) {
 	server := newTestServer(t)
-	handler := server.Handler()
+	handler := withTestRevisionHeaders(server.Handler())
 
 	// Create a map
 	createReq := httptest.NewRequest(http.MethodPost, "/api/maps", strings.NewReader(`{"title":"Fragment Root"}`))
@@ -632,7 +632,7 @@ func TestHandleImportFragment_DefaultsParentIdToRoot(t *testing.T) {
 
 func TestHandleImportFragment_Returns400ForInvalidParentId(t *testing.T) {
 	server := newTestServer(t)
-	handler := server.Handler()
+	handler := withTestRevisionHeaders(server.Handler())
 
 	// Create a map
 	createReq := httptest.NewRequest(http.MethodPost, "/api/maps", strings.NewReader(`{"title":"Fragment Invalid"}`))

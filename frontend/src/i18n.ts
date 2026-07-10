@@ -229,6 +229,8 @@ const messages = {
     'status.imported': 'Imported {{filename}}.',
     'status.importedSaved': 'Imported document saved locally.',
     'status.saveFailed': 'Save failed: {{reason}}',
+    'status.saveConflict':
+      'Save conflict: the server is already at revision {{revision}}. Your local changes were kept.',
     'status.exportFailed': 'Export failed: {{reason}}',
     'status.importFailed': 'Import failed: {{reason}}',
     'status.relationRemoved': 'Relation line removed.',
@@ -651,6 +653,7 @@ const messages = {
     'status.imported': '已导入 {{filename}}。',
     'status.importedSaved': '导入文档已保存到本地。',
     'status.saveFailed': '保存失败：{{reason}}',
+    'status.saveConflict': '保存冲突：服务端已到 revision {{revision}}，本地更改已保留。',
     'status.exportFailed': '导出失败：{{reason}}',
     'status.importFailed': '导入失败：{{reason}}',
     'status.relationRemoved': '关系线已移除。',

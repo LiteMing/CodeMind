@@ -16,6 +16,7 @@ vi.mock('./api', () => {
   let current: MindMapDocument | null = null
   const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T
   return {
+    isRevisionConflictError: vi.fn(() => false),
     api: {
       setOwnerApiKey: vi.fn(),
       listMaps: vi.fn(async () =>
@@ -24,6 +25,7 @@ vi.mock('./api', () => {
               {
                 id: current.id,
                 title: current.title,
+                revision: current.meta.revision,
                 lastEditedAt: current.meta.lastEditedAt,
                 lastOpenedAt: current.meta.lastOpenedAt,
               },
@@ -40,9 +42,15 @@ vi.mock('./api', () => {
       }),
       loadMap: vi.fn(async () => clone(current ?? createDefaultDocument())),
       saveMap: vi.fn(async (document: MindMapDocument) => {
-        current = clone(document)
+        current = clone({
+          ...document,
+          meta: {
+            ...document.meta,
+            revision: document.meta.revision + 1,
+          },
+        })
         savedDocuments.push(clone(document))
-        return clone(document)
+        return clone(current)
       }),
       renameMap: vi.fn(async () => clone(current ?? createDefaultDocument())),
       deleteMap: vi.fn(async () => undefined),
@@ -57,6 +65,7 @@ vi.mock('./api', () => {
       getSettings: vi.fn(async () => ({ collabApiKey: '' })),
       saveSettings: vi.fn(async (settings: unknown) => settings),
       pollMap: vi.fn(async () => ({
+        revision: current?.meta.revision ?? 1,
         lastEditedAt: new Date().toISOString(),
         nodeCount: current?.nodes.length ?? 1,
         modifiedViaAPI: false,

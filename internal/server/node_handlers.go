@@ -39,6 +39,7 @@ func (s *Server) handleNodesGet(w http.ResponseWriter, r *http.Request, mapID st
 		writeError(w, http.StatusNotFound, err)
 		return
 	}
+	setRevisionETag(w, doc.Meta.Revision)
 	if r.URL.Query().Get("compact") == "true" {
 		writeJSON(w, http.StatusOK, toCompactNodes(doc.Nodes))
 		return
@@ -47,7 +48,11 @@ func (s *Server) handleNodesGet(w http.ResponseWriter, r *http.Request, mapID st
 }
 
 func (s *Server) handleNodesPost(w http.ResponseWriter, r *http.Request, mapID string) {
-	doc, err := s.store.Load(mapID)
+	expectedRevision, ok := requireExpectedRevision(w, r)
+	if !ok {
+		return
+	}
+	doc, err := s.store.LoadReadOnly(mapID)
 	if err != nil {
 		writeError(w, http.StatusNotFound, err)
 		return
@@ -108,13 +113,15 @@ func (s *Server) handleNodesPost(w http.ResponseWriter, r *http.Request, mapID s
 
 	doc.Nodes = append(doc.Nodes, node)
 
-	if err := s.store.Save(doc); err != nil {
-		writeError(w, http.StatusInternalServerError, err)
+	persisted, err := s.store.SaveIfRevision(doc, expectedRevision)
+	if err != nil {
+		writeMapStoreError(w, http.StatusInternalServerError, err)
 		return
 	}
 
 	s.recordAPIModification(mapID)
-	writeJSON(w, http.StatusCreated, node)
+	setRevisionETag(w, persisted.Meta.Revision)
+	writeJSON(w, http.StatusCreated, persisted.NodeMap()[node.ID])
 }
 
 func isValidNodeKind(kind mindmap.NodeKind) bool {
@@ -128,6 +135,7 @@ func isValidNodeKind(kind mindmap.NodeKind) bool {
 
 // nodeDetailResponse is the response for GET /api/maps/{mapId}/nodes/{nodeId}.
 type nodeDetailResponse struct {
+	Revision  uint64         `json:"revision"`
 	Node      mindmap.Node   `json:"node"`
 	Ancestors []mindmap.Node `json:"ancestors"`
 	Children  []mindmap.Node `json:"children"`
@@ -146,6 +154,7 @@ func (s *Server) handleNodeByIDGet(w http.ResponseWriter, r *http.Request, mapID
 		writeError(w, http.StatusNotFound, fmt.Errorf("node %q not found in map %q", nodeID, mapID))
 		return
 	}
+	setRevisionETag(w, doc.Meta.Revision)
 
 	// Walk up the parentId chain to collect ancestors (from immediate parent to root)
 	ancestors := make([]mindmap.Node, 0)
@@ -164,6 +173,7 @@ func (s *Server) handleNodeByIDGet(w http.ResponseWriter, r *http.Request, mapID
 
 	if r.URL.Query().Get("compact") == "true" {
 		writeJSON(w, http.StatusOK, compactNodeDetailResponse{
+			Revision:  doc.Meta.Revision,
 			Node:      toCompactNode(node),
 			Ancestors: toCompactNodes(ancestors),
 			Children:  toCompactNodes(children),
@@ -172,6 +182,7 @@ func (s *Server) handleNodeByIDGet(w http.ResponseWriter, r *http.Request, mapID
 	}
 
 	writeJSON(w, http.StatusOK, nodeDetailResponse{
+		Revision:  doc.Meta.Revision,
 		Node:      node,
 		Ancestors: ancestors,
 		Children:  children,
@@ -179,7 +190,11 @@ func (s *Server) handleNodeByIDGet(w http.ResponseWriter, r *http.Request, mapID
 }
 
 func (s *Server) handleNodeByIDPatch(w http.ResponseWriter, r *http.Request, mapID string, nodeID string) {
-	doc, err := s.store.Load(mapID)
+	expectedRevision, ok := requireExpectedRevision(w, r)
+	if !ok {
+		return
+	}
+	doc, err := s.store.LoadReadOnly(mapID)
 	if err != nil {
 		writeError(w, http.StatusNotFound, err)
 		return
@@ -237,17 +252,23 @@ func (s *Server) handleNodeByIDPatch(w http.ResponseWriter, r *http.Request, map
 	// Update updatedAt to current UTC time
 	node.UpdatedAt = time.Now().UTC()
 
-	if err := s.store.Save(doc); err != nil {
-		writeError(w, http.StatusInternalServerError, err)
+	persisted, err := s.store.SaveIfRevision(doc, expectedRevision)
+	if err != nil {
+		writeMapStoreError(w, http.StatusInternalServerError, err)
 		return
 	}
 
 	s.recordAPIModification(mapID)
-	writeJSON(w, http.StatusOK, *node)
+	setRevisionETag(w, persisted.Meta.Revision)
+	writeJSON(w, http.StatusOK, persisted.NodeMap()[nodeID])
 }
 
 func (s *Server) handleNodeByIDDelete(w http.ResponseWriter, r *http.Request, mapID string, nodeID string) {
-	doc, err := s.store.Load(mapID)
+	expectedRevision, ok := requireExpectedRevision(w, r)
+	if !ok {
+		return
+	}
+	doc, err := s.store.LoadReadOnly(mapID)
 	if err != nil {
 		writeError(w, http.StatusNotFound, err)
 		return
@@ -312,12 +333,14 @@ func (s *Server) handleNodeByIDDelete(w http.ResponseWriter, r *http.Request, ma
 
 	pruneRelationsToExistingNodes(&doc)
 
-	if err := s.store.Save(doc); err != nil {
-		writeError(w, http.StatusInternalServerError, err)
+	persisted, err := s.store.SaveIfRevision(doc, expectedRevision)
+	if err != nil {
+		writeMapStoreError(w, http.StatusInternalServerError, err)
 		return
 	}
 
 	s.recordAPIModification(mapID)
+	setRevisionETag(w, persisted.Meta.Revision)
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"status":       "deleted",
 		"deletedCount": deletedCount,
@@ -327,6 +350,7 @@ func (s *Server) handleNodeByIDDelete(w http.ResponseWriter, r *http.Request, ma
 // TreeNode represents a node in the nested tree structure returned by GET /tree.
 type TreeNode struct {
 	mindmap.Node
+	Revision uint64     `json:"revision,omitempty"`
 	Children []TreeNode `json:"children"`
 }
 
@@ -344,7 +368,9 @@ func buildTree(doc mindmap.Document) TreeNode {
 		}
 	}
 
-	return buildTreeNode(root, childrenMap)
+	tree := buildTreeNode(root, childrenMap)
+	tree.Revision = doc.Meta.Revision
+	return tree
 }
 
 // buildTreeNode recursively constructs a TreeNode from a node and its children map.
@@ -377,6 +403,7 @@ type compactNode struct {
 
 // compactNodeDetailResponse is the compact response for GET /api/maps/{mapId}/nodes/{nodeId}?compact=true.
 type compactNodeDetailResponse struct {
+	Revision  uint64        `json:"revision"`
 	Node      compactNode   `json:"node"`
 	Ancestors []compactNode `json:"ancestors"`
 	Children  []compactNode `json:"children"`
@@ -392,6 +419,7 @@ type compactTreeNode struct {
 	Priority  mindmap.Priority  `json:"priority,omitempty"`
 	Color     mindmap.NodeColor `json:"color,omitempty"`
 	Collapsed bool              `json:"collapsed,omitempty"`
+	Revision  uint64            `json:"revision,omitempty"`
 	Children  []compactTreeNode `json:"children"`
 }
 
@@ -433,7 +461,9 @@ func buildCompactTree(doc mindmap.Document) compactTreeNode {
 		}
 	}
 
-	return buildCompactTreeNode(root, childrenMap)
+	tree := buildCompactTreeNode(root, childrenMap)
+	tree.Revision = doc.Meta.Revision
+	return tree
 }
 
 // buildCompactTreeNode recursively constructs a compactTreeNode.
@@ -464,6 +494,7 @@ func buildCompactTreeNode(node mindmap.Node, childrenMap map[string][]mindmap.No
 
 // mapVersionResponse is the response for GET /api/maps/{mapId}/version.
 type mapVersionResponse struct {
+	Revision     uint64    `json:"revision"`
 	LastEditedAt time.Time `json:"lastEditedAt"`
 	NodeCount    int       `json:"nodeCount"`
 }

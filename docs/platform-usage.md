@@ -42,6 +42,10 @@
 
 读取类工具会自动附加 `compact=true`，更适合 AI Agent 消费。
 
+五个写工具都要求 `expectedRevision`。Agent 应先通过 `list_maps`、`get_tree` 或 `get_node`
+取得当前 revision，再执行写入；成功响应会同时返回新的 revision。陈旧 revision 会得到冲突错误，
+必须重新读取后再决定如何合并，不能盲目重试覆盖。
+
 ## 2. 在 VS Code 插件中调用
 
 ### 安装/开发运行

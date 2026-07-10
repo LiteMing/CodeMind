@@ -17,8 +17,18 @@ import (
 type MapSummary struct {
 	ID           string    `json:"id"`
 	Title        string    `json:"title"`
+	Revision     uint64    `json:"revision"`
 	LastEditedAt time.Time `json:"lastEditedAt"`
 	LastOpenedAt time.Time `json:"lastOpenedAt"`
+}
+
+type RevisionConflictError struct {
+	Expected uint64
+	Actual   uint64
+}
+
+func (e *RevisionConflictError) Error() string {
+	return fmt.Sprintf("revision conflict: expected %d, actual %d", e.Expected, e.Actual)
 }
 
 type FileStore struct {
@@ -65,10 +75,11 @@ func (s *FileStore) LoadOrCreate() (mindmap.Document, error) {
 	if len(summaries) == 0 {
 		doc := mindmap.NewDefaultDocument()
 		doc.ID = "default"
-		if err := s.saveLocked(doc); err != nil {
+		persisted, err := s.saveLocked(doc, 1)
+		if err != nil {
 			return mindmap.Document{}, err
 		}
-		return doc, nil
+		return persisted, nil
 	}
 
 	primaryID := summaries[0].ID
@@ -125,10 +136,11 @@ func (s *FileStore) Create(title string) (mindmap.Document, error) {
 		doc.Title = trimmed
 	}
 
-	if err := s.saveLocked(doc); err != nil {
+	persisted, err := s.saveLocked(doc, 1)
+	if err != nil {
 		return mindmap.Document{}, err
 	}
-	return doc, nil
+	return persisted, nil
 }
 
 func (s *FileStore) Save(doc mindmap.Document) error {
@@ -139,7 +151,37 @@ func (s *FileStore) Save(doc mindmap.Document) error {
 		return err
 	}
 
-	return s.saveLocked(doc)
+	nextRevision := uint64(1)
+	current, err := s.readDocumentLocked(s.documentPath(doc.ID))
+	if err == nil {
+		nextRevision = current.Meta.Revision + 1
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	_, err = s.saveLocked(doc, nextRevision)
+	return err
+}
+
+func (s *FileStore) SaveIfRevision(doc mindmap.Document, expectedRevision uint64) (mindmap.Document, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if err := s.ensureMigratedLocked(); err != nil {
+		return mindmap.Document{}, err
+	}
+
+	current, err := s.readDocumentLocked(s.documentPath(doc.ID))
+	if err != nil {
+		return mindmap.Document{}, err
+	}
+	if current.Meta.Revision != expectedRevision {
+		return mindmap.Document{}, &RevisionConflictError{
+			Expected: expectedRevision,
+			Actual:   current.Meta.Revision,
+		}
+	}
+
+	return s.saveLocked(doc, current.Meta.Revision+1)
 }
 
 func (s *FileStore) Rename(id string, title string) (mindmap.Document, error) {
@@ -168,10 +210,11 @@ func (s *FileStore) Rename(id string, title string) (mindmap.Document, error) {
 	}
 	doc.Title = trimmedTitle
 
-	if err := s.saveLocked(doc); err != nil {
+	persisted, err := s.saveLocked(doc, doc.Meta.Revision+1)
+	if err != nil {
 		return mindmap.Document{}, err
 	}
-	return doc, nil
+	return persisted, nil
 }
 
 func (s *FileStore) Delete(id string) error {
@@ -185,6 +228,28 @@ func (s *FileStore) Delete(id string) error {
 	docPath := s.documentPath(id)
 	if _, err := os.Stat(docPath); err != nil {
 		return err
+	}
+	return os.Remove(docPath)
+}
+
+func (s *FileStore) DeleteIfRevision(id string, expectedRevision uint64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if err := s.ensureMigratedLocked(); err != nil {
+		return err
+	}
+
+	docPath := s.documentPath(id)
+	current, err := s.readDocumentLocked(docPath)
+	if err != nil {
+		return err
+	}
+	if current.Meta.Revision != expectedRevision {
+		return &RevisionConflictError{
+			Expected: expectedRevision,
+			Actual:   current.Meta.Revision,
+		}
 	}
 	return os.Remove(docPath)
 }
@@ -213,6 +278,7 @@ func (s *FileStore) listLocked() ([]MapSummary, error) {
 		summaries = append(summaries, MapSummary{
 			ID:           doc.ID,
 			Title:        doc.Title,
+			Revision:     doc.Meta.Revision,
 			LastEditedAt: doc.Meta.LastEditedAt,
 			LastOpenedAt: doc.Meta.LastOpenedAt,
 		})
@@ -252,15 +318,19 @@ func (s *FileStore) loadLocked(id string, touchOpened bool) (mindmap.Document, e
 	return doc, nil
 }
 
-func (s *FileStore) saveLocked(doc mindmap.Document) error {
+func (s *FileStore) saveLocked(doc mindmap.Document, revision uint64) (mindmap.Document, error) {
 	if strings.TrimSpace(doc.ID) == "" {
 		doc.ID = sanitizeID(mindmap.NewID("map"))
 	}
+	doc.Meta.Revision = revision
 	doc.PrepareForSave(time.Now().UTC())
 	if err := doc.Validate(); err != nil {
-		return err
+		return mindmap.Document{}, err
 	}
-	return s.writeLocked(doc)
+	if err := s.writeLocked(doc); err != nil {
+		return mindmap.Document{}, err
+	}
+	return doc, nil
 }
 
 func (s *FileStore) ensureMigratedLocked() error {
@@ -291,6 +361,7 @@ func (s *FileStore) ensureMigratedLocked() error {
 	if strings.TrimSpace(doc.ID) == "" {
 		doc.ID = "default"
 	}
+	doc.NormalizeMetadata()
 	return s.writeLocked(doc)
 }
 
@@ -304,6 +375,7 @@ func (s *FileStore) readDocumentLocked(path string) (mindmap.Document, error) {
 	if err := json.Unmarshal(payload, &doc); err != nil {
 		return mindmap.Document{}, err
 	}
+	doc.NormalizeMetadata()
 	if err := doc.Validate(); err != nil {
 		return mindmap.Document{}, fmt.Errorf("invalid document %s: %w", path, err)
 	}

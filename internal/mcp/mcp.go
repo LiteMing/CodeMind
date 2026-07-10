@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"net/http"
 	"os"
 	"strconv"
@@ -235,6 +236,13 @@ func (s *MCPServer) executeToolCall(name string, args map[string]any) (string, e
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
+	if isWriteOp(name) {
+		expectedRevision, err := expectedRevisionArgument(args)
+		if err != nil {
+			return "", err
+		}
+		req.Header.Set("If-Match", fmt.Sprintf(`"rev-%d"`, expectedRevision))
+	}
 
 	// Forward API key if configured
 	if s.apiKey != "" {
@@ -262,6 +270,9 @@ func (s *MCPServer) executeToolCall(name string, args map[string]any) (string, e
 	if resp.StatusCode >= 400 {
 		return "", fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(respBody))
 	}
+	if isWriteOp(name) {
+		return wrapWriteResultWithRevision(respBody, resp.Header.Get("ETag"))
+	}
 
 	return string(respBody), nil
 }
@@ -270,6 +281,11 @@ func (s *MCPServer) executeToolCall(name string, args map[string]any) (string, e
 func (s *MCPServer) buildHTTPRequest(name string, args map[string]any) (method string, path string, body any, err error) {
 	mapID, _ := args["mapId"].(string)
 	nodeID, _ := args["nodeId"].(string)
+	if isWriteOp(name) {
+		if _, err := expectedRevisionArgument(args); err != nil {
+			return "", "", nil, err
+		}
+	}
 
 	switch name {
 	case "list_maps":
@@ -379,6 +395,49 @@ func isReadOp(name string) bool {
 	return false
 }
 
+func isWriteOp(name string) bool {
+	switch name {
+	case "create_node", "update_node", "delete_node", "batch_operations", "import_fragment":
+		return true
+	default:
+		return false
+	}
+}
+
+func expectedRevisionArgument(args map[string]any) (uint64, error) {
+	value, ok := args["expectedRevision"]
+	if !ok {
+		return 0, fmt.Errorf("expectedRevision is required")
+	}
+	number, ok := value.(float64)
+	const maxSafeJSONInteger = 9_007_199_254_740_991
+	if !ok || math.Trunc(number) != number || number < 1 || number > maxSafeJSONInteger {
+		return 0, fmt.Errorf("expectedRevision must be a positive integer")
+	}
+	return uint64(number), nil
+}
+
+func wrapWriteResultWithRevision(payload []byte, etag string) (string, error) {
+	revisionText := strings.TrimPrefix(strings.Trim(etag, `"`), "rev-")
+	revision, err := strconv.ParseUint(revisionText, 10, 64)
+	if err != nil || revision == 0 {
+		return "", fmt.Errorf("Code Mind backend returned a write response without a valid ETag")
+	}
+
+	var result any
+	if err := json.Unmarshal(payload, &result); err != nil {
+		return "", fmt.Errorf("failed to decode write response: %w", err)
+	}
+	wrapper, err := json.Marshal(map[string]any{
+		"revision": revision,
+		"result":   result,
+	})
+	if err != nil {
+		return "", fmt.Errorf("failed to encode write response: %w", err)
+	}
+	return string(wrapper), nil
+}
+
 // readMessage reads a JSON-RPC message from stdin using Content-Length header framing.
 func readMessage(reader *bufio.Reader) ([]byte, error) {
 	// Read headers until empty line
@@ -451,7 +510,7 @@ func getToolManifest() []mcpTool {
 	return []mcpTool{
 		{
 			Name:        "list_maps",
-			Description: "List all mindmaps. Returns an array of map summaries with id, title, and timestamps.",
+			Description: "List all mindmaps. Returns map summaries with id, title, revision, and timestamps.",
 			InputSchema: json.RawMessage(`{
 				"type": "object",
 				"properties": {},
@@ -460,7 +519,7 @@ func getToolManifest() []mcpTool {
 		},
 		{
 			Name:        "get_tree",
-			Description: "Get a mindmap as a nested tree structure. Returns the full hierarchy with nodes and their children. Recommended for understanding map context.",
+			Description: "Get a mindmap as a nested tree structure. The root includes the current revision required by write tools.",
 			InputSchema: json.RawMessage(`{
 				"type": "object",
 				"properties": {
@@ -474,7 +533,7 @@ func getToolManifest() []mcpTool {
 		},
 		{
 			Name:        "get_node",
-			Description: "Get a single node with its ancestors chain and direct children. Useful for focused context around a specific node.",
+			Description: "Get a node with its ancestors, children, and the current map revision required by write tools.",
 			InputSchema: json.RawMessage(`{
 				"type": "object",
 				"properties": {
@@ -492,13 +551,18 @@ func getToolManifest() []mcpTool {
 		},
 		{
 			Name:        "create_node",
-			Description: "Create a new node in a mindmap. The node is added as a child of the specified parent node. Position is automatically calculated.",
+			Description: "Create a new node using optimistic concurrency. Read the map revision first, then pass it as expectedRevision. Returns the new revision and created node.",
 			InputSchema: json.RawMessage(`{
 				"type": "object",
 				"properties": {
 					"mapId": {
 						"type": "string",
 						"description": "The ID of the mindmap to add the node to"
+					},
+					"expectedRevision": {
+						"type": "integer",
+						"minimum": 1,
+						"description": "Current map revision returned by list_maps, get_tree, or get_node"
 					},
 					"parentId": {
 						"type": "string",
@@ -528,12 +592,12 @@ func getToolManifest() []mcpTool {
 						"enum": ["", "slate", "blue", "teal", "green", "amber", "rose", "violet"]
 					}
 				},
-				"required": ["mapId", "parentId", "title"]
+				"required": ["mapId", "expectedRevision", "parentId", "title"]
 			}`),
 		},
 		{
 			Name:        "update_node",
-			Description: "Update fields of an existing node. Only specified fields are modified; others remain unchanged.",
+			Description: "Update fields of an existing node using optimistic concurrency. Returns the new map revision and updated node.",
 			InputSchema: json.RawMessage(`{
 				"type": "object",
 				"properties": {
@@ -544,6 +608,11 @@ func getToolManifest() []mcpTool {
 					"nodeId": {
 						"type": "string",
 						"description": "The ID of the node to update"
+					},
+					"expectedRevision": {
+						"type": "integer",
+						"minimum": 1,
+						"description": "Current map revision returned by list_maps, get_tree, or get_node"
 					},
 					"title": {
 						"type": "string",
@@ -568,12 +637,12 @@ func getToolManifest() []mcpTool {
 						"description": "Whether the node's children should be collapsed/hidden"
 					}
 				},
-				"required": ["mapId", "nodeId"]
+				"required": ["mapId", "nodeId", "expectedRevision"]
 			}`),
 		},
 		{
 			Name:        "delete_node",
-			Description: "Delete a node from the mindmap. By default, cascades to delete all descendant nodes. The root node cannot be deleted.",
+			Description: "Delete a node using optimistic concurrency. By default, cascades to descendants. Returns the new map revision.",
 			InputSchema: json.RawMessage(`{
 				"type": "object",
 				"properties": {
@@ -585,23 +654,33 @@ func getToolManifest() []mcpTool {
 						"type": "string",
 						"description": "The ID of the node to delete"
 					},
+					"expectedRevision": {
+						"type": "integer",
+						"minimum": 1,
+						"description": "Current map revision returned by list_maps, get_tree, or get_node"
+					},
 					"cascade": {
 						"type": "boolean",
 						"description": "If true (default), delete all descendant nodes. If false, re-parent children to the deleted node's parent."
 					}
 				},
-				"required": ["mapId", "nodeId"]
+				"required": ["mapId", "nodeId", "expectedRevision"]
 			}`),
 		},
 		{
 			Name:        "batch_operations",
-			Description: "Execute multiple node operations atomically. All operations succeed or all are rolled back. Supports create, update, and delete actions.",
+			Description: "Execute multiple node operations atomically at an expected map revision. Returns the new revision and results.",
 			InputSchema: json.RawMessage(`{
 				"type": "object",
 				"properties": {
 					"mapId": {
 						"type": "string",
 						"description": "The ID of the mindmap to operate on"
+					},
+					"expectedRevision": {
+						"type": "integer",
+						"minimum": 1,
+						"description": "Current map revision returned by list_maps, get_tree, or get_node"
 					},
 					"operations": {
 						"type": "array",
@@ -627,18 +706,23 @@ func getToolManifest() []mcpTool {
 						}
 					}
 				},
-				"required": ["mapId", "operations"]
+				"required": ["mapId", "expectedRevision", "operations"]
 			}`),
 		},
 		{
 			Name:        "import_fragment",
-			Description: "Import a JSON subtree into the mindmap. Recursively creates an entire branch structure with nested children. Useful for bulk node creation.",
+			Description: "Import a JSON subtree at an expected map revision. Returns the new revision and created nodes.",
 			InputSchema: json.RawMessage(`{
 				"type": "object",
 				"properties": {
 					"mapId": {
 						"type": "string",
 						"description": "The ID of the mindmap to import into"
+					},
+					"expectedRevision": {
+						"type": "integer",
+						"minimum": 1,
+						"description": "Current map revision returned by list_maps, get_tree, or get_node"
 					},
 					"parentId": {
 						"type": "string",
@@ -670,7 +754,7 @@ func getToolManifest() []mcpTool {
 						}
 					}
 				},
-				"required": ["mapId", "nodes"]
+				"required": ["mapId", "expectedRevision", "nodes"]
 			}`),
 		},
 	}

@@ -324,6 +324,13 @@ function reportError(err: unknown, action: string): void {
     return;
   }
   if (err instanceof CodeMindAPIError) {
+    if (err.status === 412) {
+      vscode.window.showWarningMessage(
+        `Code Mind: ${action} conflicted with server revision ${err.actualRevision ?? 'unknown'}. The tree will refresh; review the latest state before retrying.`,
+      );
+      vscode.commands.executeCommand('codeMind.refresh');
+      return;
+    }
     vscode.window.showErrorMessage(
       `Code Mind: failed to ${action} (HTTP ${err.status}): ${err.detail || err.message}`,
     );

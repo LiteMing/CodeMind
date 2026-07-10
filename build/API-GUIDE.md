@@ -6,7 +6,7 @@ Code Mind 是一个本地优先的思维导图桌面应用，提供节点级 RES
 
 **API 地址**：`http://127.0.0.1:34117/api`（桌面模式）
 
-**数据存储**：`{exe所在目录}/data/maps/` 下的 JSON 文件，每个文件是一个独立的脑图文档。
+**数据存储**：应用数据目录的 `maps/` 下保存 JSON 文件；Windows 桌面端默认位于 `%APPDATA%\CodeMind\data\maps\`。
 
 ---
 
@@ -19,6 +19,27 @@ X-API-Key: {配置的key}
 ```
 
 未配置 key 时无需认证。
+
+---
+
+## Revision 与乐观并发
+
+每张脑图都有单调递增的 `revision`。读取接口会在 JSON 中返回 revision，并设置：
+
+```http
+ETag: "rev-7"
+```
+
+除新建脑图外，所有地图写入必须携带当前 revision：
+
+```http
+If-Match: "rev-7"
+```
+
+- 写入成功后 revision 加一，响应 ETag 变为 `"rev-8"`。
+- 缺少 `If-Match` 返回 `428 Precondition Required`。
+- revision 已过期返回 `412 Precondition Failed`，并提供 `expectedRevision`、`actualRevision`。
+- 收到 412 后应重新读取脑图并人工合并，不要自动覆盖服务端或丢弃本地内容。
 
 ---
 
@@ -54,7 +75,7 @@ X-API-Key: {配置的key}
 GET /api/maps
 ```
 
-返回：`[{id, title, lastEditedAt, lastOpenedAt}, ...]`
+返回：`[{id, title, revision, lastEditedAt, lastOpenedAt}, ...]`
 
 ### 获取地图所有节点（扁平数组）
 
@@ -74,6 +95,7 @@ GET /api/maps/{mapId}/tree?compact=true   ← 推荐，省略 position/timestamp
 ```json
 {
   "id": "root",
+  "revision": 7,
   "title": "项目名",
   "kind": "root",
   "children": [
@@ -96,6 +118,7 @@ GET /api/maps/{mapId}/nodes/{nodeId}?compact=true   ← 省略 position/timestam
 返回：
 ```json
 {
+  "revision": 7,
   "node": {...},
   "ancestors": [...],  // 从直接父节点到 root
   "children": [...]    // 直接子节点
@@ -107,6 +130,7 @@ GET /api/maps/{mapId}/nodes/{nodeId}?compact=true   ← 省略 position/timestam
 ```
 POST /api/maps/{mapId}/nodes
 Content-Type: application/json
+If-Match: "rev-7"
 
 {
   "parentId": "root",       // 必填：挂载到哪个父节点下
@@ -125,6 +149,7 @@ Content-Type: application/json
 ```
 PATCH /api/maps/{mapId}/nodes/{nodeId}
 Content-Type: application/json
+If-Match: "rev-7"
 
 {
   "title": "新标题",    // 只传要改的字段
@@ -139,6 +164,7 @@ Content-Type: application/json
 ```
 DELETE /api/maps/{mapId}/nodes/{nodeId}
 DELETE /api/maps/{mapId}/nodes/{nodeId}?cascade=false
+If-Match: "rev-7"
 ```
 
 - `cascade=true`（默认）：删除节点及所有后代
@@ -150,6 +176,7 @@ DELETE /api/maps/{mapId}/nodes/{nodeId}?cascade=false
 ```
 POST /api/maps/{mapId}/batch
 Content-Type: application/json
+If-Match: "rev-7"
 
 {
   "operations": [
@@ -167,6 +194,7 @@ Content-Type: application/json
 ```
 POST /api/maps/{mapId}/import-fragment
 Content-Type: application/json
+If-Match: "rev-7"
 
 {
   "nodes": [
@@ -192,9 +220,9 @@ Content-Type: application/json
 GET /api/maps/{mapId}/version
 ```
 
-返回：`{"lastEditedAt": "2026-...", "nodeCount": 15}`
+返回：`{"revision": 7, "lastEditedAt": "2026-...", "nodeCount": 15}`
 
-写入前先读取，写入后对比，可检测是否有其他客户端同时修改。
+写入时把该 revision 放入 `If-Match`；服务端会原子比较并拒绝陈旧写入。
 
 ### 变更轮询（前端实时刷新用）
 
@@ -205,6 +233,7 @@ GET /api/maps/{mapId}/poll?since=2026-05-11T12:00:00Z
 返回：
 ```json
 {
+  "revision": 7,
   "lastEditedAt": "2026-05-11T12:52:02Z",
   "nodeCount": 32,
   "modifiedViaAPI": true
@@ -231,6 +260,7 @@ GET /api/maps/{mapId}/tree
 
 ```
 POST /api/maps/{mapId}/nodes
+If-Match: "rev-7"
 {
   "parentId": "对应模块的nodeId",
   "title": "2026-05-11: 完成用户认证模块",
@@ -272,6 +302,8 @@ POST /api/maps/{mapId}/import-fragment
 | 401 | API Key 认证失败 |
 | 404 | Map 或 Node 不存在 |
 | 405 | HTTP 方法不允许 |
+| 412 | revision 冲突，写入被拒绝 |
+| 428 | 缺少 If-Match |
 
 ---
 

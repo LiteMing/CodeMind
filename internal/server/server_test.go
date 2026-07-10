@@ -189,7 +189,7 @@ func TestAIRelationsEndpoint(t *testing.T) {
 
 	server := newTestServer(t)
 	server.httpClient = upstream.Client()
-	handler := server.Handler()
+	handler := withTestRevisionHeaders(server.Handler())
 
 	doc := mindmap.NewDefaultDocument()
 	doc.Nodes = append(doc.Nodes,
@@ -246,7 +246,7 @@ func TestAITestEndpoint(t *testing.T) {
 
 	server := newTestServer(t)
 	server.httpClient = upstream.Client()
-	handler := server.Handler()
+	handler := withTestRevisionHeaders(server.Handler())
 
 	req := httptest.NewRequest(http.MethodPost, "/api/ai/test", strings.NewReader(`{"settings":{"provider":"openai-compatible","baseUrl":"`+upstream.URL+`","model":"qwen-local","apiKey":"test-key","maxTokens":4096}}`))
 	req.Header.Set("Content-Type", "application/json")
@@ -308,7 +308,7 @@ func TestAIGenerateEndpoint(t *testing.T) {
 
 	server := newTestServer(t)
 	server.httpClient = upstream.Client()
-	handler := server.Handler()
+	handler := withTestRevisionHeaders(server.Handler())
 
 	req := httptest.NewRequest(http.MethodPost, "/api/ai/generate", strings.NewReader(`{"settings":{"provider":"openai-compatible","baseUrl":"`+upstream.URL+`","model":"","apiKey":"test-key","maxTokens":4096},"topic":"Graph Databases","template":"concept-graph","instructions":"Focus on practical overview."}`))
 	req.Header.Set("Content-Type", "application/json")
@@ -392,7 +392,7 @@ func TestAIGenerateEndpointSupportsRawRequest(t *testing.T) {
 
 	server := newTestServer(t)
 	server.httpClient = upstream.Client()
-	handler := server.Handler()
+	handler := withTestRevisionHeaders(server.Handler())
 
 	req := httptest.NewRequest(http.MethodPost, "/api/ai/generate", strings.NewReader(`{"settings":{"provider":"openai-compatible","baseUrl":"`+upstream.URL+`","model":"qwen-local","apiKey":"test-key","maxTokens":4096},"topic":"Raw Mode","template":"concept-graph","instructions":"Ignore this and use raw mode.","debug":{"rawMode":true,"rawRequest":"{\"messages\":[{\"role\":\"system\",\"content\":\"raw system\"},{\"role\":\"user\",\"content\":\"raw user\"}],\"temperature\":0.77}"}}`))
 	req.Header.Set("Content-Type", "application/json")
@@ -497,7 +497,7 @@ func TestAINodeNotesEndpoint(t *testing.T) {
 
 	server := newTestServer(t)
 	server.httpClient = upstream.Client()
-	handler := server.Handler()
+	handler := withTestRevisionHeaders(server.Handler())
 
 	req := httptest.NewRequest(http.MethodPost, "/api/ai/node-notes", strings.NewReader(`{"settings":{"provider":"openai-compatible","baseUrl":"`+upstream.URL+`","model":"","apiKey":"test-key","maxTokens":4096},"document":{"id":"roadmap","title":"Roadmap","theme":"dark","nodes":[{"id":"root","kind":"root","title":"Roadmap","note":"Top level overview","position":{"x":820,"y":320},"createdAt":"2026-03-01T09:30:00Z","updatedAt":"2026-03-01T09:30:00Z"},{"id":"scope","parentId":"root","kind":"topic","title":"Scope","note":"","position":{"x":1100,"y":320},"createdAt":"2026-03-01T09:30:00Z","updatedAt":"2026-03-01T09:30:00Z"},{"id":"timeline","parentId":"root","kind":"topic","title":"Timeline","note":"","position":{"x":1100,"y":420},"createdAt":"2026-03-01T09:30:00Z","updatedAt":"2026-03-01T09:30:00Z"}],"relations":[],"meta":{"version":1,"lastEditedAt":"2026-03-01T09:30:00Z","lastOpenedAt":"2026-03-02T10:00:00Z"}},"targetNodeIds":["scope"],"instructions":"Focus on execution clarity."}`))
 	req.Header.Set("Content-Type", "application/json")
@@ -569,7 +569,7 @@ func TestAIGenerateEndpointRetriesFlatHierarchy(t *testing.T) {
 
 	server := newTestServer(t)
 	server.httpClient = upstream.Client()
-	handler := server.Handler()
+	handler := withTestRevisionHeaders(server.Handler())
 
 	req := httptest.NewRequest(http.MethodPost, "/api/ai/generate", strings.NewReader(`{"settings":{"provider":"openai-compatible","baseUrl":"`+upstream.URL+`","model":"","apiKey":"test-key","maxTokens":4096},"topic":"AI Systems","template":"concept-graph","instructions":"Keep it useful for beginners."}`))
 	req.Header.Set("Content-Type", "application/json")
@@ -609,7 +609,7 @@ func TestAIGenerateEndpointParsesDirtyJSON(t *testing.T) {
 
 	server := newTestServer(t)
 	server.httpClient = upstream.Client()
-	handler := server.Handler()
+	handler := withTestRevisionHeaders(server.Handler())
 
 	req := httptest.NewRequest(http.MethodPost, "/api/ai/generate", strings.NewReader(`{"settings":{"provider":"openai-compatible","baseUrl":"`+upstream.URL+`","model":"","apiKey":"test-key","maxTokens":4096},"topic":"Graph Databases","template":"concept-graph","instructions":""}`))
 	req.Header.Set("Content-Type", "application/json")
@@ -646,7 +646,7 @@ func TestAIGenerateEndpointParsesWrappedAlternateJSON(t *testing.T) {
 
 	server := newTestServer(t)
 	server.httpClient = upstream.Client()
-	handler := server.Handler()
+	handler := withTestRevisionHeaders(server.Handler())
 
 	req := httptest.NewRequest(http.MethodPost, "/api/ai/generate", strings.NewReader(`{"settings":{"provider":"openai-compatible","baseUrl":"`+upstream.URL+`","model":"","apiKey":"test-key","maxTokens":4096},"topic":"水浒传","template":"character-network","instructions":""}`))
 	req.Header.Set("Content-Type", "application/json")
@@ -686,7 +686,7 @@ func TestAITestEndpointHonorsConfiguredTimeout(t *testing.T) {
 
 	server := newTestServer(t)
 	server.httpClient = upstream.Client()
-	handler := server.Handler()
+	handler := withTestRevisionHeaders(server.Handler())
 
 	req := httptest.NewRequest(http.MethodPost, "/api/ai/test", strings.NewReader(`{"settings":{"provider":"openai-compatible","baseUrl":"`+upstream.URL+`","model":"","apiKey":"test-key","maxTokens":4096,"timeoutSeconds":1}}`))
 	req.Header.Set("Content-Type", "application/json")
@@ -716,7 +716,7 @@ func TestAIGenerateEndpointExpandsCurrentDocument(t *testing.T) {
 
 	server := newTestServer(t)
 	server.httpClient = upstream.Client()
-	handler := server.Handler()
+	handler := withTestRevisionHeaders(server.Handler())
 
 	reqBody := `{"settings":{"provider":"openai-compatible","baseUrl":"` + upstream.URL + `","model":"","apiKey":"test-key","maxTokens":4096},"topic":"Roadmap","template":"project-planning","mode":"expand","document":{"id":"roadmap","title":"Roadmap","theme":"dark","nodes":[{"id":"root","kind":"root","title":"Roadmap","position":{"x":820,"y":320},"createdAt":"2026-03-01T09:30:00Z","updatedAt":"2026-03-01T09:30:00Z"},{"id":"scope","parentId":"root","kind":"topic","title":"Scope","position":{"x":1100,"y":320},"createdAt":"2026-03-01T09:30:00Z","updatedAt":"2026-03-01T09:30:00Z"},{"id":"timeline","parentId":"root","kind":"topic","title":"Timeline","position":{"x":1100,"y":420},"createdAt":"2026-03-01T09:30:00Z","updatedAt":"2026-03-01T09:30:00Z"}],"relations":[],"meta":{"version":1,"lastEditedAt":"2026-03-01T09:30:00Z","lastOpenedAt":"2026-03-01T09:30:00Z"}},"instructions":"Deepen weak branches."}`
 	req := httptest.NewRequest(http.MethodPost, "/api/ai/generate", strings.NewReader(reqBody))
@@ -787,7 +787,7 @@ func TestAIGenerateEndpointRetriesAfterParseFailure(t *testing.T) {
 
 	server := newTestServer(t)
 	server.httpClient = upstream.Client()
-	handler := server.Handler()
+	handler := withTestRevisionHeaders(server.Handler())
 
 	req := httptest.NewRequest(http.MethodPost, "/api/ai/generate", strings.NewReader(`{"settings":{"provider":"openai-compatible","baseUrl":"`+upstream.URL+`","model":"","apiKey":"test-key","maxTokens":4096},"topic":"Graph Databases","template":"concept-graph","instructions":"Return only usable structure."}`))
 	req.Header.Set("Content-Type", "application/json")
@@ -826,7 +826,7 @@ func TestAIRelationsEndpointFocusFiltersSuggestions(t *testing.T) {
 
 	server := newTestServer(t)
 	server.httpClient = upstream.Client()
-	handler := server.Handler()
+	handler := withTestRevisionHeaders(server.Handler())
 
 	doc := mindmap.NewDefaultDocument()
 	doc.Nodes = append(doc.Nodes,
@@ -902,7 +902,7 @@ func TestAISuggestChildrenEndpointSupportsSiblingMode(t *testing.T) {
 
 	server := newTestServer(t)
 	server.httpClient = upstream.Client()
-	handler := server.Handler()
+	handler := withTestRevisionHeaders(server.Handler())
 
 	doc := mindmap.NewDefaultDocument()
 	doc.Nodes = append(doc.Nodes,
@@ -957,7 +957,7 @@ func TestAISuggestChildrenEndpointSupportsSiblingMode(t *testing.T) {
 
 func TestListMapsPreservesLastEditedAt(t *testing.T) {
 	storePath := t.TempDir()
-	handler := New(store.NewFileStore(storePath), storePath).Handler()
+	handler := withTestRevisionHeaders(New(store.NewFileStore(storePath), storePath).Handler())
 
 	lastEditedAt := time.Date(2026, time.March, 1, 9, 30, 0, 0, time.UTC)
 	lastOpenedAt := time.Date(2026, time.March, 2, 10, 0, 0, 0, time.UTC)
@@ -988,7 +988,7 @@ func TestListMapsPreservesLastEditedAt(t *testing.T) {
 
 func TestLoadMapTouchesLastOpenedAtWithoutEditing(t *testing.T) {
 	storePath := t.TempDir()
-	handler := New(store.NewFileStore(storePath), storePath).Handler()
+	handler := withTestRevisionHeaders(New(store.NewFileStore(storePath), storePath).Handler())
 
 	lastEditedAt := time.Date(2026, time.March, 1, 9, 30, 0, 0, time.UTC)
 	lastOpenedAt := time.Date(2026, time.March, 2, 10, 0, 0, 0, time.UTC)
@@ -1024,7 +1024,7 @@ func TestLoadMapTouchesLastOpenedAtWithoutEditing(t *testing.T) {
 
 func TestPollMapDoesNotTouchLastOpenedAt(t *testing.T) {
 	storePath := t.TempDir()
-	handler := New(store.NewFileStore(storePath), storePath).Handler()
+	handler := withTestRevisionHeaders(New(store.NewFileStore(storePath), storePath).Handler())
 
 	lastEditedAt := time.Date(2026, time.March, 1, 9, 30, 0, 0, time.UTC)
 	lastOpenedAt := time.Date(2026, time.March, 2, 10, 0, 0, 0, time.UTC)
@@ -1046,7 +1046,7 @@ func TestPollMapDoesNotTouchLastOpenedAt(t *testing.T) {
 
 func TestSaveMapUpdatesLastEditedAt(t *testing.T) {
 	storePath := t.TempDir()
-	handler := New(store.NewFileStore(storePath), storePath).Handler()
+	handler := withTestRevisionHeaders(New(store.NewFileStore(storePath), storePath).Handler())
 
 	lastEditedAt := time.Date(2026, time.March, 1, 9, 30, 0, 0, time.UTC)
 	lastOpenedAt := time.Date(2026, time.March, 2, 10, 0, 0, 0, time.UTC)
@@ -1088,7 +1088,7 @@ func TestSaveMapUpdatesLastEditedAt(t *testing.T) {
 
 func TestSaveMapPersistsNodeColor(t *testing.T) {
 	storePath := t.TempDir()
-	handler := New(store.NewFileStore(storePath), storePath).Handler()
+	handler := withTestRevisionHeaders(New(store.NewFileStore(storePath), storePath).Handler())
 
 	lastEditedAt := time.Date(2026, time.March, 1, 9, 30, 0, 0, time.UTC)
 	lastOpenedAt := time.Date(2026, time.March, 2, 10, 0, 0, 0, time.UTC)
@@ -1137,7 +1137,7 @@ func TestSaveMapPersistsNodeColor(t *testing.T) {
 
 func TestSaveMapPersistsNodeNote(t *testing.T) {
 	storePath := t.TempDir()
-	handler := New(store.NewFileStore(storePath), storePath).Handler()
+	handler := withTestRevisionHeaders(New(store.NewFileStore(storePath), storePath).Handler())
 
 	lastEditedAt := time.Date(2026, time.March, 1, 9, 30, 0, 0, time.UTC)
 	lastOpenedAt := time.Date(2026, time.March, 2, 10, 0, 0, 0, time.UTC)
@@ -1186,7 +1186,28 @@ func TestSaveMapPersistsNodeNote(t *testing.T) {
 
 func newTestHandler(t *testing.T) http.Handler {
 	t.Helper()
-	return newTestServer(t).Handler()
+	return withTestRevisionHeaders(newTestServer(t).Handler())
+}
+
+func withTestRevisionHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("If-Match") == "" && isWriteOperation(r) {
+			if mapID, ok := requestMapID(r.URL.Path); ok {
+				versionReq := httptest.NewRequest(http.MethodGet, "/api/maps/"+mapID+"/version", nil)
+				versionRes := httptest.NewRecorder()
+				next.ServeHTTP(versionRes, versionReq)
+				revision := uint64(1)
+				if versionRes.Code == http.StatusOK {
+					var payload mapVersionResponse
+					if err := json.Unmarshal(versionRes.Body.Bytes(), &payload); err == nil && payload.Revision > 0 {
+						revision = payload.Revision
+					}
+				}
+				r.Header.Set("If-Match", revisionETag(revision))
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func newTestServer(t *testing.T) *Server {

@@ -84,6 +84,7 @@ export interface RegionBox {
 
 export interface MindMapMeta {
   version: number
+  revision: number
   lastEditedAt: string
   lastOpenedAt: string
 }
@@ -101,6 +102,7 @@ export interface MindMapDocument {
 export interface MindMapSummary {
   id: string
   title: string
+  revision: number
   lastEditedAt: string
   lastOpenedAt: string
 }

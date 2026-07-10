@@ -30,7 +30,11 @@ type batchResponse struct {
 }
 
 func (s *Server) handleNodeBatchPost(w http.ResponseWriter, r *http.Request, mapID string) {
-	doc, err := s.store.Load(mapID)
+	expectedRevision, ok := requireExpectedRevision(w, r)
+	if !ok {
+		return
+	}
+	doc, err := s.store.LoadReadOnly(mapID)
 	if err != nil {
 		writeError(w, http.StatusNotFound, err)
 		return
@@ -100,12 +104,14 @@ func (s *Server) handleNodeBatchPost(w http.ResponseWriter, r *http.Request, map
 	// All operations succeeded, commit changes
 	doc.Nodes = nodesCopy
 	pruneRelationsToExistingNodes(&doc)
-	if err := s.store.Save(doc); err != nil {
-		writeError(w, http.StatusInternalServerError, err)
+	persisted, err := s.store.SaveIfRevision(doc, expectedRevision)
+	if err != nil {
+		writeMapStoreError(w, http.StatusInternalServerError, err)
 		return
 	}
 
 	s.recordAPIModification(mapID)
+	setRevisionETag(w, persisted.Meta.Revision)
 	writeJSON(w, http.StatusOK, batchResponse{
 		Results:      results,
 		DeletedCount: deletedCount,
