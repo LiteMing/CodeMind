@@ -233,6 +233,34 @@ describe('app interaction smoke', () => {
     expect(doc.nodes.length).toBeGreaterThanOrEqual(2)
   })
 
+  it('shows conflict recovery actions in both chrome layouts', async () => {
+    const { MindMapApp } = await import('./app')
+    const app = new MindMapApp(root)
+    await app.mount()
+    await flush()
+
+    root.querySelector<HTMLElement>('[data-command="create-map"]')!.click()
+    await flush()
+    app.state.revisionConflict = {
+      mapId: app.state.document.id,
+      expectedRevision: app.state.document.meta.revision,
+      actualRevision: app.state.document.meta.revision + 1,
+    }
+
+    app.state.preferences.appearance.chromeLayout = 'floating'
+    app.render()
+    const floatingActions = root.querySelector<HTMLElement>('[data-conflict-actions]')
+    expect(floatingActions?.hidden).toBe(false)
+    expect(floatingActions?.querySelector('[data-command="reload-server-version"]')).toBeTruthy()
+    expect(floatingActions?.querySelector('[data-command="overwrite-server-version"]')).toBeTruthy()
+
+    app.state.preferences.appearance.chromeLayout = 'fixed'
+    app.render()
+    const fixedToolbar = root.querySelector<HTMLElement>('[data-fixed-toolbar]')
+    expect(fixedToolbar?.querySelector('[data-command="reload-server-version"]')).toBeTruthy()
+    expect(fixedToolbar?.querySelector('[data-command="overwrite-server-version"]')).toBeTruthy()
+  })
+
   it('keeps rapid collapse/expand toggles consistent without flicker-prone timer double-fires', async () => {
     const { createApp } = await import('./app')
     await createApp(root)

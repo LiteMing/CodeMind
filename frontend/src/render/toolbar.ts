@@ -11,6 +11,7 @@ export function renderFixedToolbar(app: MindMapApp): string {
   const childCount = selectedNode ? childrenOf(app.state.document, selectedNode.id).length : 0
   const canDeleteSelection = app.selectedNodeIds().some((nodeId) => app.findNode(nodeId)?.kind !== 'root')
   const aiBusy = app.state.ai.busy
+  const revisionConflict = app.state.revisionConflict
   const labels =
     locale === 'zh-CN'
       ? {
@@ -135,6 +136,14 @@ export function renderFixedToolbar(app: MindMapApp): string {
       </div>
 
       <div class="fixed-toolbar-quick">
+        ${
+          revisionConflict
+            ? `
+              <button type="button" class="chip-button" data-command="reload-server-version" ${app.conflictResolutionInFlight ? 'disabled' : ''}>${escapeHtml(app.t('conflict.reloadServer'))}</button>
+              <button type="button" class="chip-button danger" data-command="overwrite-server-version" ${app.conflictResolutionInFlight || revisionConflict.actualRevision === null ? 'disabled' : ''}>${escapeHtml(app.t('conflict.overwriteServer'))}</button>
+            `
+            : ''
+        }
         <button type="button" class="chip-button" data-command="undo" ${app.canUndo() ? '' : 'disabled'}>${app.t('toolbar.undo')}</button>
         <button type="button" class="chip-button" data-command="redo" ${app.canRedo() ? '' : 'disabled'}>${app.t('toolbar.redo')}</button>
         <button type="button" class="chip-button" data-command="save">${app.t('toolbar.save')}</button>

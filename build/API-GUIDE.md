@@ -20,6 +20,10 @@ X-API-Key: {配置的key}
 
 未配置 key 时无需认证。
 
+协作 token 可通过 `Authorization: Bearer {token}` 使用。token 的 ID、`actorKind` 和 displayName 由服务端解析为
+写入 actor；请求体不得自行提交 `actor`、`author` 或 `pending`。API key 和本地无认证请求统一归因到
+`local-owner/human`。
+
 ---
 
 ## Revision 与乐观并发
@@ -40,6 +44,21 @@ If-Match: "rev-7"
 - 缺少 `If-Match` 返回 `428 Precondition Required`。
 - revision 已过期返回 `412 Precondition Failed`，并提供 `expectedRevision`、`actualRevision`。
 - 收到 412 后应重新读取脑图并人工合并，不要自动覆盖服务端或丢弃本地内容。
+
+### Agent 节点写命令
+
+节点 create/update/delete、batch 和 import-fragment 还必须携带：
+
+```http
+X-CodeMind-Partition: development
+Idempotency-Key: agent-command-018f...
+```
+
+- partition 可声明 `requirements | development | stable`，当前 `stable` 拒绝写入。
+- 幂等范围是 `actorId + mapId + Idempotency-Key`。
+- 相同 key 和相同命令重放首次成功响应，不重复执行或增加 revision。
+- 相同 key 用于不同命令返回 `409`，错误码为 `idempotency_key_reused`。
+- 成功重放记录是有界、带 TTL 的进程内缓存；服务重启后不保证保留。
 
 ---
 
@@ -212,6 +231,8 @@ GET /api/maps/{mapId}/nodes/{nodeId}?compact=true   ← 省略 position/timestam
 POST /api/maps/{mapId}/nodes
 Content-Type: application/json
 If-Match: "rev-7"
+X-CodeMind-Partition: development
+Idempotency-Key: create-node-001
 
 {
   "parentId": "root",       // 必填：挂载到哪个父节点下
@@ -240,6 +261,8 @@ If-Match: "rev-7"
 PATCH /api/maps/{mapId}/nodes/{nodeId}
 Content-Type: application/json
 If-Match: "rev-7"
+X-CodeMind-Partition: development
+Idempotency-Key: update-node-001
 
 {
   "parentId": "node-platform", // 可选：移动到新父节点
@@ -258,6 +281,8 @@ If-Match: "rev-7"
 DELETE /api/maps/{mapId}/nodes/{nodeId}
 DELETE /api/maps/{mapId}/nodes/{nodeId}?cascade=false
 If-Match: "rev-7"
+X-CodeMind-Partition: development
+Idempotency-Key: delete-node-001
 ```
 
 - `cascade=true`（默认）：删除节点及所有后代
@@ -271,6 +296,8 @@ If-Match: "rev-7"
 POST /api/maps/{mapId}/batch
 Content-Type: application/json
 If-Match: "rev-7"
+X-CodeMind-Partition: development
+Idempotency-Key: batch-001
 
 {
   "operations": [
@@ -289,6 +316,8 @@ If-Match: "rev-7"
 POST /api/maps/{mapId}/import-fragment
 Content-Type: application/json
 If-Match: "rev-7"
+X-CodeMind-Partition: development
+Idempotency-Key: import-fragment-001
 
 {
   "nodes": [

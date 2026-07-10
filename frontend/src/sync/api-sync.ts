@@ -3,7 +3,7 @@ import { captureActiveNodeEditorDraft, restoreActiveNodeEditorDraft } from '../i
 import { resetHistory } from '../state/ops'
 import { api, isRevisionConflictError } from '../api'
 import { findRoot, normalizeDocumentSemantics, tidySubtree, touchDocument } from '../document'
-import { downloadTextFile, getErrorMessage, slugify } from '../utils'
+import { cloneDocument, downloadTextFile, getErrorMessage, slugify } from '../utils'
 import { listLocalSnapshots, saveLocalSnapshot } from '../snapshots'
 import type { TranslationKey } from '../i18n'
 import type { MindMapDocument } from '../types'
@@ -15,30 +15,211 @@ export async function saveDocument(
   statusKey: TranslationKey,
   values?: Record<string, string | number>,
 ): Promise<void> {
+  if (app.state.revisionConflict) {
+    showRevisionConflictStatus(app)
+    app.render()
+    return
+  }
+  if (app.saveInFlight) {
+    return
+  }
+
+  clearAutosave(app)
+  const mapId = app.state.currentMapId
+  if (!mapId || app.state.document.id !== mapId) {
+    return
+  }
+  const sessionId = app.documentSessionId
+  const changeEpoch = app.localChangeEpoch
+  const documentToSave = cloneDocument(app.state.document)
   const editorDraft = captureActiveNodeEditorDraft(app)
+  app.saveInFlight = true
   try {
-    const savedDocument = await api.saveMap(app.state.document)
-    app.state.document = savedDocument
-    app.state.currentMapId = savedDocument.id
-    app.state.dirty = false
+    const savedDocument = await api.saveMap(documentToSave)
+    if (!isCurrentDocumentSession(app, mapId, sessionId)) {
+      return
+    }
+
+    const changedDuringSave = app.localChangeEpoch !== changeEpoch
+    const editorDraftToRestore = captureActiveNodeEditorDraft(app) ?? editorDraft
+    if (changedDuringSave) {
+      app.state.document.meta.revision = savedDocument.meta.revision
+      app.state.dirty = true
+      app.saveQueued = true
+    } else {
+      app.state.document = savedDocument
+      app.state.currentMapId = savedDocument.id
+      app.state.dirty = false
+      app.state.revisionConflict = null
+    }
     app.lastFrontendSaveTime = savedDocument.meta.lastEditedAt || new Date().toISOString()
     app.lastKnownEditTime = app.lastFrontendSaveTime
-    await refreshMaps(app)
-    maybeSaveAutoSnapshot(app, savedDocument)
-    app.setStatus(statusKey, values)
-    restoreActiveNodeEditorDraft(app, editorDraft)
-  } catch (error) {
-    app.state.dirty = true
-    if (isRevisionConflictError(error)) {
-      app.setStatus('status.saveConflict', { revision: error.actualRevision ?? '?' })
-    } else {
-      app.setStatus('status.saveFailed', { reason: getErrorMessage(error) })
+    try {
+      await refreshMaps(app)
+    } catch {
+      // The document is already committed; a stale map list must not turn a
+      // successful save into a retry that increments revision again.
     }
-    restoreActiveNodeEditorDraft(app, editorDraft)
+    if (!isCurrentDocumentSession(app, mapId, sessionId)) {
+      return
+    }
+    try {
+      maybeSaveAutoSnapshot(app, savedDocument)
+    } catch {
+      // Local snapshots are optional and must not change save semantics.
+    }
+    if (!changedDuringSave) {
+      app.setStatus(statusKey, values)
+    }
+    restoreActiveNodeEditorDraft(app, editorDraftToRestore)
+  } catch (error) {
+    if (isCurrentDocumentSession(app, mapId, sessionId)) {
+      app.state.dirty = true
+      if (isRevisionConflictError(error)) {
+        app.state.revisionConflict = {
+          mapId,
+          expectedRevision: documentToSave.meta.revision,
+          actualRevision: normalizeConflictRevision(error.actualRevision),
+        }
+        app.saveQueued = false
+        showRevisionConflictStatus(app)
+      } else {
+        app.setStatus('status.saveFailed', { reason: getErrorMessage(error) })
+      }
+      restoreActiveNodeEditorDraft(app, captureActiveNodeEditorDraft(app) ?? editorDraft)
+    }
+  } finally {
+    app.saveInFlight = false
+    if (app.saveQueued && app.state.dirty && !app.state.revisionConflict) {
+      const sameSession = isCurrentDocumentSession(app, mapId, sessionId)
+      app.saveQueued = false
+      void saveDocument(app, sameSession ? statusKey : 'status.saved', sameSession ? values : undefined)
+    }
   }
 
   app.applyTheme()
   app.render()
+}
+
+export async function reloadServerVersion(app: MindMapApp): Promise<void> {
+  const conflict = app.state.revisionConflict
+  const mapId = app.state.currentMapId
+  if (!conflict || !mapId || conflict.mapId !== mapId || app.conflictResolutionInFlight) {
+    return
+  }
+  if (!window.confirm(app.t('dialog.reloadServerVersion'))) {
+    return
+  }
+
+  clearAutosave(app)
+  const sessionId = app.documentSessionId
+  const changeEpoch = app.localChangeEpoch
+  app.conflictResolutionInFlight = true
+  app.render()
+  try {
+    const serverDocument = await api.loadMap(mapId)
+    if (
+      !isCurrentDocumentSession(app, mapId, sessionId) ||
+      app.state.revisionConflict !== conflict ||
+      app.localChangeEpoch !== changeEpoch
+    ) {
+      app.setStatus('status.conflictResolutionChanged')
+      return
+    }
+    openLoadedDocument(app, serverDocument, 'status.conflictReloaded')
+  } catch (error) {
+    if (isCurrentDocumentSession(app, mapId, sessionId)) {
+      app.setStatus('status.saveFailed', { reason: getErrorMessage(error) })
+    }
+  } finally {
+    app.conflictResolutionInFlight = false
+    app.render()
+  }
+}
+
+export async function overwriteServerVersion(app: MindMapApp): Promise<void> {
+  const conflict = app.state.revisionConflict
+  const mapId = app.state.currentMapId
+  if (!conflict || !mapId || conflict.mapId !== mapId || app.conflictResolutionInFlight) {
+    return
+  }
+  if (!window.confirm(app.t('dialog.overwriteServerVersion'))) {
+    return
+  }
+
+  clearAutosave(app)
+  const sessionId = app.documentSessionId
+  const changeEpoch = app.localChangeEpoch
+  const localDraft = cloneDocument(app.state.document)
+  app.conflictResolutionInFlight = true
+  app.render()
+  try {
+    const serverDocument = await api.loadMap(mapId)
+    if (
+      !isCurrentDocumentSession(app, mapId, sessionId) ||
+      app.state.revisionConflict !== conflict ||
+      app.localChangeEpoch !== changeEpoch
+    ) {
+      app.setStatus('status.conflictResolutionChanged')
+      return
+    }
+
+    localDraft.meta.revision = serverDocument.meta.revision
+    const savedDocument = await api.saveMap(localDraft)
+    if (!isCurrentDocumentSession(app, mapId, sessionId) || app.state.revisionConflict !== conflict) {
+      return
+    }
+
+    app.state.revisionConflict = null
+    app.lastFrontendSaveTime = savedDocument.meta.lastEditedAt || new Date().toISOString()
+    app.lastKnownEditTime = app.lastFrontendSaveTime
+    if (app.localChangeEpoch === changeEpoch) {
+      app.state.document = savedDocument
+      app.state.dirty = false
+      app.setStatus('status.conflictOverwritten')
+    } else {
+      app.state.document.meta.revision = savedDocument.meta.revision
+      app.state.dirty = true
+      app.saveQueued = true
+    }
+    try {
+      await refreshMaps(app)
+    } catch {
+      // The overwrite has already committed successfully.
+    }
+    try {
+      maybeSaveAutoSnapshot(app, savedDocument)
+    } catch {
+      // Local snapshots are optional and must not change conflict recovery.
+    }
+  } catch (error) {
+    if (isCurrentDocumentSession(app, mapId, sessionId)) {
+      app.state.dirty = true
+      if (isRevisionConflictError(error)) {
+        app.state.revisionConflict = {
+          mapId,
+          expectedRevision: localDraft.meta.revision,
+          actualRevision: normalizeConflictRevision(error.actualRevision),
+        }
+        showRevisionConflictStatus(app)
+      } else {
+        app.setStatus('status.saveFailed', { reason: getErrorMessage(error) })
+      }
+    }
+  } finally {
+    app.conflictResolutionInFlight = false
+    if (
+      app.saveQueued &&
+      app.state.dirty &&
+      !app.state.revisionConflict &&
+      isCurrentDocumentSession(app, mapId, sessionId)
+    ) {
+      app.saveQueued = false
+      scheduleAutosave(app, 'status.saved')
+    }
+    app.applyTheme()
+    app.render()
+  }
 }
 
 export function saveSnapshot(app: MindMapApp, mode: 'manual' | 'auto'): void {
@@ -123,8 +304,14 @@ export async function openMap(app: MindMapApp, mapId: string): Promise<void> {
 export async function goHome(app: MindMapApp): Promise<void> {
   await refreshMaps(app, 'status.mapListLoaded')
   stopPolling(app)
+  clearAutosave(app)
+  app.documentSessionId += 1
+  app.localChangeEpoch = 0
+  app.saveQueued = false
   app.state.view = 'home'
   app.state.currentMapId = null
+  app.state.dirty = false
+  app.state.revisionConflict = null
   app.state.snapshotDraftName = ''
   app.state.ai.open = false
   app.state.graph.open = false
@@ -180,8 +367,14 @@ export async function deleteMap(app: MindMapApp, mapId: string): Promise<void> {
     await refreshMaps(app)
 
     if (app.state.currentMapId === mapId || app.state.view === 'home') {
+      clearAutosave(app)
+      app.documentSessionId += 1
+      app.localChangeEpoch = 0
+      app.saveQueued = false
       app.state.view = 'home'
       app.state.currentMapId = null
+      app.state.dirty = false
+      app.state.revisionConflict = null
       app.refs = null
       resetHistory(app)
     }
@@ -209,11 +402,17 @@ function setMapMutationErrorStatus(app: MindMapApp, error: unknown): void {
 }
 
 export function openLoadedDocument(app: MindMapApp, document: MindMapDocument, statusKey: TranslationKey): void {
+  clearAutosave(app)
   const normalizedDocument = normalizeDocumentSemantics(document)
+  app.documentSessionId += 1
+  app.localChangeEpoch = 0
+  app.saveQueued = false
   app.state.document = normalizedDocument
   app.state.currentMapId = normalizedDocument.id
   app.state.snapshotDraftName = ''
   app.state.view = 'map'
+  app.state.dirty = false
+  app.state.revisionConflict = null
   app.state.ai.open = false
   app.state.graph.open = false
   app.stopGraphAnimation()
@@ -260,12 +459,24 @@ export function stopPolling(app: MindMapApp): void {
 
 export async function pollForAPIChanges(app: MindMapApp): Promise<void> {
   const mapId = app.state.currentMapId
-  if (!mapId || app.state.view !== 'map') {
+  if (
+    !mapId ||
+    app.state.view !== 'map' ||
+    app.state.dirty ||
+    app.state.revisionConflict ||
+    app.saveInFlight ||
+    app.conflictResolutionInFlight
+  ) {
     return
   }
+  const sessionId = app.documentSessionId
+  const changeEpoch = app.localChangeEpoch
 
   try {
     const result = await api.pollMap(mapId, app.lastKnownEditTime)
+    if (!canApplyPollResult(app, mapId, sessionId, changeEpoch)) {
+      return
+    }
     if (!result.modifiedViaAPI) {
       return
     }
@@ -282,6 +493,9 @@ export async function pollForAPIChanges(app: MindMapApp): Promise<void> {
 
     // Reload the document from the server
     const doc = await api.loadMap(mapId)
+    if (!canApplyPollResult(app, mapId, sessionId, changeEpoch)) {
+      return
+    }
 
     // Find newly added nodes
     const newNodeIds = new Set<string>()
@@ -349,11 +563,55 @@ export function scheduleAutosave(
 ): void {
   if (app.autosaveHandle !== null) {
     window.clearTimeout(app.autosaveHandle)
+    app.autosaveHandle = null
   }
 
+  app.localChangeEpoch += 1
   app.state.dirty = true
 
+  if (app.state.revisionConflict) {
+    showRevisionConflictStatus(app)
+    return
+  }
+  if (app.saveInFlight) {
+    app.saveQueued = true
+    return
+  }
+
   app.autosaveHandle = window.setTimeout(() => {
+    app.autosaveHandle = null
     void saveDocument(app, statusKey, values)
   }, 700)
+}
+
+function clearAutosave(app: MindMapApp): void {
+  if (app.autosaveHandle !== null) {
+    window.clearTimeout(app.autosaveHandle)
+    app.autosaveHandle = null
+  }
+}
+
+function isCurrentDocumentSession(app: MindMapApp, mapId: string, sessionId: number): boolean {
+  return app.documentSessionId === sessionId && app.state.currentMapId === mapId && app.state.document.id === mapId
+}
+
+function canApplyPollResult(app: MindMapApp, mapId: string, sessionId: number, changeEpoch: number): boolean {
+  return (
+    isCurrentDocumentSession(app, mapId, sessionId) &&
+    app.localChangeEpoch === changeEpoch &&
+    !app.state.dirty &&
+    !app.state.revisionConflict &&
+    !app.saveInFlight &&
+    !app.conflictResolutionInFlight
+  )
+}
+
+function normalizeConflictRevision(revision: number | undefined): number | null {
+  return Number.isSafeInteger(revision) && (revision ?? 0) > 0 ? (revision ?? null) : null
+}
+
+function showRevisionConflictStatus(app: MindMapApp): void {
+  app.setStatus('status.saveConflict', {
+    revision: app.state.revisionConflict?.actualRevision ?? '?',
+  })
 }

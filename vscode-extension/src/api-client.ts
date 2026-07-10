@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import * as http from 'http';
 import * as https from 'https';
+import { randomUUID } from 'crypto';
 import { URL } from 'url';
 
 /**
@@ -230,6 +231,8 @@ export class CodeMindAPI {
       }
       if (revisionContext?.expectedRevision !== undefined) {
         headers['If-Match'] = `"rev-${revisionContext.expectedRevision}"`;
+        headers['X-CodeMind-Partition'] = 'development';
+        headers['Idempotency-Key'] = `vscode-${randomUUID()}`;
       }
 
       let payload: string | undefined;

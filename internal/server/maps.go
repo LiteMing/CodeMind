@@ -63,19 +63,49 @@ func (s *Server) handleMapByID(w http.ResponseWriter, r *http.Request) {
 
 		switch {
 		case subPath == "nodes":
+			if r.Method == http.MethodPost {
+				s.handleAgentCommand(w, r, mapID, "create_node", "nodes", func(w http.ResponseWriter, r *http.Request) {
+					s.handleNodes(w, r, mapID)
+				})
+				return
+			}
 			s.handleNodes(w, r, mapID)
 			return
 		case strings.HasPrefix(subPath, "nodes/"):
 			nodeID := strings.TrimPrefix(subPath, "nodes/")
+			if r.Method == http.MethodPatch {
+				s.handleAgentCommand(w, r, mapID, "update_node", nodeID, func(w http.ResponseWriter, r *http.Request) {
+					s.handleNodeByID(w, r, mapID, nodeID)
+				})
+				return
+			}
+			if r.Method == http.MethodDelete {
+				s.handleAgentCommand(w, r, mapID, "delete_node", nodeID, func(w http.ResponseWriter, r *http.Request) {
+					s.handleNodeByID(w, r, mapID, nodeID)
+				})
+				return
+			}
 			s.handleNodeByID(w, r, mapID, nodeID)
 			return
 		case subPath == "tree":
 			s.handleNodeTree(w, r, mapID)
 			return
 		case subPath == "batch":
+			if r.Method == http.MethodPost {
+				s.handleAgentCommand(w, r, mapID, "batch_operations", "batch", func(w http.ResponseWriter, r *http.Request) {
+					s.handleNodeBatch(w, r, mapID)
+				})
+				return
+			}
 			s.handleNodeBatch(w, r, mapID)
 			return
 		case subPath == "import-fragment":
+			if r.Method == http.MethodPost {
+				s.handleAgentCommand(w, r, mapID, "import_fragment", "import-fragment", func(w http.ResponseWriter, r *http.Request) {
+					s.handleImportFragment(w, r, mapID)
+				})
+				return
+			}
 			s.handleImportFragment(w, r, mapID)
 			return
 		case subPath == "version":

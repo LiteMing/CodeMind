@@ -41,7 +41,9 @@ import {
   exportMarkdown,
   goHome,
   openMap,
+  overwriteServerVersion,
   renameMap,
+  reloadServerVersion,
   saveCollabApiKey,
   saveDocument,
   saveSnapshot,
@@ -145,6 +147,12 @@ export async function runCommand(app: MindMapApp, rawCommand: string): Promise<v
         return
       case 'save':
         await saveDocument(app, 'status.saved')
+        return
+      case 'reload-server-version':
+        await reloadServerVersion(app)
+        return
+      case 'overwrite-server-version':
+        await overwriteServerVersion(app)
         return
       case 'save-snapshot':
         saveSnapshot(app, 'manual')
@@ -1116,7 +1124,7 @@ export async function showPlatformHelp(app: MindMapApp): Promise<void> {
     '构建：go build -o codemind-mcp.exe ./cmd/mcp',
     '配置：CODEMIND_API_URL=http://127.0.0.1:34117',
     app.collabApiKey
-      ? '配置：CODEMIND_API_KEY=当前设置页中的协作 API Key'
+      ? 'Agent 配置：CODEMIND_ACCESS_TOKEN=actorKind 为 agent 的协作 token'
       : '配置：如启用 API Key，请到设置页生成并复制。',
     '',
     '2. VS Code 插件调用',

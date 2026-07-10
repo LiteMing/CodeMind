@@ -108,3 +108,11 @@
 ## 后续分支
 
 本分支完成并合入后，从 main 创建 `feat/git-stable-zone`，实现 repo/commit 派生层、懒展开、Git 变更高亮和只读稳定区域。
+
+## 执行状态（2026-07-10）
+
+- 阶段 A：已完成，revision/ETag/If-Match 与原子条件写入落地。
+- 阶段 B：已完成，代码绑定与显式 sibling order 落地。
+- 阶段 C：已完成，确定性 Git semantic/layout 格式与 CLI 落地。
+- 阶段 D：已完成，actor/partition/idempotency/changeset 类型骨架、MCP 结构化冲突和前端冲突恢复落地。
+- P1 脑图文件与 Agent 双契约至此收口；稳定区物化和 changeset 评审门进入后续分支。

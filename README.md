@@ -24,6 +24,7 @@
 - **Compact 模式**：?compact=true 省略 43% 冗余字段，节省 AI token
 - **实时刷新**：API 写入后前端 2 秒内自动检测并刷新，新节点有淡入动画
 - **乐观并发**：真实 document revision + ETag/If-Match，陈旧写入返回 412，不再静默覆盖
+- **Agent 命令信封**：服务端派生 actor，节点写入声明 partition/idempotency key；成功重试不重复增加 revision
 - **代码语义锚点**：节点可绑定仓库文件、目录、glob、symbol 或 asset，并以稳定 ID 持久化
 - **稳定同级顺序**：节点使用显式 order，树结构不再因画布拖动或坐标变化而重排
 

@@ -1,55 +1,312 @@
 /**
  * @vitest-environment jsdom
  */
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createDefaultDocument } from '../document'
 import type { MindMapApp } from '../app'
+import type { MindMapDocument } from '../types'
 
-const { conflict } = vi.hoisted(() => ({
-  conflict: Object.assign(new Error('revision conflict'), {
-    status: 412,
-    expectedRevision: 1,
-    actualRevision: 2,
-  }),
+const mocks = vi.hoisted(() => ({
+  saveMap: vi.fn(),
+  loadMap: vi.fn(),
+  listMaps: vi.fn(async () => []),
+  pollMap: vi.fn(),
 }))
 
 vi.mock('../api', () => ({
-  api: {
-    saveMap: vi.fn(async () => {
-      throw conflict
-    }),
-  },
-  isRevisionConflictError: (error: unknown) => error === conflict,
+  api: mocks,
+  isRevisionConflictError: (error: unknown) =>
+    typeof error === 'object' && error !== null && 'status' in error && error.status === 412,
 }))
 
-describe('saveDocument revision conflict', () => {
-  it('keeps the local document dirty and reports the server revision', async () => {
+describe('revision conflict recovery', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+    vi.clearAllMocks()
+    mocks.listMaps.mockResolvedValue([])
+    window.confirm = vi.fn(() => true)
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+    document.body.innerHTML = ''
+  })
+
+  it('keeps the exact local draft dirty and latches the server revision after 412', async () => {
     const { saveDocument } = await import('./api-sync')
-    const document = createDefaultDocument()
-    const setStatus = vi.fn()
-    const app = {
-      rootEl: documentRoot(),
-      state: {
-        document,
-        currentMapId: document.id,
-        editingNodeId: null,
-        dirty: false,
-      },
-      setStatus,
-      applyTheme: vi.fn(),
-      render: vi.fn(),
-    } as unknown as MindMapApp
+    const document = createDocument('Local draft', 1)
+    const app = createAppStub(document)
+    mocks.saveMap.mockRejectedValueOnce(revisionConflict(1, 2))
 
     await saveDocument(app, 'status.saved')
 
     expect(app.state.document).toBe(document)
+    expect(app.state.document.title).toBe('Local draft')
     expect(app.state.dirty).toBe(true)
-    expect(setStatus).toHaveBeenCalledWith('status.saveConflict', { revision: 2 })
+    expect(app.state.revisionConflict).toEqual({ mapId: document.id, expectedRevision: 1, actualRevision: 2 })
+    expect(app.setStatus).toHaveBeenCalledWith('status.saveConflict', { revision: 2 })
+  })
+
+  it('does not issue repeated autosaves while a conflict is latched', async () => {
+    const { saveDocument, scheduleAutosave } = await import('./api-sync')
+    const document = createDocument('Local draft', 1)
+    const app = createAppStub(document)
+    mocks.saveMap.mockRejectedValueOnce(revisionConflict(1, 2))
+
+    await saveDocument(app, 'status.saved')
+    app.state.document.title = 'Edited again'
+    scheduleAutosave(app, 'status.saved')
+    await vi.advanceTimersByTimeAsync(1000)
+
+    expect(mocks.saveMap).toHaveBeenCalledTimes(1)
+    expect(app.state.document.title).toBe('Edited again')
+    expect(app.state.dirty).toBe(true)
+  })
+
+  it('reloads the server document and clears dirty, conflict, timer, and history', async () => {
+    const { reloadServerVersion } = await import('./api-sync')
+    const local = createDocument('Local draft', 1)
+    const remote = createDocument('Remote version', 4)
+    const app = createAppStub(local)
+    app.state.dirty = true
+    app.state.revisionConflict = { mapId: local.id, expectedRevision: 1, actualRevision: 4 }
+    app.autosaveHandle = window.setTimeout(() => {}, 500)
+    app.historyPast = [{} as never]
+    app.historyFuture = [{} as never]
+    mocks.loadMap.mockResolvedValueOnce(remote)
+
+    await reloadServerVersion(app)
+
+    expect(app.state.document.title).toBe('Remote version')
+    expect(app.state.document.meta.revision).toBe(4)
+    expect(app.state.dirty).toBe(false)
+    expect(app.state.revisionConflict).toBeNull()
+    expect(app.autosaveHandle).toBeNull()
+    expect(app.historyPast).toEqual([])
+    expect(app.historyFuture).toEqual([])
+    expect(app.setStatus).toHaveBeenCalledWith('status.conflictReloaded')
+  })
+
+  it('overwrites with a cloned local draft using the latest server revision', async () => {
+    const { overwriteServerVersion } = await import('./api-sync')
+    const local = createDocument('Local draft', 1)
+    local.nodes[0].note = 'Keep this local note'
+    const remote = createDocument('Remote version', 5)
+    const saved = createDocument('Local draft', 6)
+    saved.nodes[0].note = 'Keep this local note'
+    const app = createAppStub(local)
+    app.state.dirty = true
+    app.state.revisionConflict = { mapId: local.id, expectedRevision: 1, actualRevision: 5 }
+    mocks.loadMap.mockResolvedValueOnce(remote)
+    mocks.saveMap.mockResolvedValueOnce(saved)
+
+    await overwriteServerVersion(app)
+
+    const submitted = mocks.saveMap.mock.calls[0][0] as MindMapDocument
+    expect(submitted).not.toBe(local)
+    expect(submitted.meta.revision).toBe(5)
+    expect(submitted.title).toBe('Local draft')
+    expect(submitted.nodes[0].note).toBe('Keep this local note')
+    expect(local.meta.revision).toBe(1)
+    expect(app.state.document.meta.revision).toBe(6)
+    expect(app.state.dirty).toBe(false)
+    expect(app.state.revisionConflict).toBeNull()
+  })
+
+  it('keeps the live local draft untouched when overwrite races into another 412', async () => {
+    const { overwriteServerVersion } = await import('./api-sync')
+    const local = createDocument('Local draft', 1)
+    const app = createAppStub(local)
+    app.state.dirty = true
+    app.state.revisionConflict = { mapId: local.id, expectedRevision: 1, actualRevision: 5 }
+    mocks.loadMap.mockResolvedValueOnce(createDocument('Remote version', 5))
+    mocks.saveMap.mockRejectedValueOnce(revisionConflict(5, 6))
+
+    await overwriteServerVersion(app)
+
+    expect(app.state.document).toBe(local)
+    expect(app.state.document.title).toBe('Local draft')
+    expect(app.state.document.meta.revision).toBe(1)
+    expect(app.state.dirty).toBe(true)
+    expect(app.state.revisionConflict).toEqual({ mapId: local.id, expectedRevision: 5, actualRevision: 6 })
+  })
+
+  it('does not let polling replace a dirty or conflicted draft', async () => {
+    const { pollForAPIChanges } = await import('./api-sync')
+    const app = createAppStub(createDocument('Local draft', 1))
+    app.state.dirty = true
+
+    await pollForAPIChanges(app)
+    app.state.dirty = false
+    app.state.revisionConflict = { mapId: app.state.document.id, expectedRevision: 1, actualRevision: 2 }
+    await pollForAPIChanges(app)
+
+    expect(mocks.pollMap).not.toHaveBeenCalled()
+    expect(mocks.loadMap).not.toHaveBeenCalled()
+    expect(app.state.document.title).toBe('Local draft')
+  })
+
+  it('ignores a reload response when the local draft changes while awaiting it', async () => {
+    const { reloadServerVersion, scheduleAutosave } = await import('./api-sync')
+    const local = createDocument('Local draft', 1)
+    const app = createAppStub(local)
+    app.state.dirty = true
+    app.state.revisionConflict = { mapId: local.id, expectedRevision: 1, actualRevision: 2 }
+    let resolveLoad!: (document: MindMapDocument) => void
+    mocks.loadMap.mockReturnValueOnce(
+      new Promise<MindMapDocument>((resolve) => {
+        resolveLoad = resolve
+      }),
+    )
+
+    const reload = reloadServerVersion(app)
+    app.state.document.title = 'Edited during reload'
+    scheduleAutosave(app, 'status.saved')
+    resolveLoad(createDocument('Remote version', 2))
+    await reload
+
+    expect(app.state.document).toBe(local)
+    expect(app.state.document.title).toBe('Edited during reload')
+    expect(app.state.revisionConflict).not.toBeNull()
+    expect(app.setStatus).toHaveBeenCalledWith('status.conflictResolutionChanged')
+  })
+
+  it('preserves edits made during a slow save and follows with one queued save', async () => {
+    const { saveDocument, scheduleAutosave } = await import('./api-sync')
+    const local = createDocument('Initial draft', 1)
+    const app = createAppStub(local)
+    app.state.dirty = true
+    let resolveFirst!: (document: MindMapDocument) => void
+    mocks.saveMap
+      .mockReturnValueOnce(
+        new Promise<MindMapDocument>((resolve) => {
+          resolveFirst = resolve
+        }),
+      )
+      .mockImplementationOnce(async (submitted: MindMapDocument) => ({
+        ...submitted,
+        meta: { ...submitted.meta, revision: 3 },
+      }))
+
+    const firstSave = saveDocument(app, 'status.saved')
+    app.state.document.title = 'Edited during save'
+    app.state.document.nodes[0].title = 'Edited during save'
+    scheduleAutosave(app, 'status.saved')
+    resolveFirst(createDocument('Initial draft', 2))
+    await firstSave
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(mocks.saveMap).toHaveBeenCalledTimes(2)
+    const queuedDraft = mocks.saveMap.mock.calls[1][0] as MindMapDocument
+    expect(queuedDraft.title).toBe('Edited during save')
+    expect(queuedDraft.meta.revision).toBe(2)
+    expect(app.state.document.title).toBe('Edited during save')
+    expect(app.state.document.meta.revision).toBe(3)
+    expect(app.state.dirty).toBe(false)
+  })
+
+  it('queues edits from a newly opened map while an older map save is still in flight', async () => {
+    const { saveDocument, scheduleAutosave } = await import('./api-sync')
+    const firstMap = createDocument('First map', 1)
+    const app = createAppStub(firstMap)
+    app.state.dirty = true
+    let resolveFirst!: (document: MindMapDocument) => void
+    mocks.saveMap
+      .mockReturnValueOnce(
+        new Promise<MindMapDocument>((resolve) => {
+          resolveFirst = resolve
+        }),
+      )
+      .mockImplementationOnce(async (submitted: MindMapDocument) => ({
+        ...submitted,
+        meta: { ...submitted.meta, revision: 2 },
+      }))
+
+    const oldSave = saveDocument(app, 'status.saved')
+    const secondMap = createDocument('Second map', 1)
+    secondMap.id = 'map-second'
+    app.documentSessionId += 1
+    app.localChangeEpoch = 0
+    app.saveQueued = false
+    app.state.document = secondMap
+    app.state.currentMapId = secondMap.id
+    app.state.dirty = false
+    secondMap.title = 'Second map edited'
+    scheduleAutosave(app, 'status.saved')
+    resolveFirst(createDocument('First map', 2))
+    await oldSave
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(mocks.saveMap).toHaveBeenCalledTimes(2)
+    const queuedDraft = mocks.saveMap.mock.calls[1][0] as MindMapDocument
+    expect(queuedDraft.id).toBe('map-second')
+    expect(queuedDraft.title).toBe('Second map edited')
+    expect(app.state.document.id).toBe('map-second')
+    expect(app.state.dirty).toBe(false)
   })
 })
 
-function documentRoot(): HTMLElement {
-  const root = window.document.createElement('div')
-  window.document.body.appendChild(root)
-  return root
+function createDocument(title: string, revision: number): MindMapDocument {
+  const document = createDefaultDocument()
+  document.id = 'map-conflict'
+  document.title = title
+  document.nodes[0].title = title
+  document.meta.revision = revision
+  return document
+}
+
+function revisionConflict(expectedRevision: number, actualRevision: number): Error {
+  return Object.assign(new Error('revision conflict'), {
+    status: 412,
+    expectedRevision,
+    actualRevision,
+  })
+}
+
+function createAppStub(document: MindMapDocument): MindMapApp {
+  const rootEl = window.document.createElement('div')
+  window.document.body.appendChild(rootEl)
+  return {
+    rootEl,
+    autosaveHandle: null,
+    pollHandle: null,
+    localChangeEpoch: 0,
+    documentSessionId: 1,
+    saveInFlight: false,
+    saveQueued: false,
+    conflictResolutionInFlight: false,
+    historyPast: [],
+    historyFuture: [],
+    refs: null,
+    didInitializeViewport: false,
+    lastKnownEditTime: document.meta.lastEditedAt,
+    lastFrontendSaveTime: document.meta.lastEditedAt,
+    state: {
+      document,
+      currentMapId: document.id,
+      view: 'map',
+      editingNodeId: null,
+      dirty: false,
+      revisionConflict: null,
+      snapshotDraftName: '',
+      ai: { open: false },
+      graph: { open: false },
+      connectSourceNodeId: null,
+      resize: null,
+      regionResize: null,
+      preferences: {
+        interaction: { autoSnapshots: false },
+        appearance: { childGapX: 280 },
+      },
+    },
+    t: vi.fn((key: string) => key),
+    setStatus: vi.fn(),
+    setSelection: vi.fn(),
+    stopGraphAnimation: vi.fn(),
+    showAPIToast: vi.fn(),
+    applyTheme: vi.fn(),
+    render: vi.fn(),
+  } as unknown as MindMapApp
 }

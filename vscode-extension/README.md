@@ -18,4 +18,5 @@ Open and operate Code Mind from inside VS Code.
 - Create, rename, delete nodes, and open notes.
 - Preserve node sibling `order` and repository `bindings` in the typed API client.
 - Reject stale node writes with revision/`If-Match` checks instead of overwriting newer map changes.
+- Send the Phase D command envelope (`development` partition plus an idempotency key) for node writes.
 - Configure local API URL and API Key from commands.

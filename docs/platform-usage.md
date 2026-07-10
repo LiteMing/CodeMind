@@ -20,14 +20,16 @@
       "args": ["mcp"],
       "env": {
         "CODEMIND_API_URL": "http://127.0.0.1:34117",
-        "CODEMIND_API_KEY": ""
+        "CODEMIND_ACCESS_TOKEN": ""
       }
     }
   }
 }
 ```
 
-如果桌面端设置了 API Key，把同一个值填入 `CODEMIND_API_KEY`。
+Agent 应使用服务端签发且 `actorKind=agent` 的协作 token，填入 `CODEMIND_ACCESS_TOKEN`；MCP 会发送
+`Authorization: Bearer ...`，服务端以 token ID/actorKind/displayName 生成不可伪造的 actor。`CODEMIND_API_KEY`
+仍可作为 owner 兼容入口，但会统一归因到 `local-owner/human`，不适合作为 Agent 身份凭据。
 
 ### MCP 暴露工具
 
@@ -42,9 +44,14 @@
 
 读取类工具会自动附加 `compact=true`，更适合 AI Agent 消费。
 
-五个写工具都要求 `expectedRevision`。Agent 应先通过 `list_maps`、`get_tree` 或 `get_node`
-取得当前 revision，再执行写入；成功响应会同时返回新的 revision。陈旧 revision 会得到冲突错误，
-必须重新读取后再决定如何合并，不能盲目重试覆盖。
+五个写工具都要求 `expectedRevision`、`partition` 和 `idempotencyKey`。`partition` 当前可声明
+`requirements | development | stable`，其中 `stable` 暂时只读；Agent 应写入 `development`。
+`idempotencyKey` 在同一个 actor/map 内标识一次逻辑写入：相同 key 和相同请求会重放首次成功结果且不再次增加 revision，
+相同 key 用于不同请求会返回 `idempotency_key_reused`。进程内重放记录有界且带 TTL，服务重启后不保证保留。
+
+Agent 应先通过 `list_maps`、`get_tree` 或 `get_node` 取得当前 revision，再执行写入；成功响应会同时返回新的 revision。
+陈旧 revision 的 MCP tool result 会设置 `isError=true`，且 `content[0].text` 是稳定 JSON，包含
+`revision_conflict`、`expectedRevision` 和 `actualRevision`。调用方必须重新读取后决定如何合并，不能盲目覆盖。
 
 节点读写契约同时包含：
 

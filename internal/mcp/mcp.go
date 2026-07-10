@@ -3,6 +3,7 @@ package mcp
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -79,12 +80,39 @@ type mcpContent struct {
 	Text string `json:"text"`
 }
 
+type toolCallError struct {
+	text string
+}
+
+func (e *toolCallError) Error() string {
+	return e.text
+}
+
+type revisionConflictPayload struct {
+	Error revisionConflictDetails `json:"error"`
+}
+
+type revisionConflictDetails struct {
+	Code             string `json:"code"`
+	HTTPStatus       int    `json:"httpStatus"`
+	Message          string `json:"message"`
+	ExpectedRevision uint64 `json:"expectedRevision"`
+	ActualRevision   uint64 `json:"actualRevision"`
+}
+
+type writeCommandEnvelope struct {
+	ExpectedRevision uint64
+	Partition        string
+	IdempotencyKey   string
+}
+
 // MCPServer holds the server state and configuration.
 type MCPServer struct {
-	apiURL     string
-	apiKey     string
-	httpClient *http.Client
-	out        io.Writer
+	apiURL      string
+	apiKey      string
+	accessToken string
+	httpClient  *http.Client
+	out         io.Writer
 }
 
 func newMCPServer() *MCPServer {
@@ -93,11 +121,13 @@ func newMCPServer() *MCPServer {
 		apiURL = "http://127.0.0.1:34117"
 	}
 	apiKey := os.Getenv("CODEMIND_API_KEY")
+	accessToken := os.Getenv("CODEMIND_ACCESS_TOKEN")
 
 	return &MCPServer{
-		apiURL: apiURL,
-		apiKey: apiKey,
-		out:    os.Stdout,
+		apiURL:      apiURL,
+		apiKey:      apiKey,
+		accessToken: accessToken,
+		out:         os.Stdout,
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 		},
@@ -194,8 +224,13 @@ func (s *MCPServer) handleToolCall(req jsonrpcRequest) {
 
 	result, err := s.executeToolCall(params.Name, params.Arguments)
 	if err != nil {
+		text := err.Error()
+		var toolErr *toolCallError
+		if errors.As(err, &toolErr) {
+			text = toolErr.text
+		}
 		toolResult := mcpToolResult{
-			Content: []mcpContent{{Type: "text", Text: err.Error()}},
+			Content: []mcpContent{{Type: "text", Text: text}},
 			IsError: true,
 		}
 		data, _ := json.Marshal(toolResult)
@@ -237,15 +272,20 @@ func (s *MCPServer) executeToolCall(name string, args map[string]any) (string, e
 		req.Header.Set("Content-Type", "application/json")
 	}
 	if isWriteOp(name) {
-		expectedRevision, err := expectedRevisionArgument(args)
+		envelope, err := writeCommandEnvelopeArgument(args)
 		if err != nil {
 			return "", err
 		}
-		req.Header.Set("If-Match", fmt.Sprintf(`"rev-%d"`, expectedRevision))
+		req.Header.Set("If-Match", fmt.Sprintf(`"rev-%d"`, envelope.ExpectedRevision))
+		req.Header.Set("X-CodeMind-Partition", envelope.Partition)
+		req.Header.Set("Idempotency-Key", envelope.IdempotencyKey)
 	}
 
-	// Forward API key if configured
-	if s.apiKey != "" {
+	// Bearer credentials carry actor identity, so they take precedence when
+	// both legacy API-key and token configuration are present.
+	if s.accessToken != "" {
+		req.Header.Set("Authorization", "Bearer "+s.accessToken)
+	} else if s.apiKey != "" {
 		req.Header.Set("X-API-Key", s.apiKey)
 	}
 
@@ -267,6 +307,11 @@ func (s *MCPServer) executeToolCall(name string, args map[string]any) (string, e
 		return "", fmt.Errorf("failed to read response: %w", err)
 	}
 
+	if resp.StatusCode == http.StatusPreconditionFailed {
+		if conflictErr := newRevisionConflictToolError(respBody); conflictErr != nil {
+			return "", conflictErr
+		}
+	}
 	if resp.StatusCode >= 400 {
 		return "", fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(respBody))
 	}
@@ -282,7 +327,7 @@ func (s *MCPServer) buildHTTPRequest(name string, args map[string]any) (method s
 	mapID, _ := args["mapId"].(string)
 	nodeID, _ := args["nodeId"].(string)
 	if isWriteOp(name) {
-		if _, err := expectedRevisionArgument(args); err != nil {
+		if _, err := writeCommandEnvelopeArgument(args); err != nil {
 			return "", "", nil, err
 		}
 	}
@@ -441,6 +486,60 @@ func expectedRevisionArgument(args map[string]any) (uint64, error) {
 	return uint64(number), nil
 }
 
+func writeCommandEnvelopeArgument(args map[string]any) (writeCommandEnvelope, error) {
+	expectedRevision, err := expectedRevisionArgument(args)
+	if err != nil {
+		return writeCommandEnvelope{}, err
+	}
+
+	partition, ok := args["partition"].(string)
+	partition = strings.TrimSpace(partition)
+	if !ok || partition == "" {
+		return writeCommandEnvelope{}, fmt.Errorf("partition is required")
+	}
+	switch partition {
+	case "requirements", "development", "stable":
+	default:
+		return writeCommandEnvelope{}, fmt.Errorf("partition must be requirements, development, or stable")
+	}
+
+	idempotencyKey, ok := args["idempotencyKey"].(string)
+	idempotencyKey = strings.TrimSpace(idempotencyKey)
+	if !ok || idempotencyKey == "" {
+		return writeCommandEnvelope{}, fmt.Errorf("idempotencyKey is required")
+	}
+
+	return writeCommandEnvelope{
+		ExpectedRevision: expectedRevision,
+		Partition:        partition,
+		IdempotencyKey:   idempotencyKey,
+	}, nil
+}
+
+func newRevisionConflictToolError(payload []byte) error {
+	var backend struct {
+		ExpectedRevision uint64 `json:"expectedRevision"`
+		ActualRevision   uint64 `json:"actualRevision"`
+	}
+	if err := json.Unmarshal(payload, &backend); err != nil || backend.ExpectedRevision == 0 || backend.ActualRevision == 0 {
+		return nil
+	}
+
+	encoded, err := json.Marshal(revisionConflictPayload{
+		Error: revisionConflictDetails{
+			Code:             "revision_conflict",
+			HTTPStatus:       http.StatusPreconditionFailed,
+			Message:          "revision conflict",
+			ExpectedRevision: backend.ExpectedRevision,
+			ActualRevision:   backend.ActualRevision,
+		},
+	})
+	if err != nil {
+		return nil
+	}
+	return &toolCallError{text: string(encoded)}
+}
+
 func wrapWriteResultWithRevision(payload []byte, etag string) (string, error) {
 	revisionText := strings.TrimPrefix(strings.Trim(etag, `"`), "rev-")
 	revision, err := strconv.ParseUint(revisionText, 10, 64)
@@ -588,6 +687,16 @@ func getToolManifest() []mcpTool {
 						"minimum": 1,
 						"description": "Current map revision returned by list_maps, get_tree, or get_node"
 					},
+					"partition": {
+						"type": "string",
+						"enum": ["requirements", "development", "stable"],
+						"description": "Target authority partition for this command"
+					},
+					"idempotencyKey": {
+						"type": "string",
+						"minLength": 1,
+						"description": "Unique retry key for this logical write; reuse it only for an identical retry"
+					},
 					"parentId": {
 						"type": "string",
 						"description": "The ID of the parent node to attach the new node under"
@@ -637,7 +746,7 @@ func getToolManifest() []mcpTool {
 						}
 					}
 				},
-				"required": ["mapId", "expectedRevision", "parentId", "title"]
+				"required": ["mapId", "expectedRevision", "partition", "idempotencyKey", "parentId", "title"]
 			}`),
 		},
 		{
@@ -658,6 +767,16 @@ func getToolManifest() []mcpTool {
 						"type": "integer",
 						"minimum": 1,
 						"description": "Current map revision returned by list_maps, get_tree, or get_node"
+					},
+					"partition": {
+						"type": "string",
+						"enum": ["requirements", "development", "stable"],
+						"description": "Target authority partition for this command"
+					},
+					"idempotencyKey": {
+						"type": "string",
+						"minLength": 1,
+						"description": "Unique retry key for this logical write; reuse it only for an identical retry"
 					},
 					"parentId": {
 						"type": "string",
@@ -707,7 +826,7 @@ func getToolManifest() []mcpTool {
 						}
 					}
 				},
-				"required": ["mapId", "nodeId", "expectedRevision"]
+				"required": ["mapId", "nodeId", "expectedRevision", "partition", "idempotencyKey"]
 			}`),
 		},
 		{
@@ -729,12 +848,22 @@ func getToolManifest() []mcpTool {
 						"minimum": 1,
 						"description": "Current map revision returned by list_maps, get_tree, or get_node"
 					},
+					"partition": {
+						"type": "string",
+						"enum": ["requirements", "development", "stable"],
+						"description": "Target authority partition for this command"
+					},
+					"idempotencyKey": {
+						"type": "string",
+						"minLength": 1,
+						"description": "Unique retry key for this logical write; reuse it only for an identical retry"
+					},
 					"cascade": {
 						"type": "boolean",
 						"description": "If true (default), delete all descendant nodes. If false, re-parent children to the deleted node's parent."
 					}
 				},
-				"required": ["mapId", "nodeId", "expectedRevision"]
+				"required": ["mapId", "nodeId", "expectedRevision", "partition", "idempotencyKey"]
 			}`),
 		},
 		{
@@ -751,6 +880,16 @@ func getToolManifest() []mcpTool {
 						"type": "integer",
 						"minimum": 1,
 						"description": "Current map revision returned by list_maps, get_tree, or get_node"
+					},
+					"partition": {
+						"type": "string",
+						"enum": ["requirements", "development", "stable"],
+						"description": "Target authority partition for this command"
+					},
+					"idempotencyKey": {
+						"type": "string",
+						"minLength": 1,
+						"description": "Unique retry key for this logical write; reuse it only for an identical retry"
 					},
 					"operations": {
 						"type": "array",
@@ -802,7 +941,7 @@ func getToolManifest() []mcpTool {
 						}
 					}
 				},
-				"required": ["mapId", "expectedRevision", "operations"]
+				"required": ["mapId", "expectedRevision", "partition", "idempotencyKey", "operations"]
 			}`),
 		},
 		{
@@ -819,6 +958,16 @@ func getToolManifest() []mcpTool {
 						"type": "integer",
 						"minimum": 1,
 						"description": "Current map revision returned by list_maps, get_tree, or get_node"
+					},
+					"partition": {
+						"type": "string",
+						"enum": ["requirements", "development", "stable"],
+						"description": "Target authority partition for this command"
+					},
+					"idempotencyKey": {
+						"type": "string",
+						"minLength": 1,
+						"description": "Unique retry key for this logical write; reuse it only for an identical retry"
 					},
 					"parentId": {
 						"type": "string",
@@ -876,7 +1025,7 @@ func getToolManifest() []mcpTool {
 						}
 					}
 				},
-				"required": ["mapId", "expectedRevision", "nodes"]
+				"required": ["mapId", "expectedRevision", "partition", "idempotencyKey", "nodes"]
 			}`),
 		},
 	}

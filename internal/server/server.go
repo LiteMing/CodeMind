@@ -30,12 +30,14 @@ type Server struct {
 	httpClient       *http.Client
 	settingsDir      string
 	apiModifications sync.Map // map[string]time.Time — tracks last API modification time per mapId
+	commandCache     *commandCache
 }
 
 func New(fileStore *store.FileStore, settingsDir string) *Server {
 	return &Server{
-		store:       fileStore,
-		settingsDir: settingsDir,
+		store:        fileStore,
+		settingsDir:  settingsDir,
+		commandCache: newCommandCache(commandCacheMaxEntries, commandCacheTTL),
 		httpClient: &http.Client{
 			Timeout: time.Duration(defaultAITimeout) * time.Second,
 		},
@@ -45,9 +47,10 @@ func New(fileStore *store.FileStore, settingsDir string) *Server {
 // NewWithTokenStore creates a Server with both FileStore and TokenStore for full auth support.
 func NewWithTokenStore(fileStore *store.FileStore, settingsDir string, tokenStore *store.TokenStore) *Server {
 	return &Server{
-		store:       fileStore,
-		tokenStore:  tokenStore,
-		settingsDir: settingsDir,
+		store:        fileStore,
+		tokenStore:   tokenStore,
+		settingsDir:  settingsDir,
+		commandCache: newCommandCache(commandCacheMaxEntries, commandCacheTTL),
 		httpClient: &http.Client{
 			Timeout: time.Duration(defaultAITimeout) * time.Second,
 		},

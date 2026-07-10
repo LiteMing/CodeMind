@@ -3,6 +3,7 @@ package server
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -10,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1206,9 +1208,19 @@ func withTestRevisionHeaders(next http.Handler) http.Handler {
 				r.Header.Set("If-Match", revisionETag(revision))
 			}
 		}
+		if isAgentCommandRequest(r) {
+			if r.Header.Get("X-CodeMind-Partition") == "" {
+				r.Header.Set("X-CodeMind-Partition", "development")
+			}
+			if r.Header.Get("Idempotency-Key") == "" {
+				r.Header.Set("Idempotency-Key", fmt.Sprintf("test-%d", testCommandSequence.Add(1)))
+			}
+		}
 		next.ServeHTTP(w, r)
 	})
 }
+
+var testCommandSequence atomic.Uint64
 
 func newTestServer(t *testing.T) *Server {
 	t.Helper()
