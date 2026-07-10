@@ -20,6 +20,7 @@ interface StoredSnapshot extends LocalSnapshotSummary {
 
 const STORAGE_PREFIX = 'code-mind.snapshots'
 const MAX_SNAPSHOTS_PER_MAP = 14
+const MIN_MANUAL_SNAPSHOTS_TO_KEEP = 4
 
 export function listLocalSnapshots(mapId: string): LocalSnapshotSummary[] {
   return readSnapshots(mapId).map((snapshot) => ({
@@ -56,7 +57,7 @@ export function saveLocalSnapshot(input: {
     document: cloneDocument(input.document),
   }
 
-  const nextSnapshots = [nextSnapshot, ...snapshots].slice(0, MAX_SNAPSHOTS_PER_MAP)
+  const nextSnapshots = trimSnapshots([nextSnapshot, ...snapshots])
   window.localStorage.setItem(storageKey(input.mapId), JSON.stringify(nextSnapshots))
   return nextSnapshots.map((snapshot) => ({
     id: snapshot.id,
@@ -76,7 +77,7 @@ function readSnapshots(mapId: string): StoredSnapshot[] {
 
   try {
     const parsed = JSON.parse(raw) as Partial<StoredSnapshot>[]
-    return parsed
+    const snapshots = parsed
       .filter((entry) => {
         return (
           typeof entry?.id === 'string' &&
@@ -100,10 +101,26 @@ function readSnapshots(mapId: string): StoredSnapshot[] {
         document: cloneDocument(entry.document as MindMapDocument),
       }))
       .sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt))
-      .slice(0, MAX_SNAPSHOTS_PER_MAP)
+    return trimSnapshots(snapshots)
   } catch {
     return []
   }
+}
+
+function trimSnapshots(snapshots: StoredSnapshot[]): StoredSnapshot[] {
+  const sorted = [...snapshots].sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt))
+  const protectedManualIds = new Set(
+    sorted
+      .filter((snapshot) => snapshot.mode === 'manual')
+      .slice(0, MIN_MANUAL_SNAPSHOTS_TO_KEEP)
+      .map((snapshot) => snapshot.id),
+  )
+  const remainingSlots = MAX_SNAPSHOTS_PER_MAP - protectedManualIds.size
+  const retained = [
+    ...sorted.filter((snapshot) => protectedManualIds.has(snapshot.id)),
+    ...sorted.filter((snapshot) => !protectedManualIds.has(snapshot.id)).slice(0, remainingSlots),
+  ]
+  return retained.sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt))
 }
 
 function storageKey(mapId: string): string {

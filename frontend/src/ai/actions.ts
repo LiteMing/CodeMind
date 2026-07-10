@@ -37,6 +37,8 @@ function captureAISnapshot(
     return
   }
   const title = document.title.trim() || app.t('node.untitled')
+  // Intentionally fail closed: if the rollback snapshot cannot be persisted,
+  // the exception must stop the AI write that follows this call.
   saveLocalSnapshot({
     mapId,
     title: app.t('snapshot.aiBeforeName', { action: app.t(actionKey), title }),
