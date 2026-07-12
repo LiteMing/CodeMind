@@ -146,6 +146,23 @@ describe('revision conflict recovery', () => {
     expect(app.state.document.title).toBe('Local draft')
   })
 
+  it('labels a polled server change as a remote update instead of an AI update', async () => {
+    const { pollForAPIChanges } = await import('./api-sync')
+    const app = createAppStub(createDocument('Local version', 1))
+    app.lastKnownEditTime = '2026-07-12T00:00:00.000Z'
+    app.lastFrontendSaveTime = '2026-07-12T00:00:00.000Z'
+    mocks.pollMap.mockResolvedValueOnce({
+      modifiedViaAPI: true,
+      lastEditedAt: '2026-07-12T00:00:01.000Z',
+    })
+    mocks.loadMap.mockResolvedValueOnce(createDocument('Remote version', 2))
+
+    await pollForAPIChanges(app)
+
+    expect(app.showAPIToast).toHaveBeenCalledWith('toast.remoteUpdatedMap')
+    expect(app.showAPIToast).not.toHaveBeenCalledWith('toast.aiUpdatedMap')
+  })
+
   it('ignores a reload response when the local draft changes while awaiting it', async () => {
     const { reloadServerVersion, scheduleAutosave } = await import('./api-sync')
     const local = createDocument('Local draft', 1)

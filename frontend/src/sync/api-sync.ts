@@ -528,7 +528,7 @@ export async function pollForAPIChanges(app: MindMapApp): Promise<void> {
     }
 
     // Show toast notification
-    app.showAPIToast(app.t('toast.aiUpdatedMap'))
+    app.showAPIToast(app.t('toast.remoteUpdatedMap'))
 
     // Re-render
     app.render()
