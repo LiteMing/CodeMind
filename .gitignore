@@ -12,6 +12,7 @@ code-mind/
 
 ## Desktop build outputs
 build/bin/
+build/reports/
 build/windows/icon-verify.png
 dist/
 *.exe
