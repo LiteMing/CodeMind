@@ -90,6 +90,9 @@ func (s *Server) handleMapByID(w http.ResponseWriter, r *http.Request) {
 		case subPath == "tree":
 			s.handleNodeTree(w, r, mapID)
 			return
+		case subPath == "project-files":
+			s.handleProjectFiles(w, r, mapID)
+			return
 		case subPath == "batch":
 			if r.Method == http.MethodPost {
 				s.handleAgentCommand(w, r, mapID, "batch_operations", "batch", func(w http.ResponseWriter, r *http.Request) {

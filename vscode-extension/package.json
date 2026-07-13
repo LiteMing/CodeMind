@@ -2,7 +2,7 @@
   "name": "codemind-vscode",
   "displayName": "Code Mind",
   "description": "Browse and modify Code Mind mindmaps directly from VS Code",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "publisher": "codemind",
   "engines": {
     "vscode": "^1.85.0"
@@ -77,6 +77,12 @@
         "icon": "$(debug-stop)"
       },
       {
+        "command": "codeMind.restartLocalBackend",
+        "title": "Restart Local Backend",
+        "category": "Code Mind",
+        "icon": "$(debug-restart)"
+      },
+      {
         "command": "codeMind.showBackendLogs",
         "title": "Show Backend Logs",
         "category": "Code Mind",
@@ -105,6 +111,30 @@
         "title": "Open Note",
         "category": "Code Mind",
         "icon": "$(note)"
+      },
+      {
+        "command": "codeMind.bindWorkspaceProject",
+        "title": "Bind Mindmap to Workspace",
+        "category": "Code Mind",
+        "icon": "$(link)"
+      },
+      {
+        "command": "codeMind.materializeWorkspaceProject",
+        "title": "Update Workspace Project Files",
+        "category": "Code Mind",
+        "icon": "$(cloud-download)"
+      },
+      {
+        "command": "codeMind.createWorkspaceSnapshot",
+        "title": "Create Workspace Snapshot",
+        "category": "Code Mind",
+        "icon": "$(save)"
+      },
+      {
+        "command": "codeMind.protectWorkspaceRuntime",
+        "title": "Protect Workspace Runtime from Git",
+        "category": "Code Mind",
+        "icon": "$(shield)"
       }
     ],
     "menus": {
@@ -143,6 +173,16 @@
           "command": "codeMind.showBackendLogs",
           "when": "view == codeMindExplorer",
           "group": "navigation"
+        },
+        {
+          "command": "codeMind.materializeWorkspaceProject",
+          "when": "view == codeMindExplorer",
+          "group": "navigation"
+        },
+        {
+          "command": "codeMind.createWorkspaceSnapshot",
+          "when": "view == codeMindExplorer",
+          "group": "navigation"
         }
       ],
       "view/item/context": [
@@ -165,6 +205,11 @@
           "command": "codeMind.openNote",
           "when": "view == codeMindExplorer",
           "group": "inline@4"
+        },
+        {
+          "command": "codeMind.bindWorkspaceProject",
+          "when": "view == codeMindExplorer && viewItem == map",
+          "group": "inline@5"
         }
       ]
     },
@@ -190,6 +235,11 @@
           "type": "string",
           "default": "",
           "description": "Optional command used by VS Code to start a local Code Mind backend (e.g. \"codemind.exe serve\"). Leave empty to connect to an already-running backend"
+        },
+        "codeMind.backendExecutable": {
+          "type": "string",
+          "default": "",
+          "description": "Preferred Code Mind executable path. Supports ${workspaceFolder}; when empty, VS Code searches workspace build/bin and PATH"
         },
         "codeMind.backendCwd": {
           "type": "string",

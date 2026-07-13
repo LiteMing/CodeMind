@@ -27,6 +27,18 @@
 }
 ```
 
+## VS Code 工作区模式
+
+VS Code 扩展可独立管理 headless 后端，不要求桌面 GUI 常驻：
+
+- `codeMind.backendExecutable`：CodeMind EXE 路径，支持 `${workspaceFolder}`；为空时尝试工作区 `build/bin` 与 `PATH`。
+- `codeMind.dataDir`：可设为 `${workspaceFolder}/.codemind/runtime`，仅保存本地 runtime、token hash 和设置，必须加入 `.gitignore`。
+- `Code Mind: Start/Stop/Restart Local Backend`：管理由当前 VS Code 窗口启动的后端；外部后端只连接，不冒充可停止。
+- `Code Mind: Bind Mindmap to Workspace`：生成不含密钥的 `.codemind/project.json`、`semantic.json` 和 `layout.json`。
+- `Code Mind: Create Workspace Snapshot`：将人工里程碑保存到 `.codemind/snapshots/`。自动/AI 快照仍在客户端 localStorage，不写入仓库。
+
+工作区物化文件用于 Git 审查和 Agent 上下文，不是直接写回脑图的入口。修改脑图仍须通过 MCP/REST revision 契约。
+
 Agent 应使用服务端签发且 `actorKind=agent` 的协作 token，填入 `CODEMIND_ACCESS_TOKEN`；MCP 会发送
 `Authorization: Bearer ...`，服务端以 token ID/actorKind/displayName 生成不可伪造的 actor。`CODEMIND_API_KEY`
 仍可作为 owner 兼容入口，但会统一归因到 `local-owner/human`，不适合作为 Agent 身份凭据。

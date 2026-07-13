@@ -62,6 +62,7 @@ import type {
   GestureAction,
   EdgeStyle,
   Locale,
+  MindMapDocument,
   MindMapSummary,
   MindNode,
   NodeColor,
@@ -175,6 +176,7 @@ export class MindMapApp {
   pollHandle: number | null = null
   lastKnownEditTime: string = ''
   lastFrontendSaveTime: string = ''
+  lastSyncedDocument: MindMapDocument | null = null
   inspectorDrag: { x: number; y: number; width: number; dragged: boolean } = {
     x: 0,
     y: 0,

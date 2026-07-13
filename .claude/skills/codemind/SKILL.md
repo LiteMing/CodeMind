@@ -11,13 +11,16 @@ CodeMind 脑图用于承载项目任务、关键决策和进度。Agent 的写�
 
 ## 第 0 步：确认服务和目标 mapId
 
-1. 若用户或项目配置已经给出 mapId，优先调用 `get_tree(mapId)`；成功即表示 MCP、鉴权和目标图均可用。
-2. 若尚不知道 mapId：
+1. 进入项目工作区后，先检查 `.codemind/project.json`。若存在且只含 `schemaVersion`、`mapId`，将其 mapId 作为首选目标；可先读取 `.codemind/semantic.json` 理解项目规划，但实时写入前仍必须调用 `get_tree(mapId)` 获取最新 revision。
+2. 若用户或项目配置已经给出 mapId，优先调用 `get_tree(mapId)`；成功即表示 MCP、鉴权和目标图均可用。
+3. 若尚不知道 mapId：
    - 本地无鉴权或 owner 凭据可以调用 `list_maps` 选择目标图；
    - scoped Bearer token 只能访问签发时绑定的脑图，调用 `list_maps` 返回 403 是预期行为。此时应请用户提供 mapId，或从 token 签发结果/项目配置中读取，不能换用其他凭据绕过。
-3. MCP 不可用时可探测 REST health：`${CODEMIND_API_URL}/api/health`。默认桌面地址为 `http://127.0.0.1:34117`，`codemind serve` 默认为 `http://127.0.0.1:7979`。
-4. 服务离线时只提示一次，请用户启动桌面应用或 `codemind serve`；等待用户确认后再继续，不循环重试刷屏。
-5. 对已知 mapId 调用 `get_tree` 仍返回 401/403 时，提示用户检查该图签发的 `actorKind=agent` token，并将其配置到 `CODEMIND_ACCESS_TOKEN`。
+4. MCP 不可用时可探测 REST health：`${CODEMIND_API_URL}/api/health`。默认桌面地址为 `http://127.0.0.1:34117`，`codemind serve` 默认为 `http://127.0.0.1:7979`。
+5. 服务离线时只提示一次，请用户启动桌面应用、VS Code 的 `Code Mind: Start Local Backend` 或 `codemind serve`；等待用户确认后再继续，不循环重试刷屏。
+6. 对已知 mapId 调用 `get_tree` 仍返回 401/403 时，提示用户检查该图签发的 `actorKind=agent` token，并将其配置到 `CODEMIND_ACCESS_TOKEN`。
+
+`.codemind/semantic.json`、`layout.json` 和 `snapshots/` 是工作区物化与审查文件，不是绕过 MCP/REST revision 契约的写入口。Agent 不得直接编辑这些文件后声称脑图已经更新。
 
 ## 第 1 步：确认目标脑图
 

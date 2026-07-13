@@ -7,8 +7,81 @@ import { cloneDocument, downloadTextFile, getErrorMessage, slugify } from '../ut
 import { listLocalSnapshots, saveLocalSnapshot } from '../snapshots'
 import type { TranslationKey } from '../i18n'
 import type { MindMapDocument } from '../types'
+import { rebaseDocument } from './document-rebase'
 
 const AUTO_SNAPSHOT_MIN_INTERVAL_MS = 2 * 60 * 1000
+
+type SaveWithRebaseResult =
+  | { kind: 'saved'; document: MindMapDocument; rebased: boolean }
+  | { kind: 'conflict'; expectedRevision: number; actualRevision: number | null }
+  | { kind: 'aborted' }
+
+async function saveWithAutomaticRebase(
+  app: MindMapApp,
+  localDocument: MindMapDocument,
+  mapId: string,
+  sessionId: number,
+  changeEpoch: number,
+): Promise<SaveWithRebaseResult> {
+  try {
+    return { kind: 'saved', document: await api.saveMap(localDocument), rebased: false }
+  } catch (error) {
+    if (!isRevisionConflictError(error)) {
+      throw error
+    }
+
+    const initialConflict = {
+      kind: 'conflict' as const,
+      expectedRevision: localDocument.meta.revision,
+      actualRevision: normalizeConflictRevision(error.actualRevision),
+    }
+    const baseDocument = app.lastSyncedDocument
+    if (
+      !baseDocument ||
+      baseDocument.id !== mapId ||
+      baseDocument.meta.revision !== localDocument.meta.revision ||
+      !isCurrentDocumentSession(app, mapId, sessionId) ||
+      app.localChangeEpoch !== changeEpoch
+    ) {
+      return initialConflict
+    }
+
+    let remoteDocument: MindMapDocument
+    try {
+      remoteDocument = await api.loadMap(mapId)
+    } catch {
+      return initialConflict
+    }
+    if (!isCurrentDocumentSession(app, mapId, sessionId)) {
+      return { kind: 'aborted' }
+    }
+    if (app.localChangeEpoch !== changeEpoch) {
+      return initialConflict
+    }
+
+    const rebasedDocument = rebaseDocument(baseDocument, localDocument, remoteDocument)
+    if (!rebasedDocument) {
+      return {
+        kind: 'conflict',
+        expectedRevision: localDocument.meta.revision,
+        actualRevision: remoteDocument.meta.revision,
+      }
+    }
+
+    try {
+      return { kind: 'saved', document: await api.saveMap(rebasedDocument), rebased: true }
+    } catch (retryError) {
+      if (!isRevisionConflictError(retryError)) {
+        throw retryError
+      }
+      return {
+        kind: 'conflict',
+        expectedRevision: rebasedDocument.meta.revision,
+        actualRevision: normalizeConflictRevision(retryError.actualRevision),
+      }
+    }
+  }
+}
 
 export async function saveDocument(
   app: MindMapApp,
@@ -35,11 +108,29 @@ export async function saveDocument(
   const editorDraft = captureActiveNodeEditorDraft(app)
   app.saveInFlight = true
   try {
-    const savedDocument = await api.saveMap(documentToSave)
+    const saveResult = await saveWithAutomaticRebase(app, documentToSave, mapId, sessionId, changeEpoch)
+    if (saveResult.kind === 'aborted') {
+      return
+    }
+    if (saveResult.kind === 'conflict') {
+      app.state.dirty = true
+      app.state.revisionConflict = {
+        mapId,
+        expectedRevision: saveResult.expectedRevision,
+        actualRevision: saveResult.actualRevision,
+      }
+      app.saveQueued = false
+      showRevisionConflictStatus(app)
+      restoreActiveNodeEditorDraft(app, captureActiveNodeEditorDraft(app) ?? editorDraft)
+      return
+    }
+
+    const savedDocument = saveResult.document
     if (!isCurrentDocumentSession(app, mapId, sessionId)) {
       return
     }
 
+    app.lastSyncedDocument = cloneDocument(savedDocument)
     const changedDuringSave = app.localChangeEpoch !== changeEpoch
     const editorDraftToRestore = captureActiveNodeEditorDraft(app) ?? editorDraft
     if (changedDuringSave) {
@@ -69,23 +160,13 @@ export async function saveDocument(
       // Local snapshots are optional and must not change save semantics.
     }
     if (!changedDuringSave) {
-      app.setStatus(statusKey, values)
+      app.setStatus(saveResult.rebased ? 'status.rebasedSaved' : statusKey, saveResult.rebased ? undefined : values)
     }
     restoreActiveNodeEditorDraft(app, editorDraftToRestore)
   } catch (error) {
     if (isCurrentDocumentSession(app, mapId, sessionId)) {
       app.state.dirty = true
-      if (isRevisionConflictError(error)) {
-        app.state.revisionConflict = {
-          mapId,
-          expectedRevision: documentToSave.meta.revision,
-          actualRevision: normalizeConflictRevision(error.actualRevision),
-        }
-        app.saveQueued = false
-        showRevisionConflictStatus(app)
-      } else {
-        app.setStatus('status.saveFailed', { reason: getErrorMessage(error) })
-      }
+      app.setStatus('status.saveFailed', { reason: getErrorMessage(error) })
       restoreActiveNodeEditorDraft(app, captureActiveNodeEditorDraft(app) ?? editorDraft)
     }
   } finally {
@@ -171,6 +252,7 @@ export async function overwriteServerVersion(app: MindMapApp): Promise<void> {
     }
 
     app.state.revisionConflict = null
+    app.lastSyncedDocument = cloneDocument(savedDocument)
     app.lastFrontendSaveTime = savedDocument.meta.lastEditedAt || new Date().toISOString()
     app.lastKnownEditTime = app.lastFrontendSaveTime
     if (app.localChangeEpoch === changeEpoch) {
@@ -312,6 +394,7 @@ export async function goHome(app: MindMapApp): Promise<void> {
   app.state.currentMapId = null
   app.state.dirty = false
   app.state.revisionConflict = null
+  app.lastSyncedDocument = null
   app.state.snapshotDraftName = ''
   app.state.ai.open = false
   app.state.graph.open = false
@@ -342,6 +425,7 @@ export async function renameMap(app: MindMapApp, mapId: string): Promise<void> {
     await refreshMaps(app)
     if (app.state.currentMapId === mapId) {
       app.state.document = doc
+      app.lastSyncedDocument = cloneDocument(doc)
       resetHistory(app)
     }
     app.setStatus('status.mapRenamed')
@@ -375,6 +459,7 @@ export async function deleteMap(app: MindMapApp, mapId: string): Promise<void> {
       app.state.currentMapId = null
       app.state.dirty = false
       app.state.revisionConflict = null
+      app.lastSyncedDocument = null
       app.refs = null
       resetHistory(app)
     }
@@ -408,6 +493,7 @@ export function openLoadedDocument(app: MindMapApp, document: MindMapDocument, s
   app.localChangeEpoch = 0
   app.saveQueued = false
   app.state.document = normalizedDocument
+  app.lastSyncedDocument = cloneDocument(normalizedDocument)
   app.state.currentMapId = normalizedDocument.id
   app.state.snapshotDraftName = ''
   app.state.view = 'map'
@@ -505,7 +591,9 @@ export async function pollForAPIChanges(app: MindMapApp): Promise<void> {
       }
     }
 
-    // Update the document
+    // Update the document. Keep the exact server response as the rebase base;
+    // the optional auto-tidy below is a local layout change.
+    app.lastSyncedDocument = cloneDocument(doc)
     app.state.document = doc
     app.state.currentMapId = doc.id
     app.lastKnownEditTime = doc.meta.lastEditedAt || new Date().toISOString()

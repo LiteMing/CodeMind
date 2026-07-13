@@ -19,6 +19,13 @@ export interface MapSummary {
   updatedAt?: string;
 }
 
+export interface ProjectFiles {
+  mapId: string;
+  revision: number;
+  semantic: string;
+  layout: string;
+}
+
 export type BindingType = 'file' | 'directory' | 'glob' | 'symbol' | 'asset';
 
 export interface NodeBinding {
@@ -73,7 +80,10 @@ export class CodeMindAPIError extends Error {
 }
 
 export class CodeMindNetworkError extends Error {
-  constructor(message: string, public cause?: Error) {
+  constructor(
+    message: string,
+    public cause?: Error,
+  ) {
     super(message);
     this.name = 'CodeMindNetworkError';
   }
@@ -111,7 +121,7 @@ export class CodeMindAPI {
   async listMaps(): Promise<MapSummary[]> {
     const data = await this.request<MapSummary[] | { maps: MapSummary[] }>('GET', '/api/maps', undefined, true);
     // Accept either bare array or { maps: [...] } shape
-    const maps = Array.isArray(data) ? data : data?.maps ?? [];
+    const maps = Array.isArray(data) ? data : (data?.maps ?? []);
     for (const map of maps) {
       this.rememberRevision(map.id, map.revision);
     }
@@ -119,15 +129,23 @@ export class CodeMindAPI {
   }
 
   async getTree(mapId: string): Promise<NodeData> {
-    const tree = await this.request<NodeData>(
-      'GET',
-      `/api/maps/${encodeURIComponent(mapId)}/tree`,
-      undefined,
-      true,
-      { mapId },
-    );
+    const tree = await this.request<NodeData>('GET', `/api/maps/${encodeURIComponent(mapId)}/tree`, undefined, true, {
+      mapId,
+    });
     this.rememberRevision(mapId, tree.revision);
     return tree;
+  }
+
+  async getProjectFiles(mapId: string): Promise<ProjectFiles> {
+    const files = await this.request<ProjectFiles>(
+      'GET',
+      `/api/maps/${encodeURIComponent(mapId)}/project-files`,
+      undefined,
+      false,
+      { mapId },
+    );
+    this.rememberRevision(mapId, files.revision);
+    return files;
   }
 
   async getNode(mapId: string, nodeId: string): Promise<NodeData> {
@@ -144,13 +162,10 @@ export class CodeMindAPI {
 
   async createNode(mapId: string, body: CreateNodeRequest): Promise<NodeData> {
     const expectedRevision = await this.currentRevision(mapId);
-    return this.request<NodeData>(
-      'POST',
-      `/api/maps/${encodeURIComponent(mapId)}/nodes`,
-      body,
-      false,
-      { mapId, expectedRevision },
-    );
+    return this.request<NodeData>('POST', `/api/maps/${encodeURIComponent(mapId)}/nodes`, body, false, {
+      mapId,
+      expectedRevision,
+    });
   }
 
   async updateNode(mapId: string, nodeId: string, body: UpdateNodeRequest): Promise<NodeData> {

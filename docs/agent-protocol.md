@@ -20,7 +20,7 @@
 6. **敏感信息不落图**：token、API key、密钥、个人隐私和未脱敏日志不得写入节点。
 7. **不伪造评审状态**：任务完成只在 note 中标记“待人工评审”，不得声明服务端已 pending、accepted 或完成评审。
 
-## 当前能力边界（Phase D / 1.14.0）
+## 当前能力边界（Phase D / 1.15.0）
 
 | 能力        | 当前实现                                                                                 | 不得声称                                                  |
 | ----------- | ---------------------------------------------------------------------------------------- | --------------------------------------------------------- |
@@ -28,7 +28,8 @@
 | partition   | 命令信封校验枚举；stable 写入强制 403                                                    | 节点已经持久化实体级分区；requirements 已由服务端强制只读 |
 | idempotency | actorId + mapId + key 作用域；成功响应进程内有界 TTL 重放                                | 重启后仍保留重放历史；跨实例已有持久 command ledger       |
 | changeset   | `ChangeSetMetadata` 类型已定型                                                           | pending/changeset 已持久化；已有 accept/reject 评审门     |
-| 稳定区      | stable 命令声明只读                                                                      | Git 稳定区已经物化或自动回写脑图                          |
+| 工作区物化  | VS Code 可绑定 mapId，并生成 canonical semantic/layout 与人工里程碑快照                  | 文件修改会自动回写脑图；已实现完整 Git stable 派生层      |
+| 稳定区      | stable 命令声明只读                                                                      | Git stable 已自动物化或自动回写脑图                       |
 | map 发现    | owner/local 可 `list_maps`；scoped token 只能访问绑定 mapId                              | scoped agent token 能列出全部脑图                         |
 
 这些限制是协议的一部分。Agent 遇到尚未实现的能力时，应向用户说明边界，而不是用现有字段模拟权威状态。
@@ -50,3 +51,4 @@
 - 狗粮验证中发现 Agent 卡点或误解时，同时修订本文件、Skill 和人工验证清单。
 - 2026-07-10：初版，配套 P1 双契约。
 - 2026-07-10：补充 scoped token 无法 `list_maps`、actor/partition/changeset 当前边界及准确冲突流程。
+- 2026-07-13：补充 `.codemind/project.json` 发现、canonical 工作区物化与文件不可直接回写的边界。

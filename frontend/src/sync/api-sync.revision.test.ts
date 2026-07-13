@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createDefaultDocument } from '../document'
 import type { MindMapApp } from '../app'
 import type { MindMapDocument } from '../types'
+import { cloneDocument } from '../utils'
 
 const mocks = vi.hoisted(() => ({
   saveMap: vi.fn(),
@@ -61,6 +62,89 @@ describe('revision conflict recovery', () => {
     expect(mocks.saveMap).toHaveBeenCalledTimes(1)
     expect(app.state.document.title).toBe('Edited again')
     expect(app.state.dirty).toBe(true)
+  })
+
+  it('rebases disjoint local and remote changes after a 412 and retries once', async () => {
+    const { saveDocument } = await import('./api-sync')
+    const base = createDocument('Base', 1)
+    const local = cloneDocument(base)
+    local.nodes[0].note = 'Local note'
+    const remote = cloneDocument(base)
+    remote.title = 'Remote title'
+    remote.meta.revision = 2
+    const app = createAppStub(local)
+    app.lastSyncedDocument = cloneDocument(base)
+    app.state.dirty = true
+    mocks.saveMap
+      .mockRejectedValueOnce(revisionConflict(1, 2))
+      .mockImplementationOnce(async (submitted: MindMapDocument) => ({
+        ...submitted,
+        meta: { ...submitted.meta, revision: 3 },
+      }))
+    mocks.loadMap.mockResolvedValueOnce(remote)
+
+    await saveDocument(app, 'status.saved')
+
+    expect(mocks.saveMap).toHaveBeenCalledTimes(2)
+    const rebased = mocks.saveMap.mock.calls[1][0] as MindMapDocument
+    expect(rebased.title).toBe('Remote title')
+    expect(rebased.nodes[0].note).toBe('Local note')
+    expect(rebased.meta.revision).toBe(2)
+    expect(app.state.document.title).toBe('Remote title')
+    expect(app.state.document.nodes[0].note).toBe('Local note')
+    expect(app.state.document.meta.revision).toBe(3)
+    expect(app.lastSyncedDocument?.meta.revision).toBe(3)
+    expect(app.state.dirty).toBe(false)
+    expect(app.state.revisionConflict).toBeNull()
+    expect(app.setStatus).toHaveBeenCalledWith('status.rebasedSaved', undefined)
+  })
+
+  it('keeps the local draft conflicted when both sides changed the same field', async () => {
+    const { saveDocument } = await import('./api-sync')
+    const base = createDocument('Base', 1)
+    const local = cloneDocument(base)
+    local.nodes[0].title = 'Local title'
+    const remote = cloneDocument(base)
+    remote.nodes[0].title = 'Remote title'
+    remote.meta.revision = 2
+    const app = createAppStub(local)
+    app.lastSyncedDocument = cloneDocument(base)
+    app.state.dirty = true
+    mocks.saveMap.mockRejectedValueOnce(revisionConflict(1, 2))
+    mocks.loadMap.mockResolvedValueOnce(remote)
+
+    await saveDocument(app, 'status.saved')
+
+    expect(mocks.saveMap).toHaveBeenCalledTimes(1)
+    expect(app.state.document).toBe(local)
+    expect(app.state.document.nodes[0].title).toBe('Local title')
+    expect(app.state.document.meta.revision).toBe(1)
+    expect(app.state.dirty).toBe(true)
+    expect(app.state.revisionConflict).toEqual({ mapId: local.id, expectedRevision: 1, actualRevision: 2 })
+  })
+
+  it('does not retry more than once when the rebased save also conflicts', async () => {
+    const { saveDocument } = await import('./api-sync')
+    const base = createDocument('Base', 1)
+    const local = cloneDocument(base)
+    local.nodes[0].note = 'Local note'
+    const remote = cloneDocument(base)
+    remote.title = 'Remote title'
+    remote.meta.revision = 2
+    const app = createAppStub(local)
+    app.lastSyncedDocument = cloneDocument(base)
+    app.state.dirty = true
+    mocks.saveMap.mockRejectedValueOnce(revisionConflict(1, 2)).mockRejectedValueOnce(revisionConflict(2, 3))
+    mocks.loadMap.mockResolvedValueOnce(remote)
+
+    await saveDocument(app, 'status.saved')
+
+    expect(mocks.saveMap).toHaveBeenCalledTimes(2)
+    expect(mocks.loadMap).toHaveBeenCalledTimes(1)
+    expect(app.state.document).toBe(local)
+    expect(app.state.document.nodes[0].note).toBe('Local note')
+    expect(app.state.document.meta.revision).toBe(1)
+    expect(app.state.revisionConflict).toEqual({ mapId: local.id, expectedRevision: 2, actualRevision: 3 })
   })
 
   it('reloads the server document and clears dirty, conflict, timer, and history', async () => {
@@ -300,6 +384,7 @@ function createAppStub(document: MindMapDocument): MindMapApp {
     didInitializeViewport: false,
     lastKnownEditTime: document.meta.lastEditedAt,
     lastFrontendSaveTime: document.meta.lastEditedAt,
+    lastSyncedDocument: null,
     state: {
       document,
       currentMapId: document.id,
