@@ -2,7 +2,7 @@
   "name": "codemind-vscode",
   "displayName": "Code Mind",
   "description": "Browse and modify Code Mind mindmaps directly from VS Code",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "publisher": "codemind",
   "engines": {
     "vscode": "^1.85.0"

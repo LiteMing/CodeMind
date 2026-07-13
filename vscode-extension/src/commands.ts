@@ -66,9 +66,8 @@ export function registerCommands(
     vscode.commands.registerCommand('codeMind.startLocalBackend', async () => {
       try {
         await backendManager.start();
-        vscode.window.showInformationMessage(
-          'Code Mind backend is starting. Open the Code Mind output panel for logs.',
-        );
+        provider.refresh();
+        vscode.window.showInformationMessage('Code Mind backend started.');
       } catch (err) {
         vscode.window.showErrorMessage(
           `Code Mind: failed to start backend — ${err instanceof Error ? err.message : String(err)}`,
@@ -76,13 +75,21 @@ export function registerCommands(
       }
     }),
 
-    vscode.commands.registerCommand('codeMind.stopLocalBackend', () => {
-      void backendManager.stop();
+    vscode.commands.registerCommand('codeMind.stopLocalBackend', async () => {
+      try {
+        await backendManager.stop();
+        provider.refresh();
+      } catch (err) {
+        vscode.window.showErrorMessage(
+          `Code Mind: failed to stop backend - ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
     }),
 
     vscode.commands.registerCommand('codeMind.restartLocalBackend', async () => {
       try {
         await backendManager.restart();
+        provider.refresh();
         vscode.window.showInformationMessage('Code Mind backend restarted.');
       } catch (err) {
         vscode.window.showErrorMessage(
@@ -107,11 +114,16 @@ export function registerCommands(
       const cfg = vscode.workspace.getConfiguration('codeMind');
       const apiUrl = (cfg.get<string>('apiUrl') || 'http://127.0.0.1:34117').replace(/\/+$/, '');
       const apiKey = cfg.get<string>('apiKey') || '';
-      const panel = vscode.window.createWebviewPanel('codeMindWebApp', 'Code Mind Web', vscode.ViewColumn.One, {
-        enableScripts: true,
-        retainContextWhenHidden: true,
-      });
-      panel.webview.html = buildWebAppHtml(apiUrl, apiKey);
+      const appUrl = apiKey ? `${apiUrl}?vscodeApiKey=${encodeURIComponent(apiKey)}` : apiUrl;
+      provider.refresh();
+      try {
+        await vscode.commands.executeCommand('simpleBrowser.show', appUrl);
+      } catch (err) {
+        await vscode.env.openExternal(vscode.Uri.parse(appUrl));
+        vscode.window.showWarningMessage(
+          `Code Mind could not open VS Code Simple Browser and used the system browser instead: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
     }),
 
     vscode.commands.registerCommand('codeMind.gettingStarted', async () => {
@@ -124,7 +136,7 @@ export function registerCommands(
           '',
           '- The extension is a thin client: start the Code Mind desktop app, or run `codemind serve` for a headless backend.',
           '- `Code Mind: Open Web App` connects to the backend at `codeMind.apiUrl` (default `http://127.0.0.1:34117`).',
-          '- Optionally set `codeMind.backendCommand` (e.g. `codemind.exe serve`) to let VS Code start a backend for you; `Code Mind: Start/Stop Local Backend` manage that process.',
+          '- Set `codeMind.backendExecutable` to the CodeMind EXE path; `Code Mind: Start/Stop Local Backend` manage that process.',
           '- Leave `codeMind.dataDir` empty to use the shared Code Mind app data directory, or configure it only when you need a custom data directory.',
           '- Run `Code Mind: Configure API URL` or click `Configure API URL` in the side bar.',
           '- Run `Code Mind: Configure API Key` if the desktop app has an API key configured.',
@@ -318,52 +330,6 @@ export function registerCommands(
       );
     }),
   );
-}
-
-function buildWebAppHtml(apiUrl: string, apiKey: string): string {
-  const appUrl = apiKey ? `${apiUrl}?vscodeApiKey=${encodeURIComponent(apiKey)}` : apiUrl;
-  const escapedApiUrl = escapeHtml(apiUrl);
-  const frameSrc = escapeAttribute(appUrl);
-  const browserUrl = escapeAttribute(apiUrl);
-  return `<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <style>
-    html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #0f172a; }
-    .shell { display: flex; flex-direction: column; width: 100%; height: 100vh; }
-    .bar { display: flex; align-items: center; gap: 10px; padding: 8px 12px; background: #111827; color: #e5e7eb; font: 12px/1.4 system-ui, sans-serif; border-bottom: 1px solid rgba(148, 163, 184, .24); }
-    .pill { padding: 3px 8px; border-radius: 999px; background: #1f2937; color: #cbd5e1; }
-    iframe { flex: 1; width: 100%; border: 0; background: white; }
-    a { color: #38bdf8; }
-  </style>
-</head>
-<body>
-  <div class="shell">
-    <div class="bar">
-      <strong>Code Mind Web</strong>
-      <span class="pill">${escapedApiUrl}</span>
-      <span>Start the Code Mind desktop app first if the page is blank.</span>
-      <a href="${browserUrl}">Open in browser</a>
-    </div>
-    <iframe src="${frameSrc}" sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-downloads"></iframe>
-  </div>
-</body>
-</html>`;
-}
-
-function escapeHtml(value: string): string {
-  return value
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}
-
-function escapeAttribute(value: string): string {
-  return escapeHtml(value);
 }
 
 interface NodeContext {
