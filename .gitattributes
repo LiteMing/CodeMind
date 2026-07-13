@@ -1,2 +1,5 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+
+# Deterministic project-format fixtures are compared byte-for-byte.
+internal/mindmap/testdata/gitformat/*.json text eol=lf
