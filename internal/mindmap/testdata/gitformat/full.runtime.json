@@ -1,0 +1,171 @@
+{
+  "id": "project-map",
+  "title": "Project <Map> & Plan",
+  "theme": "light",
+  "nodes": [
+    {
+      "id": "child-b",
+      "parentId": "root",
+      "kind": "topic",
+      "order": 2,
+      "title": "Backend",
+      "priority": "P1",
+      "bindings": [
+        {
+          "id": "binding-z",
+          "type": "symbol",
+          "path": "internal/server/server.go",
+          "symbol": "Server.registerAPI"
+        },
+        {
+          "id": "binding-a",
+          "type": "directory",
+          "path": "internal/server"
+        }
+      ],
+      "collapsed": true,
+      "width": 220,
+      "height": 72,
+      "position": {
+        "x": 1120,
+        "y": 420
+      },
+      "createdAt": "2026-07-01T01:00:00Z",
+      "updatedAt": "2026-07-02T02:00:00Z"
+    },
+    {
+      "id": "root",
+      "kind": "root",
+      "title": "Project <Map> & Plan",
+      "note": "Root notes stay semantic.\nSecond line.",
+      "bindings": [],
+      "position": {
+        "x": 820,
+        "y": 320
+      },
+      "createdAt": "2026-07-01T00:00:00Z",
+      "updatedAt": "2026-07-03T03:00:00Z"
+    },
+    {
+      "id": "floating",
+      "kind": "floating",
+      "title": "Scratchpad",
+      "color": "amber",
+      "bindings": [
+        {
+          "id": "asset-logo",
+          "type": "asset",
+          "path": "assets/logo.png",
+          "contentHash": "sha256:abc123"
+        }
+      ],
+      "position": {
+        "x": 500,
+        "y": 620
+      },
+      "createdAt": "2026-07-01T04:00:00Z",
+      "updatedAt": "2026-07-01T05:00:00Z"
+    },
+    {
+      "id": "child-a",
+      "parentId": "root",
+      "kind": "topic",
+      "order": 1,
+      "title": "Frontend",
+      "note": "UI workflow",
+      "color": "teal",
+      "bindings": [
+        {
+          "id": "binding-ui",
+          "type": "glob",
+          "path": ".",
+          "glob": "frontend/src/**/*.ts"
+        }
+      ],
+      "position": {
+        "x": 1120,
+        "y": 220
+      },
+      "createdAt": "2026-07-01T01:00:00Z",
+      "updatedAt": "2026-07-02T01:00:00Z"
+    }
+  ],
+  "relations": [
+    {
+      "id": "relation-z",
+      "sourceId": "child-a",
+      "targetId": "child-b",
+      "label": "coordinates",
+      "arrowDirection": "both",
+      "branches": [
+        {
+          "targetId": "root"
+        },
+        {
+          "targetId": "floating"
+        }
+      ],
+      "midpointT": 0.4,
+      "midpointOffset": {
+        "x": 12,
+        "y": -8
+      },
+      "waypoints": [
+        {
+          "x": 980,
+          "y": 280
+        },
+        {
+          "x": 1040,
+          "y": 360
+        }
+      ],
+      "createdAt": "2026-07-02T01:00:00Z",
+      "updatedAt": "2026-07-03T01:00:00Z"
+    },
+    {
+      "id": "relation-a",
+      "sourceId": "root",
+      "targetId": "floating",
+      "label": "captures",
+      "branches": [],
+      "waypoints": [],
+      "createdAt": "2026-07-02T02:00:00Z",
+      "updatedAt": "2026-07-03T02:00:00Z"
+    }
+  ],
+  "regions": [
+    {
+      "id": "region-z",
+      "label": "Delivery",
+      "color": "violet",
+      "position": {
+        "x": 1000,
+        "y": 300
+      },
+      "width": 520,
+      "height": 360,
+      "createdAt": "2026-07-01T06:00:00Z",
+      "updatedAt": "2026-07-02T06:00:00Z"
+    },
+    {
+      "id": "region-a",
+      "label": "Notes",
+      "color": "amber",
+      "position": {
+        "x": 480,
+        "y": 620
+      },
+      "width": 300,
+      "height": 180,
+      "createdAt": "2026-07-01T07:00:00Z",
+      "updatedAt": "2026-07-02T07:00:00Z"
+    }
+  ],
+  "meta": {
+    "version": 1,
+    "revision": 7,
+    "lastEditedAt": "2026-07-03T04:00:00Z",
+    "lastOpenedAt": "2026-07-04T04:00:00Z"
+  }
+}

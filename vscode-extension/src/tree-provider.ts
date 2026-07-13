@@ -214,6 +214,9 @@ export class MindMapTreeProvider implements vscode.TreeDataProvider<MindMapTreeI
     if (err instanceof CodeMindAPIError) {
       if (err.status === 401) {
         vscode.window.showErrorMessage('Code Mind: authentication failed. Check your API key.');
+      } else if (err.status === 412) {
+        vscode.window.showWarningMessage('Code Mind changed on the server. Refreshing the tree before retry.');
+        this.refresh();
       } else {
         vscode.window.showErrorMessage(`Code Mind error: ${err.detail || err.message}`);
       }

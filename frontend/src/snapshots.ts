@@ -1,4 +1,5 @@
 import type { MindMapDocument } from './types'
+import { normalizeDocumentSemantics } from './document'
 
 // 'ai' snapshots are captured automatically right before an AI write lands —
 // the rollback guarantee ("AI 操作必须可评审可回滚") — and are rendered with a
@@ -132,5 +133,5 @@ function createSnapshotID(): string {
 }
 
 function cloneDocument(document: MindMapDocument): MindMapDocument {
-  return JSON.parse(JSON.stringify(document)) as MindMapDocument
+  return normalizeDocumentSemantics(JSON.parse(JSON.stringify(document)) as MindMapDocument)
 }

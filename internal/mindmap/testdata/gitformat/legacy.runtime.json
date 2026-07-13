@@ -1,0 +1,47 @@
+{
+  "id": "legacy-project",
+  "title": "Legacy Project",
+  "nodes": [
+    {
+      "id": "root",
+      "kind": "root",
+      "title": "Legacy Project",
+      "position": {
+        "x": 820,
+        "y": 320
+      },
+      "createdAt": "2025-01-01T00:00:00Z",
+      "updatedAt": "2025-01-01T00:00:00Z"
+    },
+    {
+      "id": "later",
+      "parentId": "root",
+      "kind": "topic",
+      "title": "Later",
+      "position": {
+        "x": 1100,
+        "y": 420
+      },
+      "createdAt": "2025-01-01T00:00:00Z",
+      "updatedAt": "2025-01-01T00:00:00Z"
+    },
+    {
+      "id": "earlier",
+      "parentId": "root",
+      "kind": "topic",
+      "title": "Earlier",
+      "position": {
+        "x": 1100,
+        "y": 220
+      },
+      "createdAt": "2025-01-01T00:00:00Z",
+      "updatedAt": "2025-01-01T00:00:00Z"
+    }
+  ],
+  "relations": [],
+  "regions": [],
+  "meta": {
+    "lastEditedAt": "2025-01-01T00:00:00Z",
+    "lastOpenedAt": "2025-01-02T00:00:00Z"
+  }
+}

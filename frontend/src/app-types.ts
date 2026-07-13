@@ -7,6 +7,7 @@ import type {
   MindMapDocument,
   MindMapSummary,
   MindNode,
+  NodeBinding,
   NodeColor,
   Position,
   Priority,
@@ -151,6 +152,12 @@ export interface StatusDescriptor {
   values?: Record<string, string | number>
 }
 
+export interface RevisionConflictState {
+  mapId: string
+  expectedRevision: number
+  actualRevision: number | null
+}
+
 export interface EditorLaunchOptions {
   value?: string | null
   selection?: 'all' | 'end'
@@ -247,6 +254,7 @@ export interface AppState {
   midpointDrag: MidpointDragState | null
   cutting: CuttingState | null
   dirty: boolean
+  revisionConflict: RevisionConflictState | null
 
   // UX Polish additions
   contextToolbar: ContextToolbarState
@@ -289,6 +297,9 @@ export interface ShellRefs {
   undoButton: HTMLButtonElement
   redoButton: HTMLButtonElement
   saveButton: HTMLButtonElement
+  conflictActions: HTMLElement
+  reloadServerButton: HTMLButtonElement
+  overwriteServerButton: HTMLButtonElement
   layoutButton: HTMLButtonElement
   exportButton: HTMLButtonElement
   importButton: HTMLButtonElement
@@ -385,10 +396,12 @@ export interface CopiedSubtreeNode {
   id: string
   parentId?: string
   kind: MindNode['kind']
+  order: number
   title: string
   note?: string
   priority?: Priority
   color?: NodeColor
+  bindings: NodeBinding[]
   collapsed?: boolean
   width?: number
   height?: number

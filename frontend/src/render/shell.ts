@@ -30,6 +30,12 @@ export function renderHeader(app: MindMapApp): void {
   app.refs.undoButton.textContent = app.t('toolbar.undo')
   app.refs.redoButton.textContent = app.t('toolbar.redo')
   app.refs.saveButton.textContent = app.t('toolbar.save')
+  app.refs.conflictActions.hidden = app.state.revisionConflict === null
+  app.refs.reloadServerButton.textContent = app.t('conflict.reloadServer')
+  app.refs.overwriteServerButton.textContent = app.t('conflict.overwriteServer')
+  app.refs.reloadServerButton.disabled = app.conflictResolutionInFlight
+  app.refs.overwriteServerButton.disabled =
+    app.conflictResolutionInFlight || app.state.revisionConflict?.actualRevision === null
   app.refs.layoutButton.textContent = app.t('toolbar.autoLayout')
   app.refs.exportButton.textContent = app.t('toolbar.exportMarkdown')
   app.refs.importButton.textContent = app.t('toolbar.import')

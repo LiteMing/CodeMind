@@ -13,7 +13,7 @@ import (
 
 func TestHandleNodesGet_ReturnsNodes(t *testing.T) {
 	server := newTestServer(t)
-	handler := server.Handler()
+	handler := withTestRevisionHeaders(server.Handler())
 
 	// Create a map first
 	createReq := httptest.NewRequest(http.MethodPost, "/api/maps", strings.NewReader(`{"title":"Test Map"}`))
@@ -74,7 +74,7 @@ func TestHandleNodesGet_Returns404ForNonExistentMap(t *testing.T) {
 
 func TestHandleNodesPost_CreatesNodeWithAutoCompletedFields(t *testing.T) {
 	server := newTestServer(t)
-	handler := server.Handler()
+	handler := withTestRevisionHeaders(server.Handler())
 
 	// Create a map
 	createReq := httptest.NewRequest(http.MethodPost, "/api/maps", strings.NewReader(`{"title":"Test Map"}`))
@@ -144,7 +144,7 @@ func TestHandleNodesPost_CreatesNodeWithAutoCompletedFields(t *testing.T) {
 
 func TestHandleNodesPost_Returns400ForMissingParentId(t *testing.T) {
 	server := newTestServer(t)
-	handler := server.Handler()
+	handler := withTestRevisionHeaders(server.Handler())
 
 	// Create a map
 	createReq := httptest.NewRequest(http.MethodPost, "/api/maps", strings.NewReader(`{"title":"Test Map"}`))
@@ -174,7 +174,7 @@ func TestHandleNodesPost_Returns400ForMissingParentId(t *testing.T) {
 
 func TestHandleNodesPost_Returns400ForMissingTitle(t *testing.T) {
 	server := newTestServer(t)
-	handler := server.Handler()
+	handler := withTestRevisionHeaders(server.Handler())
 
 	// Create a map
 	createReq := httptest.NewRequest(http.MethodPost, "/api/maps", strings.NewReader(`{"title":"Test Map"}`))
@@ -204,7 +204,7 @@ func TestHandleNodesPost_Returns400ForMissingTitle(t *testing.T) {
 
 func TestHandleNodesPost_Returns400ForInvalidKind(t *testing.T) {
 	server := newTestServer(t)
-	handler := server.Handler()
+	handler := withTestRevisionHeaders(server.Handler())
 
 	// Create a map
 	createReq := httptest.NewRequest(http.MethodPost, "/api/maps", strings.NewReader(`{"title":"Test Map"}`))
@@ -248,7 +248,7 @@ func TestHandleNodesPost_Returns404ForNonExistentMap(t *testing.T) {
 
 func TestHandleNodesPost_Returns400ForNonExistentParent(t *testing.T) {
 	server := newTestServer(t)
-	handler := server.Handler()
+	handler := withTestRevisionHeaders(server.Handler())
 
 	// Create a map
 	createReq := httptest.NewRequest(http.MethodPost, "/api/maps", strings.NewReader(`{"title":"Test Map"}`))
@@ -278,7 +278,7 @@ func TestHandleNodesPost_Returns400ForNonExistentParent(t *testing.T) {
 
 func TestHandleNodeByIDGet_ReturnsNodeWithAncestorsAndChildren(t *testing.T) {
 	server := newTestServer(t)
-	handler := server.Handler()
+	handler := withTestRevisionHeaders(server.Handler())
 
 	// Create a map
 	createReq := httptest.NewRequest(http.MethodPost, "/api/maps", strings.NewReader(`{"title":"Test Map"}`))
@@ -365,7 +365,7 @@ func TestHandleNodeByIDGet_ReturnsNodeWithAncestorsAndChildren(t *testing.T) {
 
 func TestHandleNodeByIDGet_Returns404ForNonExistentNode(t *testing.T) {
 	server := newTestServer(t)
-	handler := server.Handler()
+	handler := withTestRevisionHeaders(server.Handler())
 
 	// Create a map
 	createReq := httptest.NewRequest(http.MethodPost, "/api/maps", strings.NewReader(`{"title":"Test Map"}`))
@@ -388,7 +388,7 @@ func TestHandleNodeByIDGet_Returns404ForNonExistentNode(t *testing.T) {
 
 func TestHandleNodeByIDPatch_UpdatesOnlySpecifiedFields(t *testing.T) {
 	server := newTestServer(t)
-	handler := server.Handler()
+	handler := withTestRevisionHeaders(server.Handler())
 
 	// Create a map
 	createReq := httptest.NewRequest(http.MethodPost, "/api/maps", strings.NewReader(`{"title":"Test Map"}`))
@@ -461,7 +461,7 @@ func TestHandleNodeByIDPatch_UpdatesOnlySpecifiedFields(t *testing.T) {
 
 func TestHandleNodeByIDPatch_PreservesUnspecifiedFields(t *testing.T) {
 	server := newTestServer(t)
-	handler := server.Handler()
+	handler := withTestRevisionHeaders(server.Handler())
 
 	// Create a map
 	createReq := httptest.NewRequest(http.MethodPost, "/api/maps", strings.NewReader(`{"title":"Test Map"}`))
@@ -528,7 +528,7 @@ func TestHandleNodeByIDPatch_PreservesUnspecifiedFields(t *testing.T) {
 
 func TestHandleNodeByIDPatch_Returns404ForNonExistentNode(t *testing.T) {
 	server := newTestServer(t)
-	handler := server.Handler()
+	handler := withTestRevisionHeaders(server.Handler())
 
 	// Create a map
 	createReq := httptest.NewRequest(http.MethodPost, "/api/maps", strings.NewReader(`{"title":"Test Map"}`))
@@ -553,7 +553,7 @@ func TestHandleNodeByIDPatch_Returns404ForNonExistentNode(t *testing.T) {
 
 func TestHandleNodeByIDDelete_CascadeTrueRemovesNodeAndDescendants(t *testing.T) {
 	server := newTestServer(t)
-	handler := server.Handler()
+	handler := withTestRevisionHeaders(server.Handler())
 
 	// Create a map
 	createReq := httptest.NewRequest(http.MethodPost, "/api/maps", strings.NewReader(`{"title":"Test Map"}`))
@@ -632,7 +632,7 @@ func TestHandleNodeByIDDelete_CascadeTrueRemovesNodeAndDescendants(t *testing.T)
 
 func TestHandleNodeByIDDelete_CascadeFalseReparentsChildren(t *testing.T) {
 	server := newTestServer(t)
-	handler := server.Handler()
+	handler := withTestRevisionHeaders(server.Handler())
 
 	// Create a map
 	createReq := httptest.NewRequest(http.MethodPost, "/api/maps", strings.NewReader(`{"title":"Test Map"}`))
@@ -717,7 +717,7 @@ func TestHandleNodeByIDDelete_CascadeFalseReparentsChildren(t *testing.T) {
 
 func TestHandleNodeByIDDelete_Returns400ForRootNode(t *testing.T) {
 	server := newTestServer(t)
-	handler := server.Handler()
+	handler := withTestRevisionHeaders(server.Handler())
 
 	// Create a map
 	createReq := httptest.NewRequest(http.MethodPost, "/api/maps", strings.NewReader(`{"title":"Test Map"}`))
@@ -751,7 +751,7 @@ func TestHandleNodeByIDDelete_Returns400ForRootNode(t *testing.T) {
 
 func TestHandleNodeByIDDelete_PrunesRelationsReferencingDeletedNode(t *testing.T) {
 	server := newTestServer(t)
-	handler := server.Handler()
+	handler := withTestRevisionHeaders(server.Handler())
 
 	doc := mindmap.NewDefaultDocument()
 	doc.ID = "relation-delete"
@@ -805,7 +805,7 @@ func TestHandleNodeByIDDelete_PrunesRelationsReferencingDeletedNode(t *testing.T
 
 func TestHandleNodesGet_CompactOmitsPositionAndTimestamps(t *testing.T) {
 	server := newTestServer(t)
-	handler := server.Handler()
+	handler := withTestRevisionHeaders(server.Handler())
 
 	// Create a map
 	createReq := httptest.NewRequest(http.MethodPost, "/api/maps", strings.NewReader(`{"title":"Test Map"}`))
@@ -898,7 +898,7 @@ func TestHandleNodesGet_CompactOmitsPositionAndTimestamps(t *testing.T) {
 
 func TestHandleNodesGet_CompactFalseReturnsFullResponse(t *testing.T) {
 	server := newTestServer(t)
-	handler := server.Handler()
+	handler := withTestRevisionHeaders(server.Handler())
 
 	// Create a map
 	createReq := httptest.NewRequest(http.MethodPost, "/api/maps", strings.NewReader(`{"title":"Test Map"}`))
@@ -933,7 +933,7 @@ func TestHandleNodesGet_CompactFalseReturnsFullResponse(t *testing.T) {
 
 func TestHandleNodeTree_CompactOmitsPositionAndTimestamps(t *testing.T) {
 	server := newTestServer(t)
-	handler := server.Handler()
+	handler := withTestRevisionHeaders(server.Handler())
 
 	// Create a map
 	createReq := httptest.NewRequest(http.MethodPost, "/api/maps", strings.NewReader(`{"title":"Test Map"}`))
@@ -1010,7 +1010,7 @@ func TestHandleNodeTree_CompactOmitsPositionAndTimestamps(t *testing.T) {
 
 func TestHandleNodeByIDGet_CompactOmitsPositionAndTimestamps(t *testing.T) {
 	server := newTestServer(t)
-	handler := server.Handler()
+	handler := withTestRevisionHeaders(server.Handler())
 
 	// Create a map
 	createReq := httptest.NewRequest(http.MethodPost, "/api/maps", strings.NewReader(`{"title":"Test Map"}`))

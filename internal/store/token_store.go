@@ -12,19 +12,22 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	"code-mind/internal/agentcontract"
 )
 
 // Token represents an access token for map collaboration.
 type Token struct {
-	ID          string     `json:"id"`
-	MapID       string     `json:"mapId"`
-	AccessLevel string     `json:"accessLevel"` // "owner" | "editor" | "viewer"
-	Secret      string     `json:"secret,omitempty"`     // plaintext, only populated on create; never persisted
-	SecretHash  string     `json:"secretHash,omitempty"` // SHA-256 hex of the secret, persisted
-	DisplayName string     `json:"displayName"` // for presence (max 30 chars)
-	ExpiresAt   *time.Time `json:"expiresAt,omitempty"`
-	CreatedAt   time.Time  `json:"createdAt"`
-	Revoked     bool       `json:"revoked"`
+	ID          string                  `json:"id"`
+	MapID       string                  `json:"mapId"`
+	AccessLevel string                  `json:"accessLevel"`          // "owner" | "editor" | "viewer"
+	Secret      string                  `json:"secret,omitempty"`     // plaintext, only populated on create; never persisted
+	SecretHash  string                  `json:"secretHash,omitempty"` // SHA-256 hex of the secret, persisted
+	DisplayName string                  `json:"displayName"`          // for presence (max 30 chars)
+	ActorKind   agentcontract.ActorKind `json:"actorKind"`
+	ExpiresAt   *time.Time              `json:"expiresAt,omitempty"`
+	CreatedAt   time.Time               `json:"createdAt"`
+	Revoked     bool                    `json:"revoked"`
 }
 
 // TokenStore manages access tokens persisted to a JSON file.
@@ -59,12 +62,25 @@ func NewTokenStore(path string) (*TokenStore, error) {
 // Create generates a new token for the given map with the specified access level.
 // It enforces a 50-token limit per map and validates expiration duration.
 func (ts *TokenStore) Create(mapId, accessLevel, displayName string, expiration *time.Duration) (*Token, error) {
+	return ts.CreateWithActorKind(mapId, accessLevel, displayName, agentcontract.ActorHuman, expiration)
+}
+
+// CreateWithActorKind creates a token whose server-derived actor identity is
+// used for command attribution. Existing callers continue to create humans.
+func (ts *TokenStore) CreateWithActorKind(
+	mapId, accessLevel, displayName string,
+	actorKind agentcontract.ActorKind,
+	expiration *time.Duration,
+) (*Token, error) {
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
 
 	// Validate access level
 	if accessLevel != "owner" && accessLevel != "editor" && accessLevel != "viewer" {
 		return nil, errors.New("invalid access level: must be owner, editor, or viewer")
+	}
+	if !actorKind.Valid() {
+		return nil, errors.New("invalid actor kind: must be human or agent")
 	}
 
 	// Validate expiration if provided
@@ -101,6 +117,7 @@ func (ts *TokenStore) Create(mapId, accessLevel, displayName string, expiration 
 		AccessLevel: accessLevel,
 		SecretHash:  hashSecret(secret),
 		DisplayName: displayName,
+		ActorKind:   actorKind,
 		CreatedAt:   now,
 		Revoked:     false,
 	}
@@ -139,7 +156,11 @@ func (ts *TokenStore) Validate(secret string) (*Token, error) {
 			if ts.tokens[i].ExpiresAt != nil && time.Now().UTC().After(*ts.tokens[i].ExpiresAt) {
 				return nil, errors.New("token expired")
 			}
-			return &ts.tokens[i], nil
+			result := ts.tokens[i]
+			if !result.ActorKind.Valid() {
+				result.ActorKind = agentcontract.ActorHuman
+			}
+			return &result, nil
 		}
 	}
 
@@ -220,6 +241,10 @@ func (ts *TokenStore) load() error {
 				ts.tokens[i].SecretHash = hashSecret(ts.tokens[i].Secret)
 			}
 			ts.tokens[i].Secret = ""
+			migrated = true
+		}
+		if !ts.tokens[i].ActorKind.Valid() {
+			ts.tokens[i].ActorKind = agentcontract.ActorHuman
 			migrated = true
 		}
 	}

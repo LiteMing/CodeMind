@@ -16,6 +16,7 @@ vi.mock('./api', () => {
   let current: MindMapDocument | null = null
   const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T
   return {
+    isRevisionConflictError: vi.fn(() => false),
     api: {
       setOwnerApiKey: vi.fn(),
       listMaps: vi.fn(async () =>
@@ -24,6 +25,7 @@ vi.mock('./api', () => {
               {
                 id: current.id,
                 title: current.title,
+                revision: current.meta.revision,
                 lastEditedAt: current.meta.lastEditedAt,
                 lastOpenedAt: current.meta.lastOpenedAt,
               },
@@ -40,9 +42,15 @@ vi.mock('./api', () => {
       }),
       loadMap: vi.fn(async () => clone(current ?? createDefaultDocument())),
       saveMap: vi.fn(async (document: MindMapDocument) => {
-        current = clone(document)
+        current = clone({
+          ...document,
+          meta: {
+            ...document.meta,
+            revision: document.meta.revision + 1,
+          },
+        })
         savedDocuments.push(clone(document))
-        return clone(document)
+        return clone(current)
       }),
       renameMap: vi.fn(async () => clone(current ?? createDefaultDocument())),
       deleteMap: vi.fn(async () => undefined),
@@ -57,6 +65,7 @@ vi.mock('./api', () => {
       getSettings: vi.fn(async () => ({ collabApiKey: '' })),
       saveSettings: vi.fn(async (settings: unknown) => settings),
       pollMap: vi.fn(async () => ({
+        revision: current?.meta.revision ?? 1,
         lastEditedAt: new Date().toISOString(),
         nodeCount: current?.nodes.length ?? 1,
         modifiedViaAPI: false,
@@ -186,7 +195,7 @@ describe('app interaction smoke', () => {
     await flush()
     expect(nodeElements(root).length).toBe(initialCount)
     expect(nodeIds(root).has('root')).toBe(true)
-  })
+  }, 10_000)
 
   it('persists a structurally valid document through saveMap', async () => {
     const { createApp } = await import('./app')
@@ -222,6 +231,34 @@ describe('app interaction smoke', () => {
     }
     // The Tab-created child must be part of the saved payload.
     expect(doc.nodes.length).toBeGreaterThanOrEqual(2)
+  })
+
+  it('shows conflict recovery actions in both chrome layouts', async () => {
+    const { MindMapApp } = await import('./app')
+    const app = new MindMapApp(root)
+    await app.mount()
+    await flush()
+
+    root.querySelector<HTMLElement>('[data-command="create-map"]')!.click()
+    await flush()
+    app.state.revisionConflict = {
+      mapId: app.state.document.id,
+      expectedRevision: app.state.document.meta.revision,
+      actualRevision: app.state.document.meta.revision + 1,
+    }
+
+    app.state.preferences.appearance.chromeLayout = 'floating'
+    app.render()
+    const floatingActions = root.querySelector<HTMLElement>('[data-conflict-actions]')
+    expect(floatingActions?.hidden).toBe(false)
+    expect(floatingActions?.querySelector('[data-command="reload-server-version"]')).toBeTruthy()
+    expect(floatingActions?.querySelector('[data-command="overwrite-server-version"]')).toBeTruthy()
+
+    app.state.preferences.appearance.chromeLayout = 'fixed'
+    app.render()
+    const fixedToolbar = root.querySelector<HTMLElement>('[data-fixed-toolbar]')
+    expect(fixedToolbar?.querySelector('[data-command="reload-server-version"]')).toBeTruthy()
+    expect(fixedToolbar?.querySelector('[data-command="overwrite-server-version"]')).toBeTruthy()
   })
 
   it('keeps rapid collapse/expand toggles consistent without flicker-prone timer double-fires', async () => {

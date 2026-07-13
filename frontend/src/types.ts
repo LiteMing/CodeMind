@@ -26,6 +26,8 @@ export type CanvasDragAction = 'none' | 'pan-canvas' | 'marquee-select' | 'cutti
 
 export type NodeKind = 'root' | 'topic' | 'floating'
 
+export type BindingType = 'file' | 'directory' | 'glob' | 'symbol' | 'asset'
+
 export type Priority = '' | 'P0' | 'P1' | 'P2' | 'P3'
 export type NodeColor = '' | 'slate' | 'blue' | 'teal' | 'green' | 'amber' | 'rose' | 'violet'
 
@@ -34,14 +36,25 @@ export interface Position {
   y: number
 }
 
+export interface NodeBinding {
+  id: string
+  type: BindingType
+  path: string
+  symbol?: string
+  glob?: string
+  contentHash?: string
+}
+
 export interface MindNode {
   id: string
   parentId?: string
   kind: NodeKind
+  order: number
   title: string
   note?: string
   priority?: Priority
   color?: NodeColor
+  bindings: NodeBinding[]
   collapsed?: boolean
   width?: number
   height?: number
@@ -84,6 +97,7 @@ export interface RegionBox {
 
 export interface MindMapMeta {
   version: number
+  revision: number
   lastEditedAt: string
   lastOpenedAt: string
 }
@@ -101,6 +115,7 @@ export interface MindMapDocument {
 export interface MindMapSummary {
   id: string
   title: string
+  revision: number
   lastEditedAt: string
   lastOpenedAt: string
 }

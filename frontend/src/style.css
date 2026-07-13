@@ -527,6 +527,21 @@ kbd {
   gap: 6px 14px;
 }
 
+.revision-conflict-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.revision-conflict-actions[hidden] {
+  display: none;
+}
+
+.chip-button.danger {
+  color: var(--p0);
+}
+
 .project-copy {
   flex: 1 1 16rem;
   min-width: 0;

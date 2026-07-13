@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"strings"
 
+	"code-mind/internal/agentcontract"
 	"code-mind/internal/store"
 )
 
@@ -22,7 +23,16 @@ const (
 // contextKey is an unexported type for context keys in this package.
 type contextKey string
 
-const accessLevelKey contextKey = "accessLevel"
+const (
+	accessLevelKey contextKey = "accessLevel"
+	actorKey       contextKey = "actor"
+)
+
+var localOwnerActor = agentcontract.ActorRef{
+	ID:    "local-owner",
+	Kind:  agentcontract.ActorHuman,
+	Label: "Local owner",
+}
 
 // APIKeyProvider is implemented by any type that can supply the current API key.
 type APIKeyProvider interface {
@@ -36,6 +46,15 @@ func GetAccessLevel(r *http.Request) AccessLevel {
 		return level
 	}
 	return AccessOwner
+}
+
+// GetActor returns the server-derived actor for a request. Local and API-key
+// owner requests deliberately share one stable identity.
+func GetActor(r *http.Request) agentcontract.ActorRef {
+	if actor, ok := r.Context().Value(actorKey).(agentcontract.ActorRef); ok {
+		return actor
+	}
+	return localOwnerActor
 }
 
 // tokenAuthMiddleware checks X-API-Key header first (owner level), then Bearer token
@@ -142,7 +161,13 @@ func tokenAuthMiddleware(provider APIKeyProvider, tokenStore *store.TokenStore, 
 			return
 		}
 
+		label := strings.TrimSpace(token.DisplayName)
+		if label == "" {
+			label = token.ID
+		}
+		actor := agentcontract.ActorRef{ID: token.ID, Kind: token.ActorKind, Label: label}
 		ctx := context.WithValue(r.Context(), accessLevelKey, AccessLevel(token.AccessLevel))
+		ctx = context.WithValue(ctx, actorKey, actor)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }

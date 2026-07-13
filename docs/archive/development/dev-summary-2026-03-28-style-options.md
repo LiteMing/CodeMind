@@ -42,7 +42,7 @@
 - `frontend/src/app.ts`
 - `frontend/src/i18n.ts`
 - `frontend/src/style.css`
-- `docs/dev-plan-2026-03-28-style-options.md`
+- `docs/archive/development/dev-plan-2026-03-28-style-options.md`
 
 ## 验证结果
 

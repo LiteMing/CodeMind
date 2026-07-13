@@ -5,6 +5,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
@@ -145,6 +147,7 @@ func TestEnvironmentVariables(t *testing.T) {
 	// Test default values
 	os.Unsetenv("CODEMIND_API_URL")
 	os.Unsetenv("CODEMIND_API_KEY")
+	os.Unsetenv("CODEMIND_ACCESS_TOKEN")
 	srv := newMCPServer()
 	if srv.apiURL != "http://127.0.0.1:34117" {
 		t.Errorf("expected default API URL http://127.0.0.1:34117, got %s", srv.apiURL)
@@ -152,12 +155,17 @@ func TestEnvironmentVariables(t *testing.T) {
 	if srv.apiKey != "" {
 		t.Errorf("expected empty API key, got %s", srv.apiKey)
 	}
+	if srv.accessToken != "" {
+		t.Errorf("expected empty access token, got %s", srv.accessToken)
+	}
 
 	// Test custom values
 	os.Setenv("CODEMIND_API_URL", "http://localhost:9999")
 	os.Setenv("CODEMIND_API_KEY", "test-key-123")
+	os.Setenv("CODEMIND_ACCESS_TOKEN", "access-token-123")
 	defer os.Unsetenv("CODEMIND_API_URL")
 	defer os.Unsetenv("CODEMIND_API_KEY")
+	defer os.Unsetenv("CODEMIND_ACCESS_TOKEN")
 
 	srv = newMCPServer()
 	if srv.apiURL != "http://localhost:9999" {
@@ -165,6 +173,9 @@ func TestEnvironmentVariables(t *testing.T) {
 	}
 	if srv.apiKey != "test-key-123" {
 		t.Errorf("expected API key test-key-123, got %s", srv.apiKey)
+	}
+	if srv.accessToken != "access-token-123" {
+		t.Errorf("expected access token access-token-123, got %s", srv.accessToken)
 	}
 }
 
@@ -210,10 +221,10 @@ func TestBuildHTTPRequest(t *testing.T) {
 			wantPath:   "/api/maps/map-123/tree",
 		},
 		{
-			name:       "get_tree missing mapId",
-			tool:       "get_tree",
-			args:       map[string]any{},
-			wantErr:    true,
+			name:    "get_tree missing mapId",
+			tool:    "get_tree",
+			args:    map[string]any{},
+			wantErr: true,
 		},
 		{
 			name:       "get_node",
@@ -225,35 +236,35 @@ func TestBuildHTTPRequest(t *testing.T) {
 		{
 			name:       "create_node",
 			tool:       "create_node",
-			args:       map[string]any{"mapId": "map-123", "parentId": "root", "title": "Test"},
+			args:       map[string]any{"mapId": "map-123", "expectedRevision": float64(7), "partition": "development", "idempotencyKey": "create-1", "parentId": "root", "title": "Test"},
 			wantMethod: "POST",
 			wantPath:   "/api/maps/map-123/nodes",
 		},
 		{
 			name:       "update_node",
 			tool:       "update_node",
-			args:       map[string]any{"mapId": "map-123", "nodeId": "node-456", "title": "Updated"},
+			args:       map[string]any{"mapId": "map-123", "nodeId": "node-456", "expectedRevision": float64(7), "partition": "development", "idempotencyKey": "update-1", "title": "Updated"},
 			wantMethod: "PATCH",
 			wantPath:   "/api/maps/map-123/nodes/node-456",
 		},
 		{
 			name:       "delete_node",
 			tool:       "delete_node",
-			args:       map[string]any{"mapId": "map-123", "nodeId": "node-456"},
+			args:       map[string]any{"mapId": "map-123", "nodeId": "node-456", "expectedRevision": float64(7), "partition": "development", "idempotencyKey": "delete-1"},
 			wantMethod: "DELETE",
 			wantPath:   "/api/maps/map-123/nodes/node-456",
 		},
 		{
 			name:       "batch_operations",
 			tool:       "batch_operations",
-			args:       map[string]any{"mapId": "map-123", "operations": []any{}},
+			args:       map[string]any{"mapId": "map-123", "expectedRevision": float64(7), "partition": "development", "idempotencyKey": "batch-1", "operations": []any{}},
 			wantMethod: "POST",
 			wantPath:   "/api/maps/map-123/batch",
 		},
 		{
 			name:       "import_fragment",
 			tool:       "import_fragment",
-			args:       map[string]any{"mapId": "map-123", "nodes": []any{}},
+			args:       map[string]any{"mapId": "map-123", "expectedRevision": float64(7), "partition": "development", "idempotencyKey": "import-1", "nodes": []any{}},
 			wantMethod: "POST",
 			wantPath:   "/api/maps/map-123/import-fragment",
 		},
@@ -284,6 +295,309 @@ func TestBuildHTTPRequest(t *testing.T) {
 				t.Errorf("expected path %s, got %s", tt.wantPath, path)
 			}
 		})
+	}
+}
+
+func TestBuildNodePayloadsPreserveSemanticFields(t *testing.T) {
+	bindings := []any{
+		map[string]any{
+			"id":     "binding-api-client",
+			"type":   "symbol",
+			"path":   "vscode-extension/src/api-client.ts",
+			"symbol": "CodeMindAPI",
+		},
+	}
+
+	create := buildCreatePayload(map[string]any{
+		"parentId": "root",
+		"order":    float64(2),
+		"title":    "API client",
+		"bindings": bindings,
+	})
+	if create["parentId"] != "root" || create["order"] != float64(2) || create["bindings"] == nil {
+		t.Fatalf("create payload lost semantic fields: %#v", create)
+	}
+
+	update := buildUpdatePayload(map[string]any{
+		"parentId": "node-platform",
+		"order":    float64(1),
+		"bindings": bindings,
+	})
+	if update["parentId"] != "node-platform" || update["order"] != float64(1) || update["bindings"] == nil {
+		t.Fatalf("update payload lost semantic fields: %#v", update)
+	}
+}
+
+func TestBuildImportFragmentPayloadAppliesConvenienceParent(t *testing.T) {
+	payload := buildImportFragmentPayload(map[string]any{
+		"parentId": "node-target",
+		"nodes": []any{
+			map[string]any{"title": "inherits"},
+			map[string]any{"title": "explicit", "parentId": "node-other", "order": float64(2)},
+		},
+	})
+
+	nodes := payload["nodes"].([]any)
+	first := nodes[0].(map[string]any)
+	second := nodes[1].(map[string]any)
+	if first["parentId"] != "node-target" {
+		t.Fatalf("expected convenience parent on first node, got %#v", first)
+	}
+	if second["parentId"] != "node-other" || second["order"] != float64(2) {
+		t.Fatalf("explicit fragment semantics were overwritten: %#v", second)
+	}
+	if _, ok := payload["parentId"]; ok {
+		t.Fatalf("parentId must be stored on fragment nodes, got %#v", payload)
+	}
+}
+
+func TestWriteToolsRequireExpectedRevision(t *testing.T) {
+	srv := newMCPServer()
+	for _, tool := range []string{"create_node", "update_node", "delete_node", "batch_operations", "import_fragment"} {
+		_, _, _, err := srv.buildHTTPRequest(tool, map[string]any{"mapId": "map-123"})
+		if err == nil || !strings.Contains(err.Error(), "expectedRevision is required") {
+			t.Fatalf("%s should require expectedRevision, got %v", tool, err)
+		}
+	}
+}
+
+func TestWriteToolsRequireCommandEnvelope(t *testing.T) {
+	srv := newMCPServer()
+	tools := []string{"create_node", "update_node", "delete_node", "batch_operations", "import_fragment"}
+	for _, tool := range tools {
+		base := map[string]any{"mapId": "map-123", "expectedRevision": float64(7)}
+		_, _, _, err := srv.buildHTTPRequest(tool, base)
+		if err == nil || !strings.Contains(err.Error(), "partition is required") {
+			t.Fatalf("%s should require partition, got %v", tool, err)
+		}
+
+		base["partition"] = "development"
+		_, _, _, err = srv.buildHTTPRequest(tool, base)
+		if err == nil || !strings.Contains(err.Error(), "idempotencyKey is required") {
+			t.Fatalf("%s should require idempotencyKey, got %v", tool, err)
+		}
+	}
+
+	_, _, _, err := srv.buildHTTPRequest("create_node", map[string]any{
+		"mapId":            "map-123",
+		"expectedRevision": float64(7),
+		"partition":        "unknown",
+		"idempotencyKey":   "create-1",
+	})
+	if err == nil || !strings.Contains(err.Error(), "partition must be") {
+		t.Fatalf("invalid partition should be rejected, got %v", err)
+	}
+}
+
+func TestWriteToolSchemasRequireCommandEnvelope(t *testing.T) {
+	for _, tool := range getToolManifest() {
+		if !isWriteOp(tool.Name) {
+			continue
+		}
+		var schema struct {
+			Required []string `json:"required"`
+		}
+		if err := json.Unmarshal(tool.InputSchema, &schema); err != nil {
+			t.Fatalf("%s schema is invalid: %v", tool.Name, err)
+		}
+		for _, expected := range []string{"expectedRevision", "partition", "idempotencyKey"} {
+			found := false
+			for _, field := range schema.Required {
+				if field == expected {
+					found = true
+					break
+				}
+			}
+			if !found {
+				t.Fatalf("%s schema does not require %s", tool.Name, expected)
+			}
+		}
+	}
+}
+
+func TestNodeWriteToolSchemasExposeSemanticFields(t *testing.T) {
+	toolsByName := make(map[string]mcpTool)
+	for _, tool := range getToolManifest() {
+		toolsByName[tool.Name] = tool
+	}
+
+	for _, test := range []struct {
+		tool   string
+		fields []string
+	}{
+		{tool: "create_node", fields: []string{"parentId", "order", "bindings"}},
+		{tool: "update_node", fields: []string{"parentId", "order", "bindings"}},
+	} {
+		var schema struct {
+			Properties map[string]json.RawMessage `json:"properties"`
+		}
+		if err := json.Unmarshal(toolsByName[test.tool].InputSchema, &schema); err != nil {
+			t.Fatalf("%s schema is invalid: %v", test.tool, err)
+		}
+		for _, field := range test.fields {
+			if _, ok := schema.Properties[field]; !ok {
+				t.Errorf("%s schema does not expose %s", test.tool, field)
+			}
+		}
+	}
+
+	for _, toolName := range []string{"create_node", "update_node"} {
+		var schema map[string]any
+		if err := json.Unmarshal(toolsByName[toolName].InputSchema, &schema); err != nil {
+			t.Fatal(err)
+		}
+		properties := schema["properties"].(map[string]any)
+		bindings := properties["bindings"].(map[string]any)
+		items := bindings["items"].(map[string]any)
+		bindingProperties := items["properties"].(map[string]any)
+		for _, field := range []string{"id", "type", "path", "symbol", "glob", "contentHash"} {
+			if _, ok := bindingProperties[field]; !ok {
+				t.Errorf("%s binding schema does not expose %s", toolName, field)
+			}
+		}
+	}
+
+	var batchSchema map[string]any
+	if err := json.Unmarshal(toolsByName["batch_operations"].InputSchema, &batchSchema); err != nil {
+		t.Fatal(err)
+	}
+	batchPayloadProperties := batchSchema["properties"].(map[string]any)["operations"].(map[string]any)["items"].(map[string]any)["properties"].(map[string]any)["payload"].(map[string]any)["properties"].(map[string]any)
+	for _, field := range []string{"parentId", "order", "bindings"} {
+		if _, ok := batchPayloadProperties[field]; !ok {
+			t.Errorf("batch operation payload schema does not expose %s", field)
+		}
+	}
+
+	var fragmentSchema map[string]any
+	if err := json.Unmarshal(toolsByName["import_fragment"].InputSchema, &fragmentSchema); err != nil {
+		t.Fatal(err)
+	}
+	fragmentNodeProperties := fragmentSchema["properties"].(map[string]any)["nodes"].(map[string]any)["items"].(map[string]any)["properties"].(map[string]any)
+	for _, field := range []string{"parentId", "order", "bindings"} {
+		if _, ok := fragmentNodeProperties[field]; !ok {
+			t.Errorf("fragment node schema does not expose %s", field)
+		}
+	}
+}
+
+func TestExecuteWriteSendsIfMatchAndReturnsNewRevision(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("If-Match"); got != `"rev-7"` {
+			t.Fatalf("expected If-Match rev-7, got %q", got)
+		}
+		if got := r.Header.Get("X-CodeMind-Partition"); got != "development" {
+			t.Fatalf("expected development partition, got %q", got)
+		}
+		if got := r.Header.Get("Idempotency-Key"); got != "create-1" {
+			t.Fatalf("expected idempotency key create-1, got %q", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ETag", `"rev-8"`)
+		_, _ = w.Write([]byte(`{"id":"node-1","title":"Test"}`))
+	}))
+	defer backend.Close()
+
+	srv := newMCPServer()
+	srv.apiURL = backend.URL
+	result, err := srv.executeToolCall("create_node", map[string]any{
+		"mapId":            "map-123",
+		"expectedRevision": float64(7),
+		"partition":        "development",
+		"idempotencyKey":   "create-1",
+		"parentId":         "root",
+		"title":            "Test",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var payload struct {
+		Revision uint64         `json:"revision"`
+		Result   map[string]any `json:"result"`
+	}
+	if err := json.Unmarshal([]byte(result), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Revision != 8 || payload.Result["id"] != "node-1" {
+		t.Fatalf("unexpected wrapped result: %s", result)
+	}
+}
+
+func TestExecuteWritePrefersBearerActorCredential(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer agent-token" {
+			t.Fatalf("expected bearer token, got %q", got)
+		}
+		if got := r.Header.Get("X-API-Key"); got != "" {
+			t.Fatalf("API key must not be sent with bearer token, got %q", got)
+		}
+		w.Header().Set("ETag", `"rev-8"`)
+		_, _ = w.Write([]byte(`{"id":"node-1"}`))
+	}))
+	defer backend.Close()
+
+	srv := newMCPServer()
+	srv.apiURL = backend.URL
+	srv.accessToken = "agent-token"
+	srv.apiKey = "legacy-owner-key"
+	_, err := srv.executeToolCall("create_node", map[string]any{
+		"mapId":            "map-123",
+		"expectedRevision": float64(7),
+		"partition":        "development",
+		"idempotencyKey":   "create-bearer-1",
+		"parentId":         "root",
+		"title":            "Test",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRevisionConflictToolResultContainsStableStructuredJSON(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusPreconditionFailed)
+		_, _ = w.Write([]byte(`{"error":"revision conflict","expectedRevision":7,"actualRevision":8}`))
+	}))
+	defer backend.Close()
+
+	var output bytes.Buffer
+	srv := newMCPServer()
+	srv.apiURL = backend.URL
+	srv.out = &output
+	params, err := json.Marshal(mcpToolCallParams{
+		Name: "create_node",
+		Arguments: map[string]any{
+			"mapId":            "map-123",
+			"expectedRevision": float64(7),
+			"partition":        "development",
+			"idempotencyKey":   "conflict-1",
+			"parentId":         "root",
+			"title":            "Test",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv.handleToolCall(jsonrpcRequest{JSONRPC: "2.0", ID: 1, Params: params})
+
+	response := readResponse(t, bufio.NewReader(&output))
+	var toolResult mcpToolResult
+	if err := json.Unmarshal(response.Result, &toolResult); err != nil {
+		t.Fatal(err)
+	}
+	if !toolResult.IsError || len(toolResult.Content) != 1 {
+		t.Fatalf("unexpected tool result: %+v", toolResult)
+	}
+	var payload revisionConflictPayload
+	if err := json.Unmarshal([]byte(toolResult.Content[0].Text), &payload); err != nil {
+		t.Fatalf("conflict text is not JSON: %v: %q", err, toolResult.Content[0].Text)
+	}
+	if payload.Error.Code != "revision_conflict" ||
+		payload.Error.HTTPStatus != http.StatusPreconditionFailed ||
+		payload.Error.Message != "revision conflict" ||
+		payload.Error.ExpectedRevision != 7 ||
+		payload.Error.ActualRevision != 8 {
+		t.Fatalf("unexpected structured conflict: %+v", payload.Error)
 	}
 }
 

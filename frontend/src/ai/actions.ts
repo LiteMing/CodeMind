@@ -10,6 +10,8 @@ import {
   createNode,
   findRoot,
   nextChildPosition,
+  nextFloatingPosition,
+  nextSiblingOrder,
   nextSiblingPosition,
   touchDocument,
 } from '../document'
@@ -436,6 +438,7 @@ export async function applyAINodeNotesForTargets(
         const childNode = createNode({
           parentId: parent.id,
           kind: 'topic',
+          order: nextSiblingOrder(app.state.document, parent.id),
           position: nextChildPosition(
             app.state.document,
             parent.id,
@@ -726,8 +729,8 @@ export async function applyAISuggestNodes(
     captureAISnapshot(app, 'snapshot.aiActionSuggest')
     captureHistory(app)
     const createdIds: string[] = []
-    const parentId = mode === 'siblings' ? (selectedNode.parentId ?? '') : selectedNode.id
-    const parentNode = app.findNode(parentId)
+    const parentId = mode === 'siblings' ? selectedNode.parentId : selectedNode.id
+    const parentNode = parentId ? app.findNode(parentId) : undefined
     if (parentNode) {
       parentNode.collapsed = false
       parentNode.updatedAt = new Date().toISOString()
@@ -737,15 +740,18 @@ export async function applyAISuggestNodes(
     for (const suggestion of suggestions) {
       const childNode = createNode({
         parentId,
-        kind: 'topic',
+        kind: parentId ? 'topic' : 'floating',
+        order: nextSiblingOrder(app.state.document, parentId),
         position:
           mode === 'siblings'
-            ? nextSiblingPosition(
-                app.state.document,
-                selectedNode,
-                app.state.preferences.appearance.layoutMode,
-                app.state.preferences.appearance.childGapX,
-              )
+            ? parentId
+              ? nextSiblingPosition(
+                  app.state.document,
+                  selectedNode,
+                  app.state.preferences.appearance.layoutMode,
+                  app.state.preferences.appearance.childGapX,
+                )
+              : nextFloatingPosition(app.state.document)
             : nextChildPosition(
                 app.state.document,
                 selectedNode.id,

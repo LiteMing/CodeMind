@@ -22,7 +22,7 @@
 - `frontend/src/preferences.ts`
 - `frontend/src/app.ts`
 - `frontend/src/i18n.ts`
-- `docs/dev-plan-2026-03-28-drag-subtree-setting.md`
+- `docs/archive/development/dev-plan-2026-03-28-drag-subtree-setting.md`
 
 ## 验证结果
 

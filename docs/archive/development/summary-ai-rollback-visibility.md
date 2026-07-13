@@ -1,6 +1,6 @@
 # 开发总结：AI 可回滚 + AI 协作可见性补丁（E 组）
 
-日期：2026-07-10 ｜ 版本：1.10.0 ｜ 计划：docs/plan-ai-rollback-visibility.md ｜ 分支：feat/ai-rollback-visibility
+日期：2026-07-10 ｜ 版本：1.10.0 ｜ 计划：docs/archive/development/plan-ai-rollback-visibility.md ｜ 分支：feat/ai-rollback-visibility
 
 ## 完成内容（四项全交付）
 

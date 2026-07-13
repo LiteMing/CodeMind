@@ -23,11 +23,16 @@
 - **API Key 认证**：设置面板一键生成，X-API-Key header 保护
 - **Compact 模式**：?compact=true 省略 43% 冗余字段，节省 AI token
 - **实时刷新**：API 写入后前端 2 秒内自动检测并刷新，新节点有淡入动画
+- **乐观并发**：真实 document revision + ETag/If-Match，陈旧写入返回 412，不再静默覆盖
+- **Agent 命令信封**：服务端派生 actor，节点写入声明 partition/idempotency key；成功重试不重复增加 revision
+- **代码语义锚点**：节点可绑定仓库文件、目录、glob、symbol 或 asset，并以稳定 ID 持久化
+- **稳定同级顺序**：节点使用显式 order，树结构不再因画布拖动或坐标变化而重排
 
 ### 数据存储
 - 本地 JSON 文件，零云依赖
 - 数据目录基于 exe 位置，任意目录启动均可
 - 多地图管理、快照备份
+- 可导出为适合 Git diff 的 `semantic.json`，并将画布状态分离到本地 `layout.json`
 
 ---
 
@@ -70,7 +75,7 @@
 - 3D 浮动图谱（搜索、拖拽旋转、跳转）
 - 本地 JSON 持久化
 - Markdown 导出、Markdown/TXT 导入
-- **协作 API**：节点级 CRUD、批量操作、片段导入、compact 模式
+- **协作 API**：节点级 CRUD、批量操作、片段导入、compact 模式、代码绑定与显式同级顺序
 - **实时刷新**：API 写入后前端自动检测并刷新
 - Wails 桌面打包
 
@@ -106,6 +111,24 @@ Backend only:
 ```powershell
 go run . serve
 ```
+
+Git 语义格式导出与导入：
+
+```powershell
+# 从现有运行时脑图导出双文件
+go run . format export --input .\data\map.json --out-dir .\project-map
+
+# 默认 strict：semantic/layout 的 mapId 和实体 ID 集合必须完全一致
+go run . format import --semantic .\project-map\semantic.json --layout .\project-map\layout.json --output .\restored-map.json
+
+# Git 切换分支后允许布局滞后，或只从 semantic.json 重建默认布局
+go run . format import --semantic .\project-map\semantic.json --layout .\project-map\layout.json --output .\reconciled-map.json --reconcile
+go run . format import --semantic .\project-map\semantic.json --output .\semantic-only-map.json
+```
+
+`semantic.json` 保存节点层级、标题、备注、顺序、代码绑定、关系语义和区域标签，采用确定性排序，建议提交到 Git。`layout.json` 保存主题、位置、尺寸、折叠、关系路由、时间戳和 revision，建议作为本地 companion 写入 `.gitignore`。命令默认拒绝覆盖已有输出；确认替换时显式添加 `--force`，输入文件始终不会被原地修改。
+
+本阶段只提供运行时单文件与 Git 双文件之间的显式 CLI 转换；主存储仍是本地运行时 JSON，尚未接入 REST/MCP、桌面导出 UI、Git 状态展示、自动提交、三方合并或云端部署。
 
 Production frontend build:
 

@@ -62,6 +62,7 @@ import type {
   GestureAction,
   EdgeStyle,
   Locale,
+  MindMapDocument,
   MindMapSummary,
   MindNode,
   NodeColor,
@@ -99,6 +100,11 @@ export async function createApp(rootEl: HTMLElement): Promise<void> {
 export class MindMapApp {
   readonly rootEl: HTMLElement
   autosaveHandle: number | null = null
+  localChangeEpoch = 0
+  documentSessionId = 0
+  saveInFlight = false
+  saveQueued = false
+  conflictResolutionInFlight = false
   refs: ShellRefs | null = null
   pan: PanState | null = null
   graphDrag: GraphDragState | null = null
@@ -170,6 +176,7 @@ export class MindMapApp {
   pollHandle: number | null = null
   lastKnownEditTime: string = ''
   lastFrontendSaveTime: string = ''
+  lastSyncedDocument: MindMapDocument | null = null
   inspectorDrag: { x: number; y: number; width: number; dragged: boolean } = {
     x: 0,
     y: 0,
@@ -271,6 +278,7 @@ export class MindMapApp {
       midpointDrag: null,
       cutting: null,
       dirty: false,
+      revisionConflict: null,
 
       // UX Polish additions
       contextToolbar: {
@@ -549,6 +557,10 @@ export class MindMapApp {
                     <h1 data-app-title></h1>
                     <span class="save-indicator" data-save-indicator></span>
                     <p class="status-pill" data-app-status aria-live="polite"></p>
+                    <div class="revision-conflict-actions" data-conflict-actions hidden>
+                      <button type="button" class="chip-button" data-role="reload-server-button" data-command="reload-server-version"></button>
+                      <button type="button" class="chip-button danger" data-role="overwrite-server-button" data-command="overwrite-server-version"></button>
+                    </div>
                   </div>
                 </div>
                 <div class="top-panel-actions">
@@ -632,6 +644,9 @@ export class MindMapApp {
       undoButton: requiredElement(this.rootEl, '[data-role="undo-button"]'),
       redoButton: requiredElement(this.rootEl, '[data-role="redo-button"]'),
       saveButton: requiredElement(this.rootEl, '[data-role="save-button"]'),
+      conflictActions: requiredElement(this.rootEl, '[data-conflict-actions]'),
+      reloadServerButton: requiredElement(this.rootEl, '[data-role="reload-server-button"]'),
+      overwriteServerButton: requiredElement(this.rootEl, '[data-role="overwrite-server-button"]'),
       layoutButton: requiredElement(this.rootEl, '[data-role="layout-button"]'),
       exportButton: requiredElement(this.rootEl, '[data-role="export-button"]'),
       importButton: requiredElement(this.rootEl, '[data-role="import-button"]'),

@@ -41,7 +41,8 @@ func corsMiddleware(next http.Handler) http.Handler {
 			w.Header().Set("Access-Control-Allow-Credentials", "true")
 			w.Header().Add("Vary", "Origin")
 		}
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-API-Key")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-API-Key, If-Match, X-CodeMind-Partition, Idempotency-Key")
+		w.Header().Set("Access-Control-Expose-Headers", "ETag, X-CodeMind-Idempotent-Replay")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, PUT, PATCH, POST, DELETE, OPTIONS")
 
 		if r.Method == http.MethodOptions {

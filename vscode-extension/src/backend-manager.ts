@@ -1,158 +1,277 @@
 import * as vscode from 'vscode';
 import { spawn, ChildProcessWithoutNullStreams } from 'child_process';
+import * as fs from 'fs';
 import * as http from 'http';
+import * as https from 'https';
+import * as path from 'path';
 import { URL } from 'url';
 
 const DEFAULT_API_URL = 'http://127.0.0.1:34117';
 
-/**
- * Thin-client backend manager. The extension no longer bundles or builds its
- * own server binary; it connects to an already-running Code Mind backend
- * (desktop app or `codemind serve`). Spawning a backend is only supported
- * when the user explicitly configures `codeMind.backendCommand`.
- */
+export type BackendStatus = 'starting' | 'running' | 'stopped' | 'error';
+
+interface LaunchSpec {
+  command: string;
+  args: string[];
+  shell: boolean;
+  display: string;
+}
+
 export class LocalBackendManager implements vscode.Disposable {
   private process: ChildProcessWithoutNullStreams | null = null;
-  private output: vscode.OutputChannel;
+  private readonly output: vscode.OutputChannel;
+  private readonly statusBar: vscode.StatusBarItem;
+  private readonly disposables: vscode.Disposable[] = [];
+  private readonly statusTimer: NodeJS.Timeout;
   private lastLogLines: string[] = [];
+  private status: BackendStatus = 'stopped';
 
-  constructor(output: vscode.OutputChannel, _context: vscode.ExtensionContext) {
+  constructor(output: vscode.OutputChannel) {
     this.output = output;
+    this.statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 20);
+    this.statusBar.name = 'Code Mind Backend';
+    this.statusBar.show();
+    this.updateStatus('stopped');
+    this.disposables.push(
+      vscode.workspace.onDidChangeConfiguration((event) => {
+        if (event.affectsConfiguration('codeMind')) void this.refreshStatus();
+      }),
+    );
+    this.statusTimer = setInterval(() => void this.refreshStatus(), 5_000);
+    void this.refreshStatus();
   }
 
   async ensureStarted(): Promise<void> {
-    const apiUrl = this.apiUrl();
-    if (await this.isHealthy(apiUrl)) {
+    if (await this.isHealthy(this.apiUrl())) {
+      this.updateStatus('running');
       return;
     }
-
-    const cfg = vscode.workspace.getConfiguration('codeMind');
-    const autoStart = cfg.get<boolean>('autoStartBackend') ?? true;
-    if (!autoStart || !this.backendCommand()) {
-      throw new Error(
-        `No Code Mind backend is reachable at ${apiUrl}. ` +
-          'Start the Code Mind desktop app or run `codemind serve`, ' +
-          'or set `codeMind.backendCommand` to let VS Code start one.',
-      );
+    const autoStart = vscode.workspace.getConfiguration('codeMind').get<boolean>('autoStartBackend') ?? true;
+    if (!autoStart) {
+      this.updateStatus('stopped');
+      throw new Error(`No Code Mind backend is reachable at ${this.apiUrl()}. Run “Code Mind: Start Local Backend”.`);
     }
-
     await this.start();
-    await this.waitUntilHealthy(apiUrl, 12_000);
   }
 
   async start(): Promise<void> {
+    if (await this.isHealthy(this.apiUrl())) {
+      this.updateStatus('running');
+      return;
+    }
     if (this.process && !this.process.killed) {
-      vscode.window.showInformationMessage('Code Mind backend is already running from VS Code.');
+      await this.waitUntilHealthy(this.apiUrl(), 12_000);
+      this.updateStatus('running');
       return;
     }
 
-    const commandLine = this.backendCommand();
-    if (!commandLine) {
+    const launch = this.resolveLaunchSpec();
+    if (!launch) {
+      this.updateStatus('error');
       throw new Error(
-        'No backend command configured. The extension is a thin client: ' +
-          'start the Code Mind desktop app or run `codemind serve` yourself, ' +
-          'or set `codeMind.backendCommand` (e.g. `C:\\path\\to\\codemind.exe serve`).',
+        'Code Mind executable was not found. Set codeMind.backendExecutable, add codemind to PATH, or set the legacy codeMind.backendCommand.',
       );
     }
 
-    const cwd = this.backendCwd();
-    const dataDir = this.dataDir();
+    const cwd = this.expandWorkspaceFolder(this.backendCwd());
+    const dataDir = this.expandWorkspaceFolder(this.dataDir());
     const apiUrl = new URL(this.apiUrl());
     const port = apiUrl.port || (apiUrl.protocol === 'https:' ? '443' : '80');
-
-    this.output.appendLine(`Starting Code Mind backend: ${commandLine}`);
+    this.updateStatus('starting');
+    this.output.appendLine(`Starting Code Mind backend: ${launch.display}`);
     this.output.appendLine(`Backend cwd: ${cwd}`);
-    this.output.appendLine(`Backend data dir: ${dataDir}`);
-    this.recordLog(`Starting Code Mind backend: ${commandLine}`);
+    if (dataDir) this.output.appendLine(`Backend data dir: ${dataDir}`);
 
-    this.process = spawn(commandLine, {
+    const child = spawn(launch.command, launch.args, {
       cwd,
-      shell: true,
+      shell: launch.shell,
       env: {
         ...process.env,
         CODE_MIND_PORT: port,
         ...(dataDir ? { CODE_MIND_DATA_DIR: dataDir } : {}),
       },
     });
+    this.process = child;
+    child.stdout.on('data', (chunk) => this.captureOutput(chunk.toString()));
+    child.stderr.on('data', (chunk) => this.captureOutput(chunk.toString()));
+    child.on('error', (err) => {
+      this.captureOutput(`Code Mind backend failed to start: ${err.message}\n`);
+      if (this.process === child) this.process = null;
+      this.updateStatus('error');
+    });
+    child.on('exit', (code, signal) => {
+      this.captureOutput(`Code Mind backend exited: code=${code ?? ''} signal=${signal ?? ''}\n`);
+      if (this.process === child) this.process = null;
+      if (this.status !== 'stopped') this.updateStatus(code === 0 ? 'stopped' : 'error');
+    });
 
-    this.process.stdout.on('data', (chunk) => {
-      const text = chunk.toString();
-      this.output.append(text);
-      this.recordLog(text);
-    });
-    this.process.stderr.on('data', (chunk) => {
-      const text = chunk.toString();
-      this.output.append(text);
-      this.recordLog(text);
-    });
-    this.process.on('error', (err) => {
-      this.output.appendLine(`Code Mind backend failed to start: ${err.message}`);
-      this.recordLog(`Code Mind backend failed to start: ${err.message}`);
-    });
-    this.process.on('exit', (code, signal) => {
-      this.output.appendLine(`Code Mind backend exited: code=${code ?? ''} signal=${signal ?? ''}`);
-      this.recordLog(`Code Mind backend exited: code=${code ?? ''} signal=${signal ?? ''}`);
+    try {
+      await this.waitUntilHealthy(this.apiUrl(), 12_000);
+      this.updateStatus('running');
+    } catch (err) {
+      if (this.process && !this.process.killed) this.process.kill();
       this.process = null;
-    });
+      this.updateStatus('error');
+      throw err;
+    }
   }
 
-  stop(): void {
+  async restart(): Promise<void> {
     if (!this.process || this.process.killed) {
-      vscode.window.showInformationMessage('Code Mind backend is not running from VS Code.');
+      if (await this.isHealthy(this.apiUrl())) {
+        this.updateStatus('running');
+        throw new Error(
+          'The running Code Mind backend was not started by this VS Code window and cannot be restarted here.',
+        );
+      }
+    }
+    await this.stop(false);
+    await this.start();
+  }
+
+  async stop(showMessage = true): Promise<void> {
+    if (!this.process || this.process.killed) {
+      this.updateStatus((await this.isHealthy(this.apiUrl())) ? 'running' : 'stopped');
+      if (showMessage) vscode.window.showInformationMessage('Code Mind backend is not managed by this VS Code window.');
       return;
     }
-    this.process.kill();
-    this.process = null;
-    vscode.window.showInformationMessage('Code Mind backend stopped.');
+    const child = this.process;
+    this.updateStatus('stopped');
+    const exited = await terminateProcess(child, 3_000);
+    if (!exited) {
+      this.updateStatus('error');
+      throw new Error('The Code Mind backend did not exit within 3 seconds. Open the backend logs before retrying.');
+    }
+    if (this.process === child) this.process = null;
+    if (showMessage) vscode.window.showInformationMessage('Code Mind backend stopped.');
+  }
+
+  async refreshStatus(): Promise<void> {
+    const healthy = await this.isHealthy(this.apiUrl());
+    if (healthy) this.updateStatus('running');
+    else if (this.status !== 'starting') this.updateStatus(this.process ? 'error' : 'stopped');
   }
 
   dispose(): void {
-    if (this.process && !this.process.killed) {
-      this.process.kill();
-    }
+    if (this.process && !this.process.killed) this.process.kill();
+    this.statusBar.dispose();
+    clearInterval(this.statusTimer);
+    this.disposables.forEach((item) => item.dispose());
   }
 
   showLogs(): void {
     this.output.show(true);
   }
-
   recentLogs(): string {
     return this.lastLogLines.slice(-12).join('\n').trim();
   }
 
+  private updateStatus(status: BackendStatus): void {
+    this.status = status;
+    const managed = Boolean(this.process && !this.process.killed);
+    const view = {
+      starting: ['$(sync~spin) Code Mind', 'Code Mind backend is starting', 'codeMind.showBackendLogs'],
+      running: managed
+        ? [
+            '$(check) Code Mind',
+            'Code Mind backend is managed by this window. Click to restart.',
+            'codeMind.restartLocalBackend',
+          ]
+        : [
+            '$(plug) Code Mind',
+            'Connected to an external Code Mind backend. Click to open the web app.',
+            'codeMind.openWebApp',
+          ],
+      stopped: [
+        '$(circle-slash) Code Mind',
+        'Code Mind backend is stopped. Click to start.',
+        'codeMind.startLocalBackend',
+      ],
+      error: ['$(error) Code Mind', 'Code Mind backend failed. Click to view logs.', 'codeMind.showBackendLogs'],
+    }[status];
+    this.statusBar.text = view[0];
+    this.statusBar.tooltip = view[1];
+    this.statusBar.command = view[2];
+  }
+
+  private resolveLaunchSpec(): LaunchSpec | undefined {
+    const cfg = vscode.workspace.getConfiguration('codeMind');
+    const configured = this.expandWorkspaceFolder((cfg.get<string>('backendExecutable') || '').trim());
+    const executable = configured || this.findExecutable();
+    if (executable)
+      return {
+        command: executable,
+        args: ['serve'],
+        shell: false,
+        display: `"${executable}" serve`,
+      };
+    const legacy = (cfg.get<string>('backendCommand') || '').trim();
+    if (legacy)
+      return {
+        command: this.expandWorkspaceFolder(legacy),
+        args: [],
+        shell: true,
+        display: legacy,
+      };
+    return undefined;
+  }
+
+  private findExecutable(): string | undefined {
+    const names = process.platform === 'win32' ? ['codemind.exe', 'CodeMind.exe'] : ['codemind', 'CodeMind'];
+    for (const folder of vscode.workspace.workspaceFolders ?? []) {
+      const bin = path.join(folder.uri.fsPath, 'build', 'bin');
+      if (!fs.existsSync(bin)) continue;
+      const candidates = fs
+        .readdirSync(bin)
+        .filter((name) => /^CodeMind(?:-[\d.]+)?(?:\.exe)?$/i.test(name))
+        .map((name) => path.join(bin, name))
+        .filter((candidate) => {
+          try {
+            return fs.statSync(candidate).isFile();
+          } catch {
+            return false;
+          }
+        })
+        .sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs);
+      if (candidates[0]) return candidates[0];
+    }
+    const pathFolders = (process.env.PATH || '').split(path.delimiter);
+    for (const folder of pathFolders) {
+      for (const name of names) {
+        const candidate = path.join(folder, name);
+        if (fs.existsSync(candidate)) return candidate;
+      }
+    }
+    return undefined;
+  }
+
+  private expandWorkspaceFolder(value: string): string {
+    const folder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
+    return value.replace(/\$\{workspaceFolder\}/g, folder);
+  }
+
   private apiUrl(): string {
-    const cfg = vscode.workspace.getConfiguration('codeMind');
-    return (cfg.get<string>('apiUrl') || DEFAULT_API_URL).replace(/\/+$/, '');
+    return (vscode.workspace.getConfiguration('codeMind').get<string>('apiUrl') || DEFAULT_API_URL).replace(/\/+$/, '');
   }
-
-  private backendCommand(): string {
-    const cfg = vscode.workspace.getConfiguration('codeMind');
-    return (cfg.get<string>('backendCommand') || '').trim();
-  }
-
   private backendCwd(): string {
-    const cfg = vscode.workspace.getConfiguration('codeMind');
-    const configured = (cfg.get<string>('backendCwd') || '').trim();
-    if (configured) {
-      return configured;
-    }
-    return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd();
+    return (
+      vscode.workspace.getConfiguration('codeMind').get<string>('backendCwd') ||
+      vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ||
+      process.cwd()
+    ).trim();
   }
-
   private dataDir(): string {
-    const cfg = vscode.workspace.getConfiguration('codeMind');
-    return (cfg.get<string>('dataDir') || '').trim();
+    return (vscode.workspace.getConfiguration('codeMind').get<string>('dataDir') || '').trim();
   }
-
-  private recordLog(text: string): void {
-    const lines = text
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .filter(Boolean);
-    this.lastLogLines.push(...lines);
-    if (this.lastLogLines.length > 80) {
-      this.lastLogLines = this.lastLogLines.slice(-80);
-    }
+  private captureOutput(text: string): void {
+    this.output.append(text);
+    this.lastLogLines.push(
+      ...text
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean),
+    );
+    if (this.lastLogLines.length > 80) this.lastLogLines = this.lastLogLines.slice(-80);
   }
 
   private isHealthy(apiUrl: string): Promise<boolean> {
@@ -164,8 +283,8 @@ export class LocalBackendManager implements vscode.Disposable {
         resolve(false);
         return;
       }
-
-      const req = http.get(
+      const client = url.protocol === 'https:' ? https : http;
+      const req = client.get(
         {
           hostname: url.hostname,
           port: url.port || '80',
@@ -188,14 +307,33 @@ export class LocalBackendManager implements vscode.Disposable {
   private async waitUntilHealthy(apiUrl: string, timeoutMs: number): Promise<void> {
     const started = Date.now();
     while (Date.now() - started < timeoutMs) {
-      if (await this.isHealthy(apiUrl)) {
-        return;
-      }
+      if (await this.isHealthy(apiUrl)) return;
       await new Promise((resolve) => setTimeout(resolve, 400));
     }
-    const recentLogs = this.recentLogs();
+    const logs = this.recentLogs();
     throw new Error(
-      `Code Mind backend did not become ready in ${timeoutMs / 1000}s.${recentLogs ? ` Recent logs: ${recentLogs}` : ''}`,
+      `Code Mind backend did not become ready in ${timeoutMs / 1000}s.${logs ? ` Recent logs: ${logs}` : ''}`,
     );
   }
+}
+
+function terminateProcess(child: ChildProcessWithoutNullStreams, timeoutMs: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    if (child.exitCode !== null || child.signalCode !== null) {
+      resolve(true);
+      return;
+    }
+    let settled = false;
+    const finish = (exited: boolean) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      child.removeListener('exit', onExit);
+      resolve(exited);
+    };
+    const onExit = () => finish(true);
+    const timeout = setTimeout(() => finish(false), timeoutMs);
+    child.once('exit', onExit);
+    if (!child.kill()) finish(false);
+  });
 }

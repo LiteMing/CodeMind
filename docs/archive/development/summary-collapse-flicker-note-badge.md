@@ -1,6 +1,6 @@
 # 开发总结：折叠/展开快速切换闪烁修复 + 节点注释标记
 
-日期：2026-07-09 ｜ 版本：1.9.6 ｜ 计划：docs/plan-collapse-flicker-note-badge.md
+日期：2026-07-09 ｜ 版本：1.9.6 ｜ 计划：docs/archive/development/plan-collapse-flicker-note-badge.md
 
 ## 完成内容
 
@@ -42,4 +42,4 @@
 - 已知限制（记录在案，现阶段可接受）：折叠动画窗口内若发生无关全量 render，
   动画会从头重播——innerHTML 全量重建的固有代价，根治靠 P4 增量渲染/视口虚拟化。
 - 注释标记点击在触屏上未单独验证（Pointer Events 全程接管，理论一致）。
-- 本分支正题（AI 可回滚 + AI 协作可见性补丁）随后进行，见 docs/plan-ai-rollback-visibility.md。
+- 本分支正题（AI 可回滚 + AI 协作可见性补丁）随后进行，见 docs/archive/development/plan-ai-rollback-visibility.md。

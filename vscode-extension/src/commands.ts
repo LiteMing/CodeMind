@@ -9,6 +9,7 @@ import {
 import { MindMapTreeItem, MindMapTreeProvider } from './tree-provider';
 import { NoteContentProvider, buildNoteUri } from './note-editor';
 import { LocalBackendManager } from './backend-manager';
+import { WorkspaceProjectManager } from './workspace-project';
 
 /**
  * Command implementations for the Code Mind VS Code extension.
@@ -23,6 +24,8 @@ export function registerCommands(
   noteProvider: NoteContentProvider,
   backendManager: LocalBackendManager,
 ): void {
+  activeBackendManager = backendManager;
+  const workspaceProjects = new WorkspaceProjectManager(api);
   context.subscriptions.push(
     vscode.commands.registerCommand('codeMind.refresh', () => provider.refresh()),
 
@@ -63,14 +66,36 @@ export function registerCommands(
     vscode.commands.registerCommand('codeMind.startLocalBackend', async () => {
       try {
         await backendManager.start();
-        vscode.window.showInformationMessage('Code Mind backend is starting. Open the Code Mind output panel for logs.');
+        provider.refresh();
+        vscode.window.showInformationMessage('Code Mind backend started.');
       } catch (err) {
-        vscode.window.showErrorMessage(`Code Mind: failed to start backend — ${err instanceof Error ? err.message : String(err)}`);
+        vscode.window.showErrorMessage(
+          `Code Mind: failed to start backend — ${err instanceof Error ? err.message : String(err)}`,
+        );
       }
     }),
 
-    vscode.commands.registerCommand('codeMind.stopLocalBackend', () => {
-      backendManager.stop();
+    vscode.commands.registerCommand('codeMind.stopLocalBackend', async () => {
+      try {
+        await backendManager.stop();
+        provider.refresh();
+      } catch (err) {
+        vscode.window.showErrorMessage(
+          `Code Mind: failed to stop backend - ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }),
+
+    vscode.commands.registerCommand('codeMind.restartLocalBackend', async () => {
+      try {
+        await backendManager.restart();
+        provider.refresh();
+        vscode.window.showInformationMessage('Code Mind backend restarted.');
+      } catch (err) {
+        vscode.window.showErrorMessage(
+          `Code Mind: failed to restart backend - ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
     }),
 
     vscode.commands.registerCommand('codeMind.showBackendLogs', () => {
@@ -81,22 +106,24 @@ export function registerCommands(
       try {
         await backendManager.ensureStarted();
       } catch (err) {
-        vscode.window.showErrorMessage(`Code Mind backend is not ready: ${err instanceof Error ? err.message : String(err)}`);
+        vscode.window.showErrorMessage(
+          `Code Mind backend is not ready: ${err instanceof Error ? err.message : String(err)}`,
+        );
         return;
       }
       const cfg = vscode.workspace.getConfiguration('codeMind');
       const apiUrl = (cfg.get<string>('apiUrl') || 'http://127.0.0.1:34117').replace(/\/+$/, '');
       const apiKey = cfg.get<string>('apiKey') || '';
-      const panel = vscode.window.createWebviewPanel(
-        'codeMindWebApp',
-        'Code Mind Web',
-        vscode.ViewColumn.One,
-        {
-          enableScripts: true,
-          retainContextWhenHidden: true,
-        },
-      );
-      panel.webview.html = buildWebAppHtml(apiUrl, apiKey);
+      const appUrl = apiKey ? `${apiUrl}?vscodeApiKey=${encodeURIComponent(apiKey)}` : apiUrl;
+      provider.refresh();
+      try {
+        await vscode.commands.executeCommand('simpleBrowser.show', appUrl);
+      } catch (err) {
+        await vscode.env.openExternal(vscode.Uri.parse(appUrl));
+        vscode.window.showWarningMessage(
+          `Code Mind could not open VS Code Simple Browser and used the system browser instead: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
     }),
 
     vscode.commands.registerCommand('codeMind.gettingStarted', async () => {
@@ -109,7 +136,7 @@ export function registerCommands(
           '',
           '- The extension is a thin client: start the Code Mind desktop app, or run `codemind serve` for a headless backend.',
           '- `Code Mind: Open Web App` connects to the backend at `codeMind.apiUrl` (default `http://127.0.0.1:34117`).',
-          '- Optionally set `codeMind.backendCommand` (e.g. `codemind.exe serve`) to let VS Code start a backend for you; `Code Mind: Start/Stop Local Backend` manage that process.',
+          '- Set `codeMind.backendExecutable` to the CodeMind EXE path; `Code Mind: Start/Stop Local Backend` manage that process.',
           '- Leave `codeMind.dataDir` empty to use the shared Code Mind app data directory, or configure it only when you need a custom data directory.',
           '- Run `Code Mind: Configure API URL` or click `Configure API URL` in the side bar.',
           '- Run `Code Mind: Configure API Key` if the desktop app has an API key configured.',
@@ -173,7 +200,9 @@ export function registerCommands(
       if (!newTitle || newTitle.trim() === currentTitle) return;
 
       try {
-        await api.updateNode(target.mapId, target.nodeId, { title: newTitle.trim() });
+        await api.updateNode(target.mapId, target.nodeId, {
+          title: newTitle.trim(),
+        });
         provider.refreshMap(target.mapId);
       } catch (err) {
         reportError(err, 'rename node');
@@ -217,6 +246,77 @@ export function registerCommands(
         reportError(err, 'open note');
       }
     }),
+
+    vscode.commands.registerCommand('codeMind.bindWorkspaceProject', async (item?: MindMapTreeItem) => {
+      try {
+        await backendManager.ensureStarted();
+        const result = await workspaceProjects.bind(resolveMapId(item));
+        if (!result) return;
+
+        if (await workspaceProjects.isRuntimeIgnored(result.folder)) {
+          vscode.window.showInformationMessage(
+            `Code Mind map ${result.mapId} is bound to ${result.folder.name} at revision ${result.revision}.`,
+          );
+          return;
+        }
+        const choice = await vscode.window.showInformationMessage(
+          `Code Mind map ${result.mapId} is bound to ${result.folder.name}. Protect local runtime files from Git?`,
+          'Add to .gitignore',
+        );
+        if (choice === 'Add to .gitignore') {
+          await workspaceProjects.addRuntimeIgnore(result.folder);
+          vscode.window.showInformationMessage('Added .codemind/runtime/ to the workspace .gitignore.');
+        }
+      } catch (err) {
+        reportError(err, 'bind workspace project');
+      }
+    }),
+
+    vscode.commands.registerCommand('codeMind.materializeWorkspaceProject', async () => {
+      try {
+        await backendManager.ensureStarted();
+        const result = await workspaceProjects.materialize();
+        if (!result) return;
+        vscode.window.showInformationMessage(
+          `Updated .codemind/semantic.json and layout.json from revision ${result.revision}.`,
+        );
+      } catch (err) {
+        reportError(err, 'materialize workspace project');
+      }
+    }),
+
+    vscode.commands.registerCommand('codeMind.createWorkspaceSnapshot', async () => {
+      const name = await vscode.window.showInputBox({
+        title: 'Create Code Mind Workspace Snapshot',
+        prompt: 'Milestone name stored with canonical semantic and layout files',
+        validateInput: (value) => (value.trim() ? null : 'Snapshot name is required'),
+      });
+      if (!name) return;
+      try {
+        await backendManager.ensureStarted();
+        const result = await workspaceProjects.createSnapshot(name);
+        if (!result) return;
+        vscode.window.showInformationMessage(
+          `Created .codemind/snapshots/${result.directoryName} from revision ${result.revision}.`,
+        );
+      } catch (err) {
+        reportError(err, 'create workspace snapshot');
+      }
+    }),
+
+    vscode.commands.registerCommand('codeMind.protectWorkspaceRuntime', async () => {
+      try {
+        const changed = await workspaceProjects.addRuntimeIgnore();
+        if (changed === undefined) return;
+        vscode.window.showInformationMessage(
+          changed
+            ? 'Added .codemind/runtime/ to the workspace .gitignore.'
+            : '.codemind/runtime/ is already protected by the workspace .gitignore.',
+        );
+      } catch (err) {
+        reportError(err, 'protect workspace runtime');
+      }
+    }),
   );
 
   // Save-on-save for codemind:// notes
@@ -230,52 +330,6 @@ export function registerCommands(
       );
     }),
   );
-}
-
-function buildWebAppHtml(apiUrl: string, apiKey: string): string {
-  const appUrl = apiKey ? `${apiUrl}?vscodeApiKey=${encodeURIComponent(apiKey)}` : apiUrl;
-  const escapedApiUrl = escapeHtml(apiUrl);
-  const frameSrc = escapeAttribute(appUrl);
-  const browserUrl = escapeAttribute(apiUrl);
-  return `<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <style>
-    html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #0f172a; }
-    .shell { display: flex; flex-direction: column; width: 100%; height: 100vh; }
-    .bar { display: flex; align-items: center; gap: 10px; padding: 8px 12px; background: #111827; color: #e5e7eb; font: 12px/1.4 system-ui, sans-serif; border-bottom: 1px solid rgba(148, 163, 184, .24); }
-    .pill { padding: 3px 8px; border-radius: 999px; background: #1f2937; color: #cbd5e1; }
-    iframe { flex: 1; width: 100%; border: 0; background: white; }
-    a { color: #38bdf8; }
-  </style>
-</head>
-<body>
-  <div class="shell">
-    <div class="bar">
-      <strong>Code Mind Web</strong>
-      <span class="pill">${escapedApiUrl}</span>
-      <span>Start the Code Mind desktop app first if the page is blank.</span>
-      <a href="${browserUrl}">Open in browser</a>
-    </div>
-    <iframe src="${frameSrc}" sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-downloads"></iframe>
-  </div>
-</body>
-</html>`;
-}
-
-function escapeHtml(value: string): string {
-  return value
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}
-
-function escapeAttribute(value: string): string {
-  return escapeHtml(value);
 }
 
 interface NodeContext {
@@ -298,38 +352,57 @@ function resolveContextNode(item?: MindMapTreeItem): NodeContext | undefined {
   return { mapId: item.data.mapId, nodeId: item.data.node.id };
 }
 
+function resolveMapId(item?: MindMapTreeItem): string | undefined {
+  if (!item || item.data.kind === 'guide') return undefined;
+  return item.data.kind === 'map' ? item.data.map.id : item.data.mapId;
+}
+
 function reportError(err: unknown, action: string): void {
   if (err instanceof CodeMindUnauthorizedError) {
     vscode.window.showErrorMessage(`Code Mind: authentication failed (${action}).`);
     return;
   }
   if (err instanceof CodeMindTimeoutError) {
-    vscode.window
-      .showWarningMessage(`Code Mind: ${action} timed out.`, 'Retry')
-      .then((choice) => {
-        if (choice === 'Retry') {
-          vscode.commands.executeCommand('codeMind.refresh');
-        }
-      });
+    vscode.window.showWarningMessage(`Code Mind: ${action} timed out.`, 'Retry').then((choice) => {
+      if (choice === 'Retry') {
+        vscode.commands.executeCommand('codeMind.refresh');
+      }
+    });
     return;
   }
   if (err instanceof CodeMindNetworkError) {
     vscode.window
-      .showWarningMessage(`Code Mind: cannot reach server (${action}). ${err.message}`, 'Retry')
+      .showWarningMessage(`Code Mind: cannot reach server (${action}). ${err.message}`, 'Start Backend', 'Retry')
       .then((choice) => {
-        if (choice === 'Retry') {
+        if (choice === 'Start Backend') {
+          void activeBackendManager
+            ?.start()
+            .then(() => vscode.commands.executeCommand('codeMind.refresh'))
+            .catch((startError) =>
+              vscode.window.showErrorMessage(
+                `Code Mind: failed to start backend - ${startError instanceof Error ? startError.message : String(startError)}`,
+              ),
+            );
+        } else if (choice === 'Retry') {
           vscode.commands.executeCommand('codeMind.refresh');
         }
       });
     return;
   }
   if (err instanceof CodeMindAPIError) {
-    vscode.window.showErrorMessage(
-      `Code Mind: failed to ${action} (HTTP ${err.status}): ${err.detail || err.message}`,
-    );
+    if (err.status === 412) {
+      vscode.window.showWarningMessage(
+        `Code Mind: ${action} conflicted with server revision ${err.actualRevision ?? 'unknown'}. The tree will refresh; review the latest state before retrying.`,
+      );
+      vscode.commands.executeCommand('codeMind.refresh');
+      return;
+    }
+    vscode.window.showErrorMessage(`Code Mind: failed to ${action} (HTTP ${err.status}): ${err.detail || err.message}`);
     return;
   }
   vscode.window.showErrorMessage(
     `Code Mind: failed to ${action} — ${err instanceof Error ? err.message : String(err)}`,
   );
 }
+
+let activeBackendManager: LocalBackendManager | undefined;

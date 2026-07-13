@@ -2,12 +2,12 @@
 
 ## 完成内容
 
-- 审查了 `docs/review-2026-03-28.md` 之后的 6 个提交以及当前 `main` 分支相关实现。
+- 审查了 `docs/archive/reviews/review-2026-03-28.md` 之后的 6 个提交以及当前 `main` 分支相关实现。
 - 补做了两类验证：
   - 代码级验证：`go test ./...`
   - 构建级验证：`npm run build:web`
 - 对已有桌面产物做了只读检查，确认 Windows manifest 已被错误回写。
-- 输出了本轮正式审查文档：`docs/review-2026-03-30.md`
+- 输出了本轮正式审查文档：`docs/archive/reviews/review-2026-03-30.md`
 
 ## 发现汇总
 

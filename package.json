@@ -14,6 +14,7 @@
     "build:vsix": "powershell -ExecutionPolicy Bypass -File scripts/package-vscode-extension.ps1 -SkipInstall",
     "build:vsix:full": "powershell -ExecutionPolicy Bypass -File scripts/package-vscode-extension.ps1",
     "test": "go test ./... && npm run build:web",
+    "test:p1-contract": "pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/test-p1-contract.ps1",
     "prepare": "husky"
   },
   "devDependencies": {

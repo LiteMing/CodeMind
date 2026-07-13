@@ -1,0 +1,105 @@
+{
+  "format": "codemind.project-map.layout",
+  "schemaVersion": 1,
+  "mapId": "project-map",
+  "theme": "light",
+  "nodes": [
+    {
+      "id": "child-a",
+      "position": {
+        "x": 1120,
+        "y": 220
+      },
+      "createdAt": "2026-07-01T01:00:00Z",
+      "updatedAt": "2026-07-02T01:00:00Z"
+    },
+    {
+      "id": "child-b",
+      "position": {
+        "x": 1120,
+        "y": 420
+      },
+      "width": 220,
+      "height": 72,
+      "collapsed": true,
+      "createdAt": "2026-07-01T01:00:00Z",
+      "updatedAt": "2026-07-02T02:00:00Z"
+    },
+    {
+      "id": "floating",
+      "position": {
+        "x": 500,
+        "y": 620
+      },
+      "createdAt": "2026-07-01T04:00:00Z",
+      "updatedAt": "2026-07-01T05:00:00Z"
+    },
+    {
+      "id": "root",
+      "position": {
+        "x": 820,
+        "y": 320
+      },
+      "createdAt": "2026-07-01T00:00:00Z",
+      "updatedAt": "2026-07-03T03:00:00Z"
+    }
+  ],
+  "relations": [
+    {
+      "id": "relation-a",
+      "waypoints": [],
+      "createdAt": "2026-07-02T02:00:00Z",
+      "updatedAt": "2026-07-03T02:00:00Z"
+    },
+    {
+      "id": "relation-z",
+      "midpointT": 0.4,
+      "midpointOffset": {
+        "x": 12,
+        "y": -8
+      },
+      "waypoints": [
+        {
+          "x": 980,
+          "y": 280
+        },
+        {
+          "x": 1040,
+          "y": 360
+        }
+      ],
+      "createdAt": "2026-07-02T01:00:00Z",
+      "updatedAt": "2026-07-03T01:00:00Z"
+    }
+  ],
+  "regions": [
+    {
+      "id": "region-a",
+      "position": {
+        "x": 480,
+        "y": 620
+      },
+      "width": 300,
+      "height": 180,
+      "createdAt": "2026-07-01T07:00:00Z",
+      "updatedAt": "2026-07-02T07:00:00Z"
+    },
+    {
+      "id": "region-z",
+      "position": {
+        "x": 1000,
+        "y": 300
+      },
+      "width": 520,
+      "height": 360,
+      "createdAt": "2026-07-01T06:00:00Z",
+      "updatedAt": "2026-07-02T06:00:00Z"
+    }
+  ],
+  "runtimeMeta": {
+    "runtimeSchemaVersion": 1,
+    "revision": 7,
+    "lastEditedAt": "2026-07-03T04:00:00Z",
+    "lastOpenedAt": "2026-07-04T04:00:00Z"
+  }
+}

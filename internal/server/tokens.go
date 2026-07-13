@@ -6,26 +6,30 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"code-mind/internal/agentcontract"
 )
 
 // createTokenRequest is the request body for POST /api/tokens.
 type createTokenRequest struct {
-	MapID       string  `json:"mapId"`
-	AccessLevel string  `json:"accessLevel"`
-	DisplayName string  `json:"displayName"`
-	ExpiresIn   *string `json:"expiresIn,omitempty"` // duration string, e.g. "24h", "720h"
+	MapID       string                  `json:"mapId"`
+	AccessLevel string                  `json:"accessLevel"`
+	DisplayName string                  `json:"displayName"`
+	ActorKind   agentcontract.ActorKind `json:"actorKind,omitempty"`
+	ExpiresIn   *string                 `json:"expiresIn,omitempty"` // duration string, e.g. "24h", "720h"
 }
 
 // tokenResponse is the response for token operations (hides internal fields).
 type tokenResponse struct {
-	ID          string     `json:"id"`
-	MapID       string     `json:"mapId"`
-	AccessLevel string     `json:"accessLevel"`
-	Secret      string     `json:"secret,omitempty"` // only returned on create
-	DisplayName string     `json:"displayName"`
-	ExpiresAt   *time.Time `json:"expiresAt,omitempty"`
-	CreatedAt   time.Time  `json:"createdAt"`
-	Revoked     bool       `json:"revoked"`
+	ID          string                  `json:"id"`
+	MapID       string                  `json:"mapId"`
+	AccessLevel string                  `json:"accessLevel"`
+	Secret      string                  `json:"secret,omitempty"` // only returned on create
+	DisplayName string                  `json:"displayName"`
+	ActorKind   agentcontract.ActorKind `json:"actorKind"`
+	ExpiresAt   *time.Time              `json:"expiresAt,omitempty"`
+	CreatedAt   time.Time               `json:"createdAt"`
+	Revoked     bool                    `json:"revoked"`
 }
 
 // handleTokens handles GET /api/tokens?mapId={mapId} and POST /api/tokens.
@@ -76,6 +80,7 @@ func (s *Server) handleTokensList(w http.ResponseWriter, r *http.Request) {
 			MapID:       t.MapID,
 			AccessLevel: t.AccessLevel,
 			DisplayName: t.DisplayName,
+			ActorKind:   t.ActorKind,
 			ExpiresAt:   t.ExpiresAt,
 			CreatedAt:   t.CreatedAt,
 			Revoked:     t.Revoked,
@@ -137,7 +142,17 @@ func (s *Server) handleTokensCreate(w http.ResponseWriter, r *http.Request) {
 		expiration = &d
 	}
 
-	token, err := s.tokenStore.Create(req.MapID, req.AccessLevel, req.DisplayName, expiration)
+	actorKind := req.ActorKind
+	if actorKind == "" {
+		actorKind = agentcontract.ActorHuman
+	}
+	token, err := s.tokenStore.CreateWithActorKind(
+		req.MapID,
+		req.AccessLevel,
+		req.DisplayName,
+		actorKind,
+		expiration,
+	)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{
 			"error": err.Error(),
@@ -152,6 +167,7 @@ func (s *Server) handleTokensCreate(w http.ResponseWriter, r *http.Request) {
 		AccessLevel: token.AccessLevel,
 		Secret:      token.Secret,
 		DisplayName: token.DisplayName,
+		ActorKind:   token.ActorKind,
 		ExpiresAt:   token.ExpiresAt,
 		CreatedAt:   token.CreatedAt,
 		Revoked:     token.Revoked,

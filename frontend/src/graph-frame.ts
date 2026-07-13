@@ -140,6 +140,7 @@ export function buildGraphFrame(
   for (const siblings of childrenByParent.values()) {
     const orderedSiblings = [...siblings].sort((left, right) => {
       return (
+        left.order - right.order ||
         left.position.y - right.position.y ||
         left.position.x - right.position.x ||
         left.title.localeCompare(right.title)

@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import * as http from 'http';
 import * as https from 'https';
+import { randomUUID } from 'crypto';
 import { URL } from 'url';
 
 /**
@@ -13,15 +14,37 @@ import { URL } from 'url';
 export interface MapSummary {
   id: string;
   title: string;
+  revision: number;
   createdAt?: string;
   updatedAt?: string;
+}
+
+export interface ProjectFiles {
+  mapId: string;
+  revision: number;
+  semantic: string;
+  layout: string;
+}
+
+export type BindingType = 'file' | 'directory' | 'glob' | 'symbol' | 'asset';
+
+export interface NodeBinding {
+  id: string;
+  type: BindingType;
+  path: string;
+  symbol?: string;
+  glob?: string;
+  contentHash?: string;
 }
 
 export interface NodeData {
   id: string;
   title: string;
+  revision?: number;
   note?: string;
   parentId?: string;
+  order?: number;
+  bindings?: NodeBinding[];
   childrenIds?: string[];
   children?: NodeData[];
   [k: string]: unknown;
@@ -31,22 +54,36 @@ export interface CreateNodeRequest {
   parentId: string;
   title: string;
   note?: string;
+  order?: number;
+  bindings?: NodeBinding[];
 }
 
 export interface UpdateNodeRequest {
+  parentId?: string;
+  order?: number;
   title?: string;
   note?: string;
+  bindings?: NodeBinding[];
 }
 
 export class CodeMindAPIError extends Error {
-  constructor(public status: number, message: string, public detail?: string) {
+  constructor(
+    public status: number,
+    message: string,
+    public detail?: string,
+    public expectedRevision?: number,
+    public actualRevision?: number,
+  ) {
     super(message);
     this.name = 'CodeMindAPIError';
   }
 }
 
 export class CodeMindNetworkError extends Error {
-  constructor(message: string, public cause?: Error) {
+  constructor(
+    message: string,
+    public cause?: Error,
+  ) {
     super(message);
     this.name = 'CodeMindNetworkError';
   }
@@ -69,6 +106,8 @@ export class CodeMindUnauthorizedError extends CodeMindAPIError {
 const DEFAULT_TIMEOUT_MS = 10_000;
 
 export class CodeMindAPI {
+  private revisions: Map<string, number> = new Map();
+
   constructor(private timeoutMs: number = DEFAULT_TIMEOUT_MS) {}
 
   /** Read configuration on every call to track settings.json changes. */
@@ -82,55 +121,106 @@ export class CodeMindAPI {
   async listMaps(): Promise<MapSummary[]> {
     const data = await this.request<MapSummary[] | { maps: MapSummary[] }>('GET', '/api/maps', undefined, true);
     // Accept either bare array or { maps: [...] } shape
-    if (Array.isArray(data)) {
-      return data;
+    const maps = Array.isArray(data) ? data : (data?.maps ?? []);
+    for (const map of maps) {
+      this.rememberRevision(map.id, map.revision);
     }
-    return data?.maps ?? [];
+    return maps;
   }
 
   async getTree(mapId: string): Promise<NodeData> {
-    return this.request<NodeData>('GET', `/api/maps/${encodeURIComponent(mapId)}/tree`, undefined, true);
+    const tree = await this.request<NodeData>('GET', `/api/maps/${encodeURIComponent(mapId)}/tree`, undefined, true, {
+      mapId,
+    });
+    this.rememberRevision(mapId, tree.revision);
+    return tree;
+  }
+
+  async getProjectFiles(mapId: string): Promise<ProjectFiles> {
+    const files = await this.request<ProjectFiles>(
+      'GET',
+      `/api/maps/${encodeURIComponent(mapId)}/project-files`,
+      undefined,
+      false,
+      { mapId },
+    );
+    this.rememberRevision(mapId, files.revision);
+    return files;
   }
 
   async getNode(mapId: string, nodeId: string): Promise<NodeData> {
-    return this.request<NodeData>(
+    const detail = await this.request<{ revision: number; node: NodeData }>(
       'GET',
       `/api/maps/${encodeURIComponent(mapId)}/nodes/${encodeURIComponent(nodeId)}`,
       undefined,
       false,
+      { mapId },
     );
+    this.rememberRevision(mapId, detail.revision);
+    return detail.node;
   }
 
   async createNode(mapId: string, body: CreateNodeRequest): Promise<NodeData> {
-    return this.request<NodeData>(
-      'POST',
-      `/api/maps/${encodeURIComponent(mapId)}/nodes`,
-      body,
-      false,
-    );
+    const expectedRevision = await this.currentRevision(mapId);
+    return this.request<NodeData>('POST', `/api/maps/${encodeURIComponent(mapId)}/nodes`, body, false, {
+      mapId,
+      expectedRevision,
+    });
   }
 
   async updateNode(mapId: string, nodeId: string, body: UpdateNodeRequest): Promise<NodeData> {
+    const expectedRevision = await this.currentRevision(mapId);
     return this.request<NodeData>(
       'PATCH',
       `/api/maps/${encodeURIComponent(mapId)}/nodes/${encodeURIComponent(nodeId)}`,
       body,
       false,
+      { mapId, expectedRevision },
     );
   }
 
   async deleteNode(mapId: string, nodeId: string, cascade: boolean = true): Promise<void> {
-    const query = cascade ? '?cascade=true' : '';
+    const expectedRevision = await this.currentRevision(mapId);
+    const query = cascade ? '?cascade=true' : '?cascade=false';
     await this.request<void>(
       'DELETE',
       `/api/maps/${encodeURIComponent(mapId)}/nodes/${encodeURIComponent(nodeId)}${query}`,
       undefined,
       false,
+      { mapId, expectedRevision },
     );
   }
 
+  private async currentRevision(mapId: string): Promise<number> {
+    const cached = this.revisions.get(mapId);
+    if (cached !== undefined) {
+      return cached;
+    }
+    const version = await this.request<{ revision: number }>(
+      'GET',
+      `/api/maps/${encodeURIComponent(mapId)}/version`,
+      undefined,
+      false,
+      { mapId },
+    );
+    this.rememberRevision(mapId, version.revision);
+    return version.revision;
+  }
+
+  private rememberRevision(mapId: string, revision: unknown): void {
+    if (typeof revision === 'number' && Number.isSafeInteger(revision) && revision > 0) {
+      this.revisions.set(mapId, revision);
+    }
+  }
+
   /** Generic JSON-over-HTTP request. */
-  private request<T>(method: string, path: string, body: unknown, compact: boolean): Promise<T> {
+  private request<T>(
+    method: string,
+    path: string,
+    body: unknown,
+    compact: boolean,
+    revisionContext?: { mapId: string; expectedRevision?: number },
+  ): Promise<T> {
     const { apiUrl, apiKey } = this.getConfig();
     let fullUrl = apiUrl + path;
     if (compact) {
@@ -154,6 +244,11 @@ export class CodeMindAPI {
       if (apiKey) {
         headers['X-API-Key'] = apiKey;
       }
+      if (revisionContext?.expectedRevision !== undefined) {
+        headers['If-Match'] = `"rev-${revisionContext.expectedRevision}"`;
+        headers['X-CodeMind-Partition'] = 'development';
+        headers['Idempotency-Key'] = `vscode-${randomUUID()}`;
+      }
 
       let payload: string | undefined;
       if (body !== undefined && body !== null) {
@@ -176,6 +271,13 @@ export class CodeMindAPI {
           res.on('end', () => {
             const responseBody = Buffer.concat(chunks).toString('utf8');
             const status = res.statusCode ?? 0;
+            if (revisionContext) {
+              const etag = Array.isArray(res.headers.etag) ? res.headers.etag[0] : res.headers.etag;
+              const match = typeof etag === 'string' ? /^"rev-(\d+)"$/.exec(etag) : null;
+              if (match) {
+                this.rememberRevision(revisionContext.mapId, Number(match[1]));
+              }
+            }
 
             if (status === 401) {
               reject(new CodeMindUnauthorizedError('authentication required or invalid', responseBody));
@@ -184,13 +286,17 @@ export class CodeMindAPI {
 
             if (status >= 400) {
               let detail = responseBody;
+              let expectedRevision: number | undefined;
+              let actualRevision: number | undefined;
               try {
                 const parsed = JSON.parse(responseBody);
                 detail = parsed?.error || parsed?.message || responseBody;
+                expectedRevision = normalizeRevision(parsed?.expectedRevision);
+                actualRevision = normalizeRevision(parsed?.actualRevision);
               } catch {
                 // keep raw body
               }
-              reject(new CodeMindAPIError(status, `HTTP ${status}`, detail));
+              reject(new CodeMindAPIError(status, `HTTP ${status}`, detail, expectedRevision, actualRevision));
               return;
             }
 
@@ -231,4 +337,8 @@ export class CodeMindAPI {
       req.end();
     });
   }
+}
+
+function normalizeRevision(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0 ? value : undefined;
 }

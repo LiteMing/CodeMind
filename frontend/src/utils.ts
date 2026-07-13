@@ -1,5 +1,5 @@
 import type { AIDebugInfo, Locale, MindMapDocument, MindNode, Position } from './types'
-import { childrenOf } from './document'
+import { childrenOf, normalizeDocumentSemantics } from './document'
 import { estimateNodeHeight, estimateNodeWidth } from './node-sizing'
 
 export const WORKSPACE_MIN_WIDTH = 2400
@@ -160,7 +160,7 @@ export function getErrorMessage(error: unknown): string {
 }
 
 export function cloneDocument(document: MindMapDocument): MindMapDocument {
-  return JSON.parse(JSON.stringify(document)) as MindMapDocument
+  return normalizeDocumentSemantics(JSON.parse(JSON.stringify(document)) as MindMapDocument)
 }
 
 export function normalizeClientRect(startX: number, startY: number, endX: number, endY: number): DOMRect {

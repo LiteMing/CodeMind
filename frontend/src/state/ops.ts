@@ -11,7 +11,9 @@ import {
   findRoot,
   nextChildPosition,
   nextFloatingPosition,
+  nextSiblingOrder,
   nextSiblingPosition,
+  normalizeAllSiblingOrders,
   tidySubtree,
   toggleCollapse,
   touchDocument,
@@ -129,6 +131,7 @@ export function createChildNode(app: MindMapApp, parentId: string): void {
   const newNode = createNode({
     parentId,
     kind: 'topic',
+    order: nextSiblingOrder(app.state.document, parentId),
     position: nextChildPosition(
       app.state.document,
       parentId,
@@ -172,6 +175,7 @@ export function createSiblingNode(app: MindMapApp, nodeId: string): void {
   if (node.kind === 'root') {
     newNode = createNode({
       kind: 'floating',
+      order: 0,
       position: nextFloatingPosition(app.state.document),
       title: app.t('node.newFloating'),
       color: normalizeNodeColor(node.color) || undefined,
@@ -180,6 +184,7 @@ export function createSiblingNode(app: MindMapApp, nodeId: string): void {
     newNode = createNode({
       parentId: node.parentId,
       kind: 'topic',
+      order: nextSiblingOrder(app.state.document, node.parentId),
       position: nextSiblingPosition(
         app.state.document,
         node,
@@ -192,6 +197,7 @@ export function createSiblingNode(app: MindMapApp, nodeId: string): void {
   } else {
     newNode = createNode({
       kind: 'floating',
+      order: 0,
       position: nextFloatingPosition(app.state.document),
       title: app.t('node.newFloating'),
       color: normalizeNodeColor(node.color) || undefined,
@@ -227,6 +233,7 @@ export function createFloatingNode(app: MindMapApp, nodeId: string): void {
   captureHistory(app)
   const newNode = createNode({
     kind: 'floating',
+    order: 0,
     position: nextFloatingPosition(app.state.document),
     title: app.t('node.newFloating'),
     color: normalizeNodeColor(node.color) || undefined,
@@ -311,6 +318,7 @@ export function deleteSelectedNode(app: MindMapApp): void {
 
     captureHistory(app)
     app.state.document.nodes = app.state.document.nodes.filter((node) => !removeIds.has(node.id))
+    normalizeAllSiblingOrders(app.state.document)
     app.state.document.relations = app.state.document.relations
       .filter((relation) => !removeIds.has(relation.sourceId) && !removeIds.has(relation.targetId))
       .map((relation) => ({
@@ -549,10 +557,12 @@ export function copySelectedSubtree(app: MindMapApp): void {
         id: node.id,
         parentId: node.parentId,
         kind: node.kind,
+        order: node.order,
         title: node.title,
         note: normalizeNodeNote(node.note),
         priority: node.priority,
         color: normalizeNodeColor(node.color) || undefined,
+        bindings: node.bindings.map((binding) => ({ ...binding })),
         collapsed: node.collapsed,
         width: node.width,
         height: node.height,
@@ -631,6 +641,7 @@ export function cutSelectedSubtree(app: MindMapApp): void {
 
   // Remove nodes
   app.state.document.nodes = app.state.document.nodes.filter((n) => !allSubtreeIds.has(n.id))
+  normalizeAllSiblingOrders(app.state.document)
 
   touchDocument(app.state.document)
   app.selectNode(findRoot(app.state.document)?.id ?? 'root')
@@ -677,8 +688,26 @@ export function pasteCopiedSubtree(app: MindMapApp): void {
   const insertedNodes: MindNode[] = []
 
   for (const snapshot of app.copiedSubtree.nodes) {
-    const nextId = createId('node')
-    idMap.set(snapshot.id, nextId)
+    idMap.set(snapshot.id, createId('node'))
+  }
+
+  const topLevelSnapshots = app.copiedSubtree.nodes
+    .filter((snapshot) => snapshot.id === app.copiedSubtree?.rootId || !idMap.has(snapshot.parentId ?? ''))
+    .sort(
+      (left, right) => left.order - right.order || left.offset.y - right.offset.y || left.id.localeCompare(right.id),
+    )
+  const topLevelOrder = new Map(
+    topLevelSnapshots.map((snapshot, index) => [
+      snapshot.id,
+      nextSiblingOrder(app.state.document, targetNode.id) + index,
+    ]),
+  )
+
+  for (const snapshot of app.copiedSubtree.nodes) {
+    const nextId = idMap.get(snapshot.id)
+    if (!nextId) {
+      continue
+    }
     const isClipboardRoot = snapshot.id === app.copiedSubtree.rootId
     // For multi-select paste: if a node's parent wasn't copied (not in idMap),
     // treat it as a top-level node and attach to the paste target.
@@ -697,10 +726,12 @@ export function pasteCopiedSubtree(app: MindMapApp): void {
       id: nextId,
       parentId,
       kind: nodeKind,
+      order: isTopLevel ? (topLevelOrder.get(snapshot.id) ?? 1) : snapshot.order,
       title: snapshot.title,
       note: snapshot.note,
       priority: snapshot.priority,
       color: snapshot.color,
+      bindings: snapshot.bindings.map((binding) => ({ ...binding, id: createId('binding') })),
       collapsed: snapshot.collapsed,
       width: snapshot.width,
       height: snapshot.height,
@@ -711,6 +742,7 @@ export function pasteCopiedSubtree(app: MindMapApp): void {
   }
 
   app.state.document.nodes.push(...insertedNodes)
+  normalizeAllSiblingOrders(app.state.document)
 
   // Rebuild copied relations with endpoints remapped to the new node ids;
   // drop any relation whose endpoints did not survive the paste.
