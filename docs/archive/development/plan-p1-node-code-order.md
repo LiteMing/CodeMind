@@ -1,6 +1,6 @@
 # P1 Phase B：节点代码绑定与显式顺序开发计划
 
-日期：2026-07-10 ｜ 分支：feat/p1-node-code-order ｜ 目标版本：1.12.0 ｜ 上位计划：docs/plan-p1-map-agent-contract.md
+日期：2026-07-10 ｜ 分支：feat/p1-node-code-order ｜ 目标版本：1.12.0 ｜ 上位计划：docs/archive/development/plan-p1-map-agent-contract.md
 
 ## 目标
 

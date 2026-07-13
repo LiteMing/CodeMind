@@ -48,4 +48,4 @@
 ## 输出
 
 - 新的桌面包：`build/bin/CodeMind.exe`
-- 新增计划文档：`docs/dev-plan-2026-03-29-layout-snapshots-editor.md`
+- 新增计划文档：`docs/archive/development/dev-plan-2026-03-29-layout-snapshots-editor.md`

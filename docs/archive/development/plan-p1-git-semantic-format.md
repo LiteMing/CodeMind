@@ -1,6 +1,6 @@
 # P1 Phase C：Git 语义格式开发计划
 
-日期：2026-07-10 ｜ 分支：feat/p1-git-semantic-format ｜ 目标版本：1.13.0 ｜ 上位计划：docs/plan-p1-map-agent-contract.md
+日期：2026-07-10 ｜ 分支：feat/p1-git-semantic-format ｜ 目标版本：1.13.0 ｜ 上位计划：docs/archive/development/plan-p1-map-agent-contract.md
 
 ## 目标
 
